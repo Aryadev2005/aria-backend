@@ -1,46 +1,60 @@
 'use strict'
 
+const groqService = require('../services/ai/groq.service')
 const { cache, CacheKeys, TTL } = require('../config/redis')
+const { getDB } = require('../config/database')
 const { success, errors } = require('../utils/response')
 const { logger } = require('../utils/logger')
 
 const getDashboard = async (req, reply) => {
+  const user = req.user
+
   try {
-    const cacheKey = CacheKeys.dashboard(req.user.id)
-    const cached = await cache.get(cacheKey)
-    if (cached) return success(reply, cached)
+    const cacheKey = CacheKeys.dashboard(user.id)
 
-    const dashboard = {
-      stats: {
-        followers:   24500,
-        engagement:  4.8,
-        postsPerMonth: 12,
-        reach:       45000,
-        growth:      '+2.4%',
-      },
-      aiRecommendation: {
-        text:        '"Quiet Luxury" Reels are getting 3.2x more engagement this week',
-        bestTime:    'Today 7–9 PM IST',
-        confidence:  92,
-      },
-      weeklyScore: {
-        consistency: 'Good',
-        trendAlignment: 'Medium',
-        postingTime:  'Excellent',
-        overall:      78,
-      },
-      contentMix: {
-        reels:     60,
-        carousels: 25,
-        stories:   15,
-      },
-    }
+    const dashboard = await cache.getOrSet(cacheKey, async () => {
+      // If archetype not yet detected, run detection first
+      if (!user.archetype) {
+        const archetypeResult = await groqService.detectArchetype({
+          niche: user.niches?.[0] || 'fashion',
+          platform: user.primaryPlatform || 'instagram',
+          followerRange: user.followerRange || '0-1K',
+          creatorIntent: user.creatorIntent,
+          scrapedData: user.scrapedSummary
+        })
 
-    await cache.set(cacheKey, dashboard, TTL.DASHBOARD)
+        // Save archetype to DB async
+        const sql = getDB()
+        sql`
+          UPDATE users SET
+            archetype = ${archetypeResult.archetype},
+            archetype_label = ${archetypeResult.archetypeLabel},
+            archetype_confidence = ${archetypeResult.archetypeConfidence},
+            growth_stage = ${archetypeResult.growthStage},
+            tone_profile = ${archetypeResult.toneProfile},
+            aria_analyzed_at = NOW()
+          WHERE id = ${user.id}
+        `.catch(err => logger.error({ err }, 'Failed to save archetype'))
+
+        user.archetype = archetypeResult.archetype
+        user.toneProfile = archetypeResult.toneProfile
+      }
+
+      // Run full persona growth map
+      return groqService.fullPersonaGrowthMap({
+        niche: user.niches?.[0] || 'fashion',
+        platform: user.primaryPlatform || 'instagram',
+        followerRange: user.followerRange || '0-1K',
+        creatorIntent: user.creatorIntent,
+        scrapedData: user.scrapedSummary,
+        engagementRate: user.engagementRate || 0,
+      })
+    }, TTL.DASHBOARD)
+
     return success(reply, dashboard)
   } catch (err) {
     logger.error({ err }, 'Dashboard failed')
-    return errors.internal(reply)
+    return errors.serviceDown(reply, 'Analytics engine')
   }
 }
 
@@ -152,10 +166,90 @@ const getWeeklyReport = async (req, reply) => {
   }
 }
 
+const getArchetype = async (req, reply) => {
+  const user = req.user
+  const sql = getDB()
+
+  try {
+    // If archetype not in session, fetch from DB
+    if (!user.archetype) {
+      const [dbUser] = await sql`
+        SELECT archetype, archetype_label, archetype_confidence,
+               growth_stage, tone_profile, aria_analyzed_at
+        FROM users
+        WHERE id = ${user.id}
+      `
+
+      if (!dbUser?.archetype) {
+        // Trigger detection if not available
+        return reply.status(202).send({
+          status: 'analyzing',
+          message: 'ARIA is detecting your archetype. Check back in 30 seconds.',
+        })
+      }
+
+      return success(reply, {
+        archetype: dbUser.archetype,
+        archetypeLabel: dbUser.archetypeLabel,
+        archetypeConfidence: dbUser.archetypeConfidence,
+        growthStage: dbUser.growthStage,
+        toneProfile: dbUser.toneProfile,
+        analyzedAt: dbUser.ariaAnalyzedAt,
+      })
+    }
+
+    return success(reply, {
+      archetype: user.archetype,
+      archetypeLabel: user.archetypeLabel,
+      archetypeConfidence: user.archetypeConfidence,
+      growthStage: user.growthStage,
+      toneProfile: user.toneProfile,
+    })
+  } catch (err) {
+    logger.error({ err }, 'Get archetype failed')
+    return errors.internal(reply)
+  }
+}
+
+const triggerScrape = async (req, reply) => {
+  const { handle, platform } = req.body
+  const user = req.user
+  const sql = getDB()
+
+  try {
+    // Validate handle format
+    if (!handle.trim()) {
+      return errors.badRequest(reply, 'Handle cannot be empty')
+    }
+
+    // Save handle and trigger background scrape
+    await sql`
+      UPDATE users SET
+        ${platform}_handle = ${handle},
+        scraped_at = NULL
+      WHERE id = ${user.id}
+    `
+
+    // TODO: Queue scrape job to BullMQ worker (trend.worker.js)
+    // For now, return 202 Accepted
+    return reply.status(202).send({
+      status: 'queued',
+      message: `Scraping ${platform} handle @${handle}. Analysis will be ready in 2-3 minutes.`,
+      handle,
+      platform,
+    })
+  } catch (err) {
+    logger.error({ err }, 'Trigger scrape failed')
+    return errors.internal(reply)
+  }
+}
+
 module.exports = {
   getDashboard,
   getGrowthPrediction,
   getBestPostingTimes,
   getCompetitorInsights,
   getWeeklyReport,
+  getArchetype,
+  triggerScrape,
 }

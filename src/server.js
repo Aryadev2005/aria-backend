@@ -8,6 +8,8 @@ const { logger } = require('./utils/logger')
 const { connectDB } = require('./config/database')
 const { connectRedis } = require('./config/redis')
 const { initFirebase } = require('./config/firebase')
+const { scheduleRecurringJobs, cleanupQueues } = require('./config/queue')
+const { startAllWorkers, stopAllWorkers } = require('./workers')
 
 const PORT = parseInt(process.env.PORT || '3000', 10)
 const HOST = process.env.HOST || '0.0.0.0'
@@ -15,6 +17,10 @@ const HOST = process.env.HOST || '0.0.0.0'
 const shutdown = async (app, signal) => {
   logger.info({ signal }, 'Shutdown signal received')
   try {
+    // Stop workers before closing server
+    await stopAllWorkers()
+    await cleanupQueues()
+
     await app.close()
     logger.info('Server closed cleanly')
     process.exit(0)
@@ -36,6 +42,12 @@ const start = async () => {
 
     await connectRedis()
     logger.info('Redis connected')
+
+    // Schedule recurring jobs (trends every 6h, songs every 2h)
+    await scheduleRecurringJobs()
+
+    // Start all workers
+    await startAllWorkers()
 
     const app = await buildApp()
 

@@ -23,4 +23,22 @@ module.exports = async (app) => {
   app.get('/weekly-report', {
     preHandler: [authenticateFirebase, requirePro],
   }, analyticsController.getWeeklyReport)
+
+  app.get('/archetype', {
+    preHandler: [authenticateFirebase],
+  }, analyticsController.getArchetype)
+
+  app.post('/scrape', {
+    preHandler: [authenticateFirebase],
+    schema: {
+      body: {
+        type: 'object',
+        required: ['handle', 'platform'],
+        properties: {
+          handle: { type: 'string', minLength: 1 },
+          platform: { type: 'string', enum: ['instagram', 'youtube'] },
+        },
+      },
+    },
+  }, analyticsController.triggerScrape)
 }

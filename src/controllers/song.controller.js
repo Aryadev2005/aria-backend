@@ -1,6 +1,6 @@
 'use strict'
 
-const claudeService = require('../services/ai/claude.service')
+const groqService = require('../services/ai/groq.service')
 const { cache, CacheKeys, TTL } = require('../config/redis')
 const { success, errors } = require('../utils/response')
 const { logger } = require('../utils/logger')
@@ -13,10 +13,11 @@ const getSongs = async (req, reply) => {
     let songs = await cache.get(cacheKey)
 
     if (!songs) {
-      songs = await claudeService.generateSongInsights({
+      const result = await groqService.generateSongInsights({
         niche,
         platform: 'instagram',
       })
+      songs = result.songs || result
       await cache.set(cacheKey, songs, TTL.SONG)
     }
 
@@ -38,10 +39,11 @@ const getTop10 = async (req, reply) => {
     let songs = await cache.get(cacheKey)
 
     if (!songs) {
-      songs = await claudeService.generateSongInsights({
+      const result = await groqService.generateSongInsights({
         niche,
         platform: 'instagram',
       })
+      songs = result.songs || result
       await cache.set(cacheKey, songs, TTL.SONG)
     }
 
@@ -65,11 +67,12 @@ const getSongById = async (req, reply) => {
 const predictTrendingSongs = async (req, reply) => {
   try {
     const user = req.user
-    const songs = await claudeService.generateSongInsights({
+    const result = await groqService.generateSongInsights({
       niche:    user.niches?.[0] || 'fashion',
       platform: user.primaryPlatform || 'instagram',
     })
 
+    const songs = result.songs || result
     const predictions = songs
       .filter(s => s.lifecycle === 'early')
       .sort((a, b) => b.rank - a.rank)

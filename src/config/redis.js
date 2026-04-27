@@ -6,6 +6,7 @@ const { pack, unpack } = require('msgpackr')
 const { logger } = require('../utils/logger')
 
 let redisClient = null
+let workerRedisClient = null
 
 const l1Cache = new LRUCache({
   max: 5000,
@@ -20,7 +21,7 @@ const connectRedis = async () => {
   try {
     redisClient = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
       lazyConnect: true,
-      maxRetriesPerRequest: 3,
+      maxRetriesPerRequest: null,
       retryStrategy: (times) => times > 5 ? null : Math.min(times * 100, 2000),
       socket: { noDelay: true, keepAlive: 30000 },
     })
@@ -28,11 +29,23 @@ const connectRedis = async () => {
     await redisClient.connect()
     await redisClient.ping()
     logger.info('Redis connected')
+
+    // Create separate worker Redis client (required by BullMQ)
+    workerRedisClient = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
+      lazyConnect: true,
+      maxRetriesPerRequest: null,
+      retryStrategy: (times) => times > 5 ? null : Math.min(times * 100, 2000),
+      socket: { noDelay: true, keepAlive: 30000 },
+    })
+    await workerRedisClient.connect()
+    
     return redisClient
   } catch (err) {
     logger.warn('Running without Redis cache')
   }
 }
+
+const getWorkerRedisClient = () => workerRedisClient
 
 const getRedisClient = () => redisClient
 
@@ -105,4 +118,4 @@ const TTL = {
   ANALYTICS: 300,
 }
 
-module.exports = { connectRedis, getRedisClient, cache, CacheKeys, TTL }
+module.exports = { connectRedis, getRedisClient, getWorkerRedisClient, cache, CacheKeys, TTL }

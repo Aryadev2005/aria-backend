@@ -1,30 +1,40 @@
 'use strict'
 
-const claudeService = require('../services/ai/claude.service')
+const groqService = require('../services/ai/groq.service')
 const { cache, CacheKeys, TTL } = require('../config/redis')
 const { getDB } = require('../config/database')
 const { success, errors, paginated } = require('../utils/response')
 const { logger } = require('../utils/logger')
 
 const getTrends = async (req, reply) => {
-  const { niche, platform, badge, limit, page } = req.query
+  const { niche = 'fashion', platform = 'instagram', badge = 'ALL', page = 1, limit = 10 } = req.query
+
+  const cacheKey = CacheKeys.trends(niche, platform) + `:${badge}:${page}`
 
   try {
-    const cacheKey = CacheKeys.trends(niche, platform)
-    const cached = await cache.get(cacheKey)
-    if (cached) {
-      let data = cached
-      if (badge !== 'ALL') data = data.filter(t => t.badge === badge)
-      return success(reply, data.slice(0, limit))
-    }
+    const trends = await cache.getOrSet(cacheKey, async () => {
+      const sql = getDB()
 
-    // Generate with Claude AI
-    const trends = await claudeService.generateTrendInsights({
-      niche, platform,
-      followerRange: '10K–50K',
-    })
+      // Try live_trends table first (populated by BullMQ worker)
+      const liveTrends = await sql`
+        SELECT * FROM live_trends
+        WHERE expires_at > NOW()
+          AND (${niche} = ANY(niche_tags) OR niche_tags IS NULL)
+          AND (${platform} = ANY(platform_tags) OR platform_tags IS NULL)
+        ORDER BY velocity DESC
+        LIMIT ${limit}
+        OFFSET ${(page - 1) * limit}
+      `
 
-    await cache.set(cacheKey, trends, TTL.TREND)
+      if (liveTrends.length >= 3) return liveTrends
+
+      // Fallback: generate with Groq
+      return groqService.generateTrendInsights({
+        niche, platform,
+        followerRange: '10K-100K',
+        archetype: null
+      })
+    }, TTL.TREND)
 
     let data = trends
     if (badge !== 'ALL') data = data.filter(t => t.badge === badge)
@@ -43,15 +53,29 @@ const getPersonalizedTrends = async (req, reply) => {
 
   try {
     const cacheKey = `tr:personal:${user.id}`
-    const cached = await cache.get(cacheKey)
-    if (cached) return success(reply, cached)
 
-    const trends = await claudeService.generateTrendInsights({
-      niche, platform,
-      followerRange: user.followerRange || '10K–50K',
-    })
+    const trends = await cache.getOrSet(cacheKey, async () => {
+      const sql = getDB()
 
-    await cache.set(cacheKey, trends, TTL.TREND)
+      // Get live trends from DB
+      const liveTrends = await sql`
+        SELECT title, search_volume, velocity, niche_tags, platform_tags
+        FROM live_trends
+        WHERE expires_at > NOW()
+        ORDER BY velocity DESC
+        LIMIT 20
+      `
+
+      // Feed live data into Groq with user's archetype
+      return groqService.generateTrendInsights({
+        niche,
+        platform,
+        followerRange: user.followerRange || '10K–50K',
+        archetype: user.archetype,
+        liveTrendsContext: liveTrends.map(t => t.title).join(', ')
+      })
+    }, 300) // 5 min cache per user
+
     return success(reply, trends)
 
   } catch (err) {
@@ -63,14 +87,15 @@ const getPersonalizedTrends = async (req, reply) => {
 const getOpportunityWindows = async (req, reply) => {
   try {
     const user = req.user
-    const trends = await claudeService.generateTrendInsights({
+    const trends = await groqService.generateTrendInsights({
       niche: user.niches?.[0] || 'fashion',
       platform: user.primaryPlatform || 'instagram',
       followerRange: user.followerRange || '10K–50K',
+      archetype: user.archetype,
     })
 
     // Filter to only trends with high opportunity score
-    const windows = trends
+    const windows = trends.trends
       .filter(t => t.opportunityScore >= 85)
       .sort((a, b) => b.opportunityScore - a.opportunityScore)
 
@@ -84,13 +109,14 @@ const getOpportunityWindows = async (req, reply) => {
 const getViralRadar = async (req, reply) => {
   try {
     const user = req.user
-    const trends = await claudeService.generateTrendInsights({
+    const result = await groqService.generateTrendInsights({
       niche: user.niches?.[0] || 'fashion',
       platform: user.primaryPlatform || 'instagram',
       followerRange: user.followerRange || '10K–50K',
+      archetype: user.archetype,
     })
 
-    const viralTrends = trends
+    const viralTrends = result.trends
       .filter(t => t.badge === 'HOT' || t.velocity >= 90)
       .slice(0, 5)
 
@@ -156,6 +182,28 @@ const getSavedTrends = async (req, reply) => {
   }
 }
 
+const submitFeedback = async (req, reply) => {
+  const { recommendationType, recommendationData, wasHelpful, resultNotes } = req.body
+  const sql = getDB()
+
+  try {
+    const [feedback] = await sql`
+      INSERT INTO aria_feedback (user_id, recommendation_type, recommendation_data, was_helpful, result_notes)
+      VALUES (${req.user.id}, ${recommendationType}, ${JSON.stringify(recommendationData)}, ${wasHelpful}, ${resultNotes})
+      RETURNING id, created_at
+    `
+
+    return success(reply, {
+      id: feedback.id,
+      message: 'Feedback recorded. ARIA learns from this!',
+      createdAt: feedback.createdAt,
+    })
+  } catch (err) {
+    logger.error({ err }, 'Submit feedback failed')
+    return errors.internal(reply)
+  }
+}
+
 module.exports = {
   getTrends,
   getPersonalizedTrends,
@@ -165,4 +213,5 @@ module.exports = {
   saveTrend,
   unsaveTrend,
   getSavedTrends,
+  submitFeedback,
 }

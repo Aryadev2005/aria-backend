@@ -1,6 +1,6 @@
 'use strict'
 
-const claudeService = require('../services/ai/claude.service')
+const groqService = require('../services/ai/groq.service')
 const { getDB } = require('../config/database')
 const { success, errors, paginated } = require('../utils/response')
 const { logger } = require('../utils/logger')
@@ -10,12 +10,13 @@ const generateContent = async (req, reply) => {
   const user = req.user
 
   try {
-    const content = await claudeService.generateContent({
+    const content = await groqService.generateContent({
       trendTitle,
       platform,
       niche:         niche || user.niches?.[0] || 'fashion',
       followerRange: user.followerRange || '10K–50K',
       songTitle, tone, language,
+      archetype:     user.archetype,
     })
 
     // Save to history async — don't block response
@@ -47,10 +48,11 @@ const generateHooks = async (req, reply) => {
   const user = req.user
 
   try {
-    const result = await claudeService.generateHooks({
+    const result = await groqService.generateHooks({
       topic, platform,
       niche:         niche || user.niches?.[0] || 'fashion',
       followerRange: user.followerRange || '10K–50K',
+      archetype:     user.archetype,
     })
     return success(reply, result)
   } catch (err) {
@@ -64,9 +66,10 @@ const rewriteHook = async (req, reply) => {
   const user = req.user
 
   try {
-    const result = await claudeService.rewriteHook({
+    const result = await groqService.rewriteHook({
       hook, platform,
       niche: niche || user.niches?.[0] || 'fashion',
+      archetype: user.archetype,
     })
     return success(reply, result)
   } catch (err) {
@@ -79,7 +82,7 @@ const repurposeContent = async (req, reply) => {
   const { content, sourcePlatform, targetPlatforms } = req.body
 
   try {
-    const result = await claudeService.repurposeContent({
+    const result = await groqService.repurposeContent({
       content, sourcePlatform, targetPlatforms,
     })
     return success(reply, result)
@@ -94,9 +97,10 @@ const analyseContent = async (req, reply) => {
   const user = req.user
 
   try {
-    const result = await claudeService.analyseContent({
+    const result = await groqService.analyseContent({
       caption, platform,
       niche: niche || user.niches?.[0] || 'fashion',
+      archetype: user.archetype,
     })
     return success(reply, result)
   } catch (err) {
