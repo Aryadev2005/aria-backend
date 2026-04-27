@@ -1,13 +1,13 @@
 'use strict'
 
-const { exec } = require('child_process')
+const { execFile } = require('child_process')
 const { promisify } = require('util')
 const path = require('path')
 const { getDB } = require('../config/database')
 const { cache, CacheKeys } = require('../config/redis')
 const { logger } = require('../utils/logger')
 
-const execAsync = promisify(exec)
+const execFileAsync = promisify(execFile)
 
 /**
  * Compute engagement rate from posts
@@ -106,7 +106,7 @@ const scrapeAndSaveProfile = async (userId, handle, platform) => {
 
     // Check if Python is available
     try {
-      await execAsync('which python3')
+      await execFileAsync('which', ['python3'])
     } catch {
       throw new Error(
         'Python 3 not found. Install Python 3 and instaloader: pip install instaloader'
@@ -115,7 +115,7 @@ const scrapeAndSaveProfile = async (userId, handle, platform) => {
 
     // Run Python scraper
     const scriptPath = path.join(__dirname, '../..', 'scripts/scrape_instagram.py')
-    const { stdout, stderr } = await execAsync(`python3 "${scriptPath}" "${handle}"`, {
+    const { stdout, stderr } = await execFileAsync('python3', [scriptPath, handle], {
       timeout: 60000,
       maxBuffer: 10 * 1024 * 1024,
     })
@@ -161,7 +161,7 @@ const scrapeAndSaveProfile = async (userId, handle, platform) => {
     `
 
     // Invalidate user cache
-    await cache.delete(CacheKeys.dashboard(userId))
+    await cache.del(CacheKeys.dashboard(userId))
 
     logger.info(
       { userId, followers: scrapedData.followers, engagement_rate: engagementRate },

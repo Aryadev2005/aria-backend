@@ -1,7 +1,7 @@
 'use strict'
 
 const { Worker } = require('bullmq')
-const { getRedisClient } = require('../config/redis')
+const { getRedisClient, getWorkerRedisClient } = require('../config/redis')
 const { getDB } = require('../config/database')
 const { logger } = require('../utils/logger')
 const { scrapeAndSaveProfile } = require('../services/scraper.service')
@@ -98,7 +98,7 @@ const startScrapeWorker = async () => {
   const concurrency = parseInt(process.env.WORKER_CONCURRENCY || '2', 10)
 
   const worker = new Worker('profile-scrape', processScrapeJob, {
-    connection: getRedisClient(),
+    connection: getWorkerRedisClient(),
     concurrency,
   })
 

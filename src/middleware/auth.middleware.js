@@ -56,14 +56,14 @@ const authenticateFirebase = async (req, reply) => {
 }
 
 const requirePro = async (req, reply) => {
-  if (!req.user?.isPro) {
+  if (!req.user?.is_pro) {
     return errors.forbidden(reply,
       'This feature requires Pro subscription — ₹499/month')
   }
 }
 
 const requireAgency = async (req, reply) => {
-  if (req.user?.subscriptionTier !== 'agency') {
+  if (req.user?.subscription_tier !== 'agency') {
     return errors.forbidden(reply, 'Agency subscription required')
   }
 }

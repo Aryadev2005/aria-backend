@@ -1,26 +1,22 @@
 'use strict'
 
-const { Pool } = require('pg')
+const postgres = require('postgres')
 const { logger } = require('../utils/logger')
 
-let pool = null
+let sql = null
 
 const connectDB = async () => {
   try {
-    pool = new Pool({
-      connectionString: process.env.DATABASE_URL,
-      max:              parseInt(process.env.DB_POOL_MAX || '20', 10),
-      idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT || '30000', 10),
-      connectionTimeoutMillis: parseInt(process.env.DB_CONNECT_TIMEOUT || '10000', 10),
+    sql = postgres(process.env.DATABASE_URL, {
+      max: 20,
+      idle_timeout: 30,
     })
 
     // Test connection
-    const client = await pool.connect()
-    await client.query('SELECT 1')
-    client.release()
+    await sql`SELECT 1`
 
     logger.info({ pool: 20 }, 'PostgreSQL connected')
-    return pool
+    return sql
   } catch (err) {
     if (process.env.NODE_ENV === 'development') {
       logger.warn({ err }, 'PostgreSQL connection failed - running in mock mode')
@@ -32,27 +28,22 @@ const connectDB = async () => {
 }
 
 const getDB = () => {
-  if (!pool) throw new Error('Database not initialized')
-  return pool
+  if (!sql) throw new Error('Database not initialized')
+  return sql
 }
 
 const disconnectDB = async () => {
-  if (pool) {
-    await pool.end()
-    pool = null
+  if (sql) {
+    await sql.end()
+    sql = null
   }
 }
 
-// Helper to run queries — mimics postgres.js tagged template syntax
+// Helper function for executing queries with parameters
 // Usage: await query('SELECT * FROM users WHERE id = $1', [userId])
-const query = async (text, params) => {
-  const client = await pool.connect()
-  try {
-    const result = await client.query(text, params)
-    return result.rows
-  } finally {
-    client.release()
-  }
+const query = (text, params) => {
+  const s = getDB()
+  return s.unsafe(text, params)
 }
 
-module.exports = { connectDB, getDB, disconnectDB, query }
+module.exports = { connectDB, getDB, disconnectDB, query, sql }

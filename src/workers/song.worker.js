@@ -203,7 +203,7 @@ const processSongJob = async (job) => {
       WHERE fetched_at > NOW() - INTERVAL '4 hours'
       LIMIT 100
     `
-    const previousMap = new Map(previousSongs.map(s => (`${s.title}|${s.artist}`, s.chart_position)))
+    const previousMap = new Map(previousSongs.map(s => [`${s.title}|${s.artist}`, s.chart_position]))
 
     // Delete old songs
     await sql`DELETE FROM live_songs WHERE fetched_at < NOW() - INTERVAL '2 hours'`

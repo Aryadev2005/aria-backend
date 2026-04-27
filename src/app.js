@@ -15,6 +15,7 @@ const trendRoutes     = require('./routes/trend.routes')
 const songRoutes      = require('./routes/song.routes')
 const contentRoutes   = require('./routes/content.routes')
 const analyticsRoutes = require('./routes/analytics.routes')
+const calendarRoutes = require('./routes/calendar.js')
 
 const buildApp = async () => {
   const app = Fastify({
@@ -101,6 +102,11 @@ const buildApp = async () => {
   app.register(songRoutes,      { prefix: `${API_PREFIX}/songs` })
   app.register(contentRoutes,   { prefix: `${API_PREFIX}/content` })
   app.register(analyticsRoutes, { prefix: `${API_PREFIX}/analytics` })
+  app.register(calendarRoutes,  { prefix: `${API_PREFIX}/calendar` })
+
+  app.addHook('onClose', async (instance) => {
+    // cleanup if needed
+  })
 
   app.setNotFoundHandler((req, reply) => {
     reply.code(404).send({
