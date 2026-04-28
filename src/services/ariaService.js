@@ -348,6 +348,8 @@ Analyse this Indian creator. Respond ONLY with JSON:
 }`;
     return callARIA(prompt, { useLlama: true, maxTokens: 800 });
   },
+
+  callARIA,
 };
 
 module.exports = ariaService;

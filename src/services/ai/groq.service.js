@@ -381,6 +381,30 @@ Respond ONLY with valid JSON:
   return parseJSON(message.choices[0].message.content)
 }
 
+// ─── Internal ARIA caller — used by radar.service.js ──────────────────────
+const _callGroq = async (prompt, { maxTokens = 1000, useLlama = true } = {}) => {
+  const model = useLlama
+    ? 'llama-3.3-70b-versatile'
+    : (process.env.GROQ_MODEL || 'mixtral-8x7b-32768');
+
+  const message = await groq.chat.completions.create({
+    model,
+    max_tokens: maxTokens,
+    messages: [
+      {
+        role: 'system',
+        content: 'You are ARIA — India\'s creator intelligence engine. Always respond with valid JSON only. No preamble, no markdown fences.',
+      },
+      { role: 'user', content: prompt },
+    ],
+  });
+
+  return parseJSON(message.choices[0].message.content);
+};
+
+// Also add callARIA as an alias (used by old ariaService.js references)
+const callARIA = _callGroq;
+
 module.exports = {
   // New ARIA functions
   detectArchetype,
@@ -396,4 +420,7 @@ module.exports = {
   generateTrendInsights,
   generateSongInsights,
   generateRateCard,
+  // Real data ARIA caller
+  _callGroq,
+  callARIA,
 }
