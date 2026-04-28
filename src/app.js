@@ -17,6 +17,8 @@ const contentRoutes   = require('./routes/content.routes')
 const analyticsRoutes = require('./routes/analytics.routes')
 const calendarRoutes = require('./routes/calendar.js')
 const radarRoutes = require('./routes/radar.routes')
+const onboardingRoutes = require('./routes/onboarding.routes')
+const agentRoutes = require('./routes/agent.routes')
 
 const buildApp = async () => {
   const app = Fastify({
@@ -105,6 +107,8 @@ const buildApp = async () => {
   app.register(analyticsRoutes, { prefix: `${API_PREFIX}/analytics` })
   app.register(calendarRoutes,  { prefix: `${API_PREFIX}/calendar` })
   app.register(radarRoutes, { prefix: `${API_PREFIX}/discover` })
+  app.register(onboardingRoutes, { prefix: `${API_PREFIX}/onboarding` })
+  app.register(agentRoutes, { prefix: `${API_PREFIX}/agent` })
 
   app.addHook('onClose', async (instance) => {
     // cleanup if needed
