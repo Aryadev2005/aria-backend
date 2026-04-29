@@ -256,41 +256,52 @@ const learnFromConversation = async (userId, userMessage, ariaResponse) => {
 // ─────────────────────────────────────────────────────────────────────────────
 const buildLiveContext = async (user, memory) => {
   const ctx = getPlatformContext(user);
-  const niche    = memory['current_niche']?.value || ctx.niche;
-  const parts    = [];
+  const niche = memory['current_niche']?.value || ctx.niche;
+
+  // Add timeout to live context build to prevent hanging the whole brain
+  const timeoutPromise = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error('Live context timeout')), 3000)
+  );
 
   try {
-    const [trends, ytVideos, festivals] = await Promise.allSettled([
-      getLiveTrendsForNiche(niche),
-      searchYouTubeByNiche(niche, 5),
-      Promise.resolve(getUpcomingFestivals()),
+    return await Promise.race([
+      (async () => {
+        const parts = [];
+        const [trends, ytVideos, festivals] = await Promise.allSettled([
+          getLiveTrendsForNiche(niche),
+          searchYouTubeByNiche(niche, 5),
+          Promise.resolve(getUpcomingFestivals()),
+        ]);
+
+        if (trends.status === 'fulfilled' && trends.value?.length > 0) {
+          parts.push('LIVE TRENDS RIGHT NOW:\n' +
+            trends.value.slice(0, 6)
+              .map(t => `• "${t.title}" — velocity ${t.velocity}/100 (${t.source})`)
+              .join('\n'));
+        }
+
+        if (ytVideos.status === 'fulfilled' && ytVideos.value?.length > 0) {
+          parts.push('TOP YOUTUBE VIDEOS IN YOUR NICHE:\n' +
+            ytVideos.value.slice(0, 3)
+              .map(v => `• ${v.title} (${v.views} views)`)
+              .join('\n'));
+        }
+
+        if (festivals.status === 'fulfilled' && festivals.value?.length > 0) {
+          parts.push('UPCOMING CULTURAL MOMENTS:\n' +
+            festivals.value.slice(0, 3)
+              .map(f => `• ${f.name} (${f.date})`)
+              .join('\n'));
+        }
+
+        return parts.join('\n\n');
+      })(),
+      timeoutPromise
     ]);
-
-    if (trends.status === 'fulfilled' && trends.value?.length > 0) {
-      parts.push('LIVE TRENDS RIGHT NOW:\n' +
-        trends.value.slice(0, 6)
-          .map(t => `• "${t.title}" — velocity ${t.velocity}/100 (${t.source})`)
-          .join('\n'));
-    }
-
-    if (ytVideos.status === 'fulfilled' && ytVideos.value?.length > 0) {
-      parts.push('TOP YOUTUBE VIDEOS IN YOUR NICHE:\n' +
-        ytVideos.value.slice(0, 3)
-          .map(v => `• ${v.title} (${v.views} views)`)
-          .join('\n'));
-    }
-
-    if (festivals.status === 'fulfilled' && festivals.value?.length > 0) {
-      parts.push('UPCOMING CULTURAL MOMENTS:\n' +
-        festivals.value.slice(0, 3)
-          .map(f => `• ${f.name} (${f.date})`)
-          .join('\n'));
-    }
   } catch (err) {
-    logger.warn({ err }, 'Live context build failed');
+    logger.warn({ err: err.message, niche }, 'Live context build timed out or failed — proceeding with partial context');
+    return ''; // Return empty context on timeout or failure
   }
-
-  return parts.join('\n\n');
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

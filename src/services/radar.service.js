@@ -55,7 +55,7 @@ const getLiveTrendsForNiche = async (niche) => {
     const rows = await sql`
       SELECT title, search_volume, velocity, niche_tags, source, raw_data
       FROM live_trends
-      WHERE niche_tags && ${[niche]} OR niche_tags && ${'general'}
+      WHERE niche_tags && ARRAY[${niche}]::text[] OR niche_tags && ARRAY['general']::text[]
       ORDER BY velocity DESC, fetched_at DESC
       LIMIT 10
     `;

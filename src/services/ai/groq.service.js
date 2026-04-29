@@ -382,24 +382,52 @@ Respond ONLY with valid JSON:
 }
 
 // ─── Internal ARIA caller — used by radar.service.js ──────────────────────
-const _callGroq = async (prompt, { maxTokens = 1000, useLlama = true } = {}) => {
+const _callGroq = async (prompt, { maxTokens = 1000, useLlama = true, maxRetries = 3 } = {}) => {
   const model = useLlama
     ? 'llama-3.3-70b-versatile'
     : (process.env.GROQ_MODEL || 'mixtral-8x7b-32768');
 
-  const message = await groq.chat.completions.create({
-    model,
-    max_tokens: maxTokens,
-    messages: [
-      {
-        role: 'system',
-        content: 'You are ARIA — India\'s creator intelligence engine. Always respond with valid JSON only. No preamble, no markdown fences.',
-      },
-      { role: 'user', content: prompt },
-    ],
-  });
+  let lastErr = null;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const completion = await groq.chat.completions.create({
+        model,
+        max_tokens: maxTokens,
+        messages: [
+          {
+            role: 'system',
+            content: 'You are ARIA — India\'s creator intelligence engine. Always respond with valid JSON only. No preamble, no markdown fences.',
+          },
+          { role: 'user', content: prompt },
+        ],
+      }, {
+        timeout: 25000, // 25s timeout per attempt
+      });
 
-  return parseJSON(message.choices[0].message.content);
+      const content = completion.choices[0].message.content;
+      try {
+        return parseJSON(content);
+      } catch (jsonErr) {
+        logger.warn({ jsonErr, attempt, content: content.slice(0, 100) }, 'Groq JSON parse failed');
+        lastErr = jsonErr;
+        // If it's the last attempt, we throw, otherwise we retry (maybe LLM hallucinated)
+      }
+    } catch (err) {
+      logger.warn({ err: err.message, attempt, model }, 'Groq API call failed');
+      lastErr = err;
+      
+      // Don't retry on certain errors (e.g. auth)
+      if (err.status === 401 || err.status === 403) break;
+    }
+
+    if (attempt < maxRetries) {
+      const delay = Math.pow(2, attempt) * 1000; // Exponential backoff: 2s, 4s
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+
+  logger.error({ err: lastErr, prompt: prompt.slice(0, 100) }, 'Groq call exhausted all retries');
+  throw lastErr || new Error('Groq call failed after retries');
 };
 
 // Also add callARIA as an alias (used by old ariaService.js references)

@@ -85,14 +85,33 @@ const cache = {
     }
   },
 
+  // deduplication map for concurrent requests
+  _pending: new Map(),
+
   async getOrSet(key, fetchFn, ttlSeconds = 300) {
     const cached = await cache.get(key)
     if (cached !== null) return cached
-    const fresh = await fetchFn()
-    if (fresh !== null && fresh !== undefined) {
-      await cache.set(key, fresh, ttlSeconds)
+
+    // If a request for this key is already in progress, wait for it
+    if (cache._pending.has(key)) {
+      logger.info({ key }, 'Cache: deduplicating concurrent request')
+      return cache._pending.get(key)
     }
-    return fresh
+
+    // Execute fetch and store the promise for others to wait on
+    const fetchPromise = fetchFn()
+      .then(async (fresh) => {
+        if (fresh !== null && fresh !== undefined) {
+          await cache.set(key, fresh, ttlSeconds)
+        }
+        return fresh
+      })
+      .finally(() => {
+        cache._pending.delete(key)
+      })
+
+    cache._pending.set(key, fetchPromise)
+    return fetchPromise
   },
 }
 

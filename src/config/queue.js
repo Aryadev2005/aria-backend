@@ -14,10 +14,35 @@ const { logger } = require('../utils/logger')
  *  WORKER_CONCURRENCY=2         # Scrape worker concurrency
  */
 
-// Three queues for different job types
-const trendQueue = new Queue('trend-refresh', { connection: getRedisClient() })
-const songQueue = new Queue('song-refresh', { connection: getRedisClient() })
-const scrapeQueue = new Queue('profile-scrape', { connection: getRedisClient() })
+// Queues will be initialized in initQueues()
+let trendQueue = null
+let songQueue = null
+let scrapeQueue = null
+
+/**
+ * Initialize all BullMQ queues with a connected Redis client
+ */
+const initQueues = () => {
+  if (trendQueue) return { trendQueue, songQueue, scrapeQueue }
+
+  const connection = getRedisClient()
+  if (!connection) {
+    logger.error('Cannot initialize queues: Redis connection not found')
+    throw new Error('Redis connection required for BullMQ')
+  }
+
+  trendQueue = new Queue('trend-refresh', { connection })
+  songQueue = new Queue('song-refresh', { connection })
+  scrapeQueue = new Queue('profile-scrape', { connection })
+
+  logger.info('BullMQ queues initialized')
+  return { trendQueue, songQueue, scrapeQueue }
+}
+
+const getQueues = () => {
+  if (!trendQueue) return initQueues()
+  return { trendQueue, songQueue, scrapeQueue }
+}
 
 /**
  * Schedule recurring jobs for trend and song refreshes
@@ -28,6 +53,7 @@ const scheduleRecurringJobs = async () => {
     const TRENDS_ENABLED = process.env.TRENDS_ENABLED !== 'false'
     const SONGS_ENABLED = process.env.SONGS_ENABLED !== 'false'
 
+    const { trendQueue } = getQueues()
     if (TRENDS_ENABLED) {
       // Trends every 6 hours
       await trendQueue.add('fetch-india-trends', {}, {
@@ -39,6 +65,7 @@ const scheduleRecurringJobs = async () => {
       logger.info('BullMQ scheduled: trends refresh every 6 hours')
     }
 
+    const { songQueue } = getQueues()
     if (SONGS_ENABLED) {
       // Songs every 2 hours
       await songQueue.add('fetch-spotify-charts', {}, {
@@ -70,6 +97,15 @@ const enqueueScrapeJob = async (userId, handle, platform) => {
       return null
     }
 
+    const { execSync } = require('child_process')
+    try {
+      execSync('python3 --version', { stdio: 'ignore' })
+    } catch {
+      logger.error('Cannot enqueue scrape job: Python 3 not installed on system')
+      throw new Error('System missing Python 3 dependency')
+    }
+
+    const { scrapeQueue } = getQueues()
     const job = await scrapeQueue.add('scrape-profile', { userId, handle, platform }, {
       attempts: 2,
       backoff: { type: 'exponential', delay: 5000 },
@@ -91,6 +127,7 @@ const enqueueScrapeJob = async (userId, handle, platform) => {
  */
 const cleanupQueues = async () => {
   try {
+    if (!trendQueue) return
     await Promise.all([
       trendQueue.close(),
       songQueue.close(),
@@ -103,9 +140,8 @@ const cleanupQueues = async () => {
 }
 
 module.exports = {
-  trendQueue,
-  songQueue,
-  scrapeQueue,
+  initQueues,
+  getQueues,
   scheduleRecurringJobs,
   enqueueScrapeJob,
   cleanupQueues,

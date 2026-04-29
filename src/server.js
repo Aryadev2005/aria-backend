@@ -8,7 +8,7 @@ const { logger } = require('./utils/logger')
 const { connectDB } = require('./config/database')
 const { connectRedis } = require('./config/redis')
 const { initFirebase } = require('./config/firebase')
-const { scheduleRecurringJobs, cleanupQueues } = require('./config/queue')
+const { initQueues, scheduleRecurringJobs, cleanupQueues } = require('./config/queue')
 const { startAllWorkers, stopAllWorkers } = require('./workers')
 
 const PORT = parseInt(process.env.PORT || '3000', 10)
@@ -48,6 +48,9 @@ const start = async () => {
 
     await connectRedis()
     logger.info('Redis connected')
+
+    // Initialize BullMQ queues with the connection
+    initQueues()
 
     // Schedule recurring jobs (trends every 6h, songs every 2h)
     await scheduleRecurringJobs()

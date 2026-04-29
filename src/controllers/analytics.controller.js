@@ -230,11 +230,13 @@ const triggerScrape = async (req, reply) => {
       WHERE id = ${user.id}
     `
 
-    // TODO: Queue scrape job to BullMQ worker (trend.worker.js)
-    // For now, return 202 Accepted
+    const { enqueueScrapeJob } = require('../config/queue')
+    const jobId = await enqueueScrapeJob(user.id, handle, platform)
+
     return reply.status(202).send({
       status: 'queued',
       message: `Scraping ${platform} handle @${handle}. Analysis will be ready in 2-3 minutes.`,
+      jobId,
       handle,
       platform,
     })

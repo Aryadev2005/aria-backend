@@ -113,11 +113,23 @@ const scrapeAndSaveProfile = async (userId, handle, platform) => {
       )
     }
 
-    // Run Python scraper
+    // Run Python scraper with a strict timeout
     const scriptPath = path.join(__dirname, '../..', 'scripts/scrape_instagram.py')
-    const { stdout, stderr } = await execFileAsync('python3', [scriptPath, handle], {
-      timeout: 60000,
-      maxBuffer: 10 * 1024 * 1024,
+    
+    let child;
+    const { stdout, stderr } = await new Promise((resolve, reject) => {
+      child = execFile('python3', [scriptPath, handle], {
+        timeout: 45000, // 45s timeout
+        maxBuffer: 10 * 1024 * 1024,
+        killSignal: 'SIGKILL', // Be aggressive with killing hung processes
+      }, (err, stdout, stderr) => {
+        if (err) {
+          if (err.killed) reject(new Error(`Scraper timed out after 45s for handle: ${handle}`))
+          else reject(err)
+          return
+        }
+        resolve({ stdout, stderr })
+      })
     })
 
     if (stderr && !stdout) {
