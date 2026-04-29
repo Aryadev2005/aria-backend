@@ -3,13 +3,13 @@
 const Groq = require('groq-sdk')
 const { logger } = require('../../utils/logger')
 
+// Global 30s timeout on client
 const groq = new Groq({
   apiKey: process.env.GROQ_API_KEY,
-  timeout: 30000, // Global 30s timeout
+  timeout: 30000,
 })
 
-const MODEL = process.env.GROQ_MODEL || 'mixtral-8x7b-32768'
-
+// ─── JSON parser — strips markdown fences if LLM adds them ────────────────
 const parseJSON = (text) => {
   const clean = text
     .replace(/```json\n?/g, '')
@@ -18,12 +18,73 @@ const parseJSON = (text) => {
   return JSON.parse(clean)
 }
 
-// ============ NEW ARIA FUNCTIONS ============
+// ─────────────────────────────────────────────────────────────────────────────
+// CORE CALLER — every function routes through here
+// Retries 3x with exponential backoff
+// Uses stricter system prompt on retry to fix JSON hallucinations
+// ─────────────────────────────────────────────────────────────────────────────
+const _callGroq = async (prompt, { maxTokens = 1000, useLlama = false, maxRetries = 3 } = {}) => {
+  // Llama 70B for heavy reasoning, Mixtral for fast simple tasks
+  const model = useLlama
+    ? 'llama-3.3-70b-versatile'
+    : (process.env.GROQ_MODEL || 'mixtral-8x7b-32768')
 
-/**
- * Detect creator archetype based on user profile
- * Returns: { archetype, archetypeLabel, archetypeConfidence, growthStage, toneProfile }
- */
+  let lastErr = null
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      // Use stricter system prompt on retries — LLM may have added markdown on first attempt
+      const systemContent = attempt === 1
+        ? 'You are ARIA — India\'s creator intelligence engine. Always respond with valid JSON only. No preamble, no markdown fences.'
+        : 'CRITICAL: Respond ONLY with a raw JSON object. No text before or after. No ```json. No explanation. Start your response with { and end with }.'
+
+      const completion = await groq.chat.completions.create({
+        model,
+        max_tokens: maxTokens,
+        messages: [
+          { role: 'system', content: systemContent },
+          { role: 'user',   content: prompt },
+        ],
+      }, {
+        timeout: 25000, // 25s per attempt (under global 30s)
+      })
+
+      const content = completion.choices[0].message.content
+      try {
+        return parseJSON(content)
+      } catch (jsonErr) {
+        logger.warn({ jsonErr, attempt, content: content.slice(0, 200) }, 'Groq JSON parse failed — will retry with stricter prompt')
+        lastErr = jsonErr
+        // Don't break — retry with stricter system prompt above
+      }
+
+    } catch (err) {
+      logger.warn({ err: err.message, attempt, model }, 'Groq API call failed')
+      lastErr = err
+
+      // Don't retry on auth errors — they won't resolve
+      if (err.status === 401 || err.status === 403) break
+    }
+
+    if (attempt < maxRetries) {
+      // Exponential backoff: 2s, 4s
+      await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000))
+    }
+  }
+
+  logger.error({ err: lastErr, prompt: prompt.slice(0, 100) }, 'Groq exhausted all retries')
+  throw lastErr || new Error('Groq call failed after retries')
+}
+
+// Alias used by ariaService.js (older service)
+const callARIA = _callGroq
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ARIA FUNCTIONS
+// Heavy reasoning (archetype, persona, rate card) → useLlama: true
+// Fast simple tasks (hooks, rewrite, analyse) → useLlama: false (default)
+// ─────────────────────────────────────────────────────────────────────────────
+
 const detectArchetype = async ({ niche, platform, followerRange, creatorIntent, scrapedData }) => {
   const prompt = `You are ARIA - an AI creator intelligence system. Analyze this creator profile and detect their archetype.
 
@@ -51,12 +112,10 @@ Respond ONLY with valid JSON:
   "toneProfile": "casual|professional|humorous|inspirational|educational"
 }`
 
-  return _callGroq(prompt, { maxTokens: 500 });
+  // Llama 70B — archetype detection needs nuanced reasoning
+  return _callGroq(prompt, { maxTokens: 500, useLlama: true })
 }
 
-/**
- * Analyze content gaps vs live market trends
- */
 const analyzeGaps = async ({ archetype, niche, platform, followerRange, scrapedData, engagementRate }) => {
   const prompt = `You are ARIA. Analyze content gaps for a ${archetype} creator in ${niche} on ${platform}.
 
@@ -77,12 +136,9 @@ Respond ONLY with valid JSON:
   "gapScore": 72
 }`
 
-  return _callGroq(prompt, { maxTokens: 800 });
+  return _callGroq(prompt, { maxTokens: 800, useLlama: true })
 }
 
-/**
- * Generate a viral blueprint for creator growth
- */
 const generateViralBlueprint = async ({ archetype, niche, platform, followerRange, gaps, toneProfile }) => {
   const prompt = `You are ARIA. Generate a viral growth blueprint for a ${archetype} ${niche} creator on ${platform}.
 
@@ -94,28 +150,21 @@ Blueprint parameters:
 Respond ONLY with valid JSON:
 {
   "30dayBlueprint": {
-    "week1": "Post 3 Reels on trending sounds from ${niche}. Focus on hook optimization.",
+    "week1": "Post 3 Reels on trending sounds. Focus on hook optimization.",
     "week2": "Introduce Carousel format. Test gap content.",
     "week3": "Cross-promote across Stories + Reels",
     "week4": "Analyze best-performing format. Double down."
   },
   "viralMechanics": ["Hook", "Pattern interrupt", "CTA"],
-  "contentMixRecommendation": {
-    "reels": 60,
-    "carousels": 25,
-    "stories": 15
-  },
+  "contentMixRecommendation": { "reels": 60, "carousels": 25, "stories": 15 },
   "bestTimeToPost": "7:00 PM IST Wed-Sat",
   "recommendedFrequency": "5x per week",
   "expectedGrowthIn30Days": "15-25%"
 }`
 
-  return _callGroq(prompt, { maxTokens: 1000 });
+  return _callGroq(prompt, { maxTokens: 1000, useLlama: true })
 }
 
-/**
- * Full persona growth map - ARIA's flagship analysis
- */
 const fullPersonaGrowthMap = async ({ niche, platform, followerRange, creatorIntent, scrapedData, engagementRate }) => {
   const prompt = `You are ARIA - India's top AI creator intelligence. Generate a complete persona growth map.
 
@@ -126,7 +175,7 @@ Creator:
 - Engagement: ${engagementRate}%
 - Intent: ${creatorIntent}
 
-Respond ONLY with valid JSON (MUST be valid):
+Respond ONLY with valid JSON:
 {
   "personaSummary": "2-3 sentence overview of creator's position",
   "growthStage": "DISCOVERY|GROWTH|MONETIZATION|SCALE",
@@ -134,30 +183,22 @@ Respond ONLY with valid JSON (MUST be valid):
   "nextMilestone": "50K followers",
   "daysToNextMilestone": 45,
   "archetypeProfile": "Creator archetype and strength areas",
-  "immediateActions": [
-    "Action 1: description",
-    "Action 2: description"
-  ],
+  "immediateActions": ["Action 1: description", "Action 2: description"],
   "contentStrategy": {
     "themes": ["Theme 1", "Theme 2"],
     "formats": ["Reels", "Carousels"],
     "frequency": "5x/week"
   },
-  "growthProjections": {
-    "month1": 18000,
-    "month3": 25000,
-    "month6": 45000
-  },
+  "growthProjections": { "month1": 18000, "month3": 25000, "month6": 45000 },
   "riskFactors": ["Risk 1"],
   "opportunityWindows": ["Opportunity 1"],
   "monetizationReadiness": 65,
   "nextSteps": ["Step 1", "Step 2"]
 }`
 
-  return _callGroq(prompt, { maxTokens: 1500 });
+  // Llama 70B — flagship analysis needs max intelligence
+  return _callGroq(prompt, { maxTokens: 1500, useLlama: true })
 }
-
-// ============ UPGRADED EXISTING FUNCTIONS (with archetype param) ============
 
 const generateContent = async ({ trendTitle, platform, niche, followerRange, songTitle, tone = 'casual', language = 'hinglish', archetype }) => {
   const prompt = `You are India's top social media content strategist for ${archetype || 'creator'}.
@@ -169,7 +210,7 @@ Tone: ${tone}, Language: ${language}
 
 Respond ONLY with valid JSON:
 {
-  "hook": "attention-grabbing line using Indian context and ₹ for prices",
+  "hook": "attention-grabbing first line using Indian context and ₹ for prices",
   "caption": "full caption with emojis, 3-4 sentences, culturally relevant",
   "hashtags": ["#tag1","#tag2","#tag3","#tag4","#tag5","#tag6","#tag7","#tag8"],
   "bestTimeToPost": "Day · HH:MM PM IST",
@@ -179,7 +220,8 @@ Respond ONLY with valid JSON:
   "cta": "call to action"
 }`
 
-  return _callGroq(prompt, { maxTokens: 1000 });
+  // Llama 70B — content generation benefits from creativity
+  return _callGroq(prompt, { maxTokens: 1000, useLlama: true })
 }
 
 const generateHooks = async ({ topic, platform, niche, followerRange, archetype }) => {
@@ -189,11 +231,12 @@ Topic: "${topic}"
 Respond ONLY with valid JSON:
 {
   "hooks": [
-    { "text": "hook", "trigger": "curiosity|controversy|relatability|fear|aspiration", "rating": 85 }
+    { "text": "hook text", "trigger": "curiosity|controversy|relatability|fear|aspiration", "rating": 85 }
   ]
 }`
 
-  return _callGroq(prompt, { maxTokens: 800 });
+  // Mixtral — fast enough, hooks are pattern-based
+  return _callGroq(prompt, { maxTokens: 800, useLlama: false })
 }
 
 const rewriteHook = async ({ hook, platform, niche, archetype }) => {
@@ -203,11 +246,12 @@ const rewriteHook = async ({ hook, platform, niche, archetype }) => {
 Respond ONLY with valid JSON:
 {
   "rewrites": [
-    { "text": "hook", "improvement": "why better", "rating": 90 }
+    { "text": "rewritten hook", "improvement": "why this is better", "rating": 90 }
   ]
 }`
 
-  return _callGroq(prompt, { maxTokens: 800 });
+  // Mixtral — fast, pattern-based task
+  return _callGroq(prompt, { maxTokens: 800, useLlama: false })
 }
 
 const repurposeContent = async ({ content, sourcePlatform, targetPlatforms }) => {
@@ -223,7 +267,7 @@ Respond ONLY with valid JSON:
   }
 }`
 
-  return _callGroq(prompt, { maxTokens: 1000 });
+  return _callGroq(prompt, { maxTokens: 1000, useLlama: false })
 }
 
 const analyseContent = async ({ caption, platform, niche, archetype }) => {
@@ -236,34 +280,43 @@ Respond ONLY with valid JSON:
   "emotionalTrigger": "aspiration",
   "callToAction": "Identified",
   "estimatedReach": "High",
-  "recommendations": ["Rec 1"],
+  "recommendations": ["Specific recommendation 1"],
   "score": 82
 }`
 
-  return _callGroq(prompt, { maxTokens: 600 });
+  // Mixtral — fast analysis
+  return _callGroq(prompt, { maxTokens: 600, useLlama: false })
 }
 
-const generateTrendInsights = async ({ niche, platform, followerRange, archetype, liveTrendsContext }) => {
+const generateTrendInsights = async ({ niche, platform, followerRange, archetype, liveTrendsContext, imputationContext }) => {
+  // If we have early signals, tell ARIA to be honest about uncertainty
+  const uncertaintyNote = imputationContext?.hasEarlySignals
+    ? '\nNOTE: Some signals are under 6 hours old. For those, say "ARIA is monitoring" instead of a confident peak window. Never invent engagement numbers for early signals.'
+    : ''
+
   const prompt = `You are ARIA. Generate trend insights for a ${niche} ${archetype || 'creator'} on ${platform} (${followerRange} followers).
 ${liveTrendsContext ? `Live market context: ${liveTrendsContext}` : ''}
+${uncertaintyNote}
 
 Respond ONLY with valid JSON:
 {
   "trends": [
     {
       "title": "trend name",
-      "description": "why it matters",
+      "description": "why it matters right now",
       "badge": "HOT|RISING|STABLE",
       "searchVolume": 45000,
       "velocity": 85,
       "opportunityScore": 92,
-      "recommendation": "How to leverage",
-      "expiresIn": "3 days"
+      "recommendation": "Specific action to take",
+      "expiresIn": "3 days",
+      "confidence": "HIGH|MEDIUM|LOW",
+      "caution": null
     }
   ]
 }`
 
-  return _callGroq(prompt, { maxTokens: 1200 });
+  return _callGroq(prompt, { maxTokens: 1200, useLlama: true })
 }
 
 const generateSongInsights = async ({ niche, platform, archetype }) => {
@@ -280,16 +333,16 @@ Respond ONLY with valid JSON:
       "growth": "+340% this week",
       "viralPotential": 88,
       "bestFor": "Reels|Stories",
-      "recommendation": "How to use"
+      "recommendation": "How and when to use this"
     }
   ]
 }`
 
-  return _callGroq(prompt, { maxTokens: 1000 });
+  return _callGroq(prompt, { maxTokens: 1000, useLlama: false })
 }
 
 const generateRateCard = async ({ followers, engagement, niche, platform, archetype }) => {
-  const prompt = `You are ARIA. Generate sponsorship rate card for a ${niche} ${archetype || 'creator'}.
+  const prompt = `You are ARIA. Generate a sponsorship rate card for a ${niche} ${archetype || 'creator'}.
 
 Stats:
 - Followers: ${followers}
@@ -307,68 +360,15 @@ Respond ONLY with valid JSON:
   "recommendation": "Your rate is competitive for your niche"
 }`
 
-  return _callGroq(prompt, { maxTokens: 500 });
+  // Llama 70B — pricing needs reasoning about Indian market rates
+  return _callGroq(prompt, { maxTokens: 500, useLlama: true })
 }
 
-// ─── Internal ARIA caller — used by radar.service.js ──────────────────────
-const _callGroq = async (prompt, { maxTokens = 1000, useLlama = true, maxRetries = 3 } = {}) => {
-  const model = useLlama
-    ? 'llama-3.3-70b-versatile'
-    : (process.env.GROQ_MODEL || 'mixtral-8x7b-32768');
-
-  let lastErr = null;
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      const completion = await groq.chat.completions.create({
-        model,
-        max_tokens: maxTokens,
-        messages: [
-          {
-            role: 'system',
-            content: 'You are ARIA — India\'s creator intelligence engine. Always respond with valid JSON only. No preamble, no markdown fences.',
-          },
-          { role: 'user', content: prompt },
-        ],
-      }, {
-        timeout: 25000, // 25s timeout per attempt
-      });
-
-      const content = completion.choices[0].message.content;
-      try {
-        return parseJSON(content);
-      } catch (jsonErr) {
-        logger.warn({ jsonErr, attempt, content: content.slice(0, 100) }, 'Groq JSON parse failed');
-        lastErr = jsonErr;
-        // If it's the last attempt, we throw, otherwise we retry (maybe LLM hallucinated)
-      }
-    } catch (err) {
-      logger.warn({ err: err.message, attempt, model }, 'Groq API call failed');
-      lastErr = err;
-      
-      // Don't retry on certain errors (e.g. auth)
-      if (err.status === 401 || err.status === 403) break;
-    }
-
-    if (attempt < maxRetries) {
-      const delay = Math.pow(2, attempt) * 1000; // Exponential backoff: 2s, 4s
-      await new Promise(resolve => setTimeout(resolve, delay));
-    }
-  }
-
-  logger.error({ err: lastErr, prompt: prompt.slice(0, 100) }, 'Groq call exhausted all retries');
-  throw lastErr || new Error('Groq call failed after retries');
-};
-
-// Also add callARIA as an alias (used by old ariaService.js references)
-const callARIA = _callGroq;
-
 module.exports = {
-  // New ARIA functions
   detectArchetype,
   analyzeGaps,
   generateViralBlueprint,
   fullPersonaGrowthMap,
-  // Upgraded existing functions
   generateContent,
   generateHooks,
   rewriteHook,
@@ -377,7 +377,7 @@ module.exports = {
   generateTrendInsights,
   generateSongInsights,
   generateRateCard,
-  // Real data ARIA caller
+  // Internal caller — used by radar.service.js and ariaService.js
   _callGroq,
   callARIA,
 }
