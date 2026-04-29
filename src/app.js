@@ -23,6 +23,8 @@ const studioRoutes = require('./routes/studio.routes')
 const launchRoutes = require('./routes/launch.routes')
 const profileRoutes = require('./routes/profile.routes')
 const webhookRoutes = require('./routes/webhook.routes')
+const brainRoutes = require('./routes/brain.routes')
+const videoDnaRoutes = require('./routes/video_dna.routes')
 
 const buildApp = async () => {
   const app = Fastify({
@@ -120,6 +122,8 @@ const buildApp = async () => {
   app.register(studioRoutes, { prefix: `${API_PREFIX}/studio` })
   app.register(launchRoutes, { prefix: `${API_PREFIX}/launch` })
   app.register(profileRoutes, { prefix: `${API_PREFIX}/profile` })
+  app.register(brainRoutes, { prefix: `${API_PREFIX}/brain` })
+  app.register(videoDnaRoutes, { prefix: `${API_PREFIX}/video-dna` })
 
   app.addHook('onClose', async (instance) => {
     // cleanup if needed
