@@ -13,7 +13,10 @@ const { searchYouTubeByNiche }  = require('./youtubeTrending.service');
 const { getUpcomingFestivals }  = require('./radar.service');
 const { getPlatformContext, buildPlatformPromptContext } = require('../utils/platformRouter');
 
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+const groq = new Groq({ 
+  apiKey: process.env.GROQ_API_KEY,
+  timeout: 30000, // 30s timeout
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ARIA'S CORE PERSONALITY — This is who she is.
@@ -233,9 +236,11 @@ const learnFromConversation = async (userId, userMessage, ariaResponse) => {
     { match: ['collab', 'collaboration'],            key: 'collab_preference', value: 'collab',    type: 'preference' },
   ];
 
+  const memoryPromises = [];
+
   for (const p of patterns) {
     if (p.match.some(m => msg.includes(m))) {
-      await saveMemory(userId, p.key, p.value, p.type, 'inferred');
+      memoryPromises.push(saveMemory(userId, p.key, p.value, p.type, 'inferred'));
     }
   }
 
@@ -245,9 +250,14 @@ const learnFromConversation = async (userId, userMessage, ariaResponse) => {
   if (msg.includes('switch') || msg.includes('change') || msg.includes('new niche')) {
     for (const n of niches) {
       if (msg.includes(n)) {
-        await saveMemory(userId, 'current_niche', n, 'preference', 'explicit');
+        memoryPromises.push(saveMemory(userId, 'current_niche', n, 'preference', 'explicit'));
       }
     }
+  }
+
+  // Fire all memory updates in parallel to avoid blocking the event loop for long
+  if (memoryPromises.length > 0) {
+    Promise.all(memoryPromises).catch(err => logger.warn({ err }, 'Some memory saves failed'));
   }
 };
 

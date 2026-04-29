@@ -5,6 +5,7 @@ const { logger } = require('../../utils/logger')
 
 const groq = new Groq({
   apiKey: process.env.GROQ_API_KEY,
+  timeout: 30000, // Global 30s timeout
 })
 
 const MODEL = process.env.GROQ_MODEL || 'mixtral-8x7b-32768'
@@ -50,13 +51,7 @@ Respond ONLY with valid JSON:
   "toneProfile": "casual|professional|humorous|inspirational|educational"
 }`
 
-  const message = await groq.chat.completions.create({
-    model: MODEL,
-    max_tokens: 500,
-    messages: [{ role: 'user', content: prompt }],
-  })
-
-  return parseJSON(message.choices[0].message.content)
+  return _callGroq(prompt, { maxTokens: 500 });
 }
 
 /**
@@ -82,13 +77,7 @@ Respond ONLY with valid JSON:
   "gapScore": 72
 }`
 
-  const message = await groq.chat.completions.create({
-    model: MODEL,
-    max_tokens: 800,
-    messages: [{ role: 'user', content: prompt }],
-  })
-
-  return parseJSON(message.choices[0].message.content)
+  return _callGroq(prompt, { maxTokens: 800 });
 }
 
 /**
@@ -121,13 +110,7 @@ Respond ONLY with valid JSON:
   "expectedGrowthIn30Days": "15-25%"
 }`
 
-  const message = await groq.chat.completions.create({
-    model: MODEL,
-    max_tokens: 1000,
-    messages: [{ role: 'user', content: prompt }],
-  })
-
-  return parseJSON(message.choices[0].message.content)
+  return _callGroq(prompt, { maxTokens: 1000 });
 }
 
 /**
@@ -171,13 +154,7 @@ Respond ONLY with valid JSON (MUST be valid):
   "nextSteps": ["Step 1", "Step 2"]
 }`
 
-  const message = await groq.chat.completions.create({
-    model: MODEL,
-    max_tokens: 1500,
-    messages: [{ role: 'user', content: prompt }],
-  })
-
-  return parseJSON(message.choices[0].message.content)
+  return _callGroq(prompt, { maxTokens: 1500 });
 }
 
 // ============ UPGRADED EXISTING FUNCTIONS (with archetype param) ============
@@ -202,13 +179,7 @@ Respond ONLY with valid JSON:
   "cta": "call to action"
 }`
 
-  const message = await groq.chat.completions.create({
-    model: MODEL,
-    max_tokens: 1000,
-    messages: [{ role: 'user', content: prompt }],
-  })
-
-  return parseJSON(message.choices[0].message.content)
+  return _callGroq(prompt, { maxTokens: 1000 });
 }
 
 const generateHooks = async ({ topic, platform, niche, followerRange, archetype }) => {
@@ -222,13 +193,7 @@ Respond ONLY with valid JSON:
   ]
 }`
 
-  const message = await groq.chat.completions.create({
-    model: MODEL,
-    max_tokens: 800,
-    messages: [{ role: 'user', content: prompt }],
-  })
-
-  return parseJSON(message.choices[0].message.content)
+  return _callGroq(prompt, { maxTokens: 800 });
 }
 
 const rewriteHook = async ({ hook, platform, niche, archetype }) => {
@@ -242,13 +207,7 @@ Respond ONLY with valid JSON:
   ]
 }`
 
-  const message = await groq.chat.completions.create({
-    model: MODEL,
-    max_tokens: 800,
-    messages: [{ role: 'user', content: prompt }],
-  })
-
-  return parseJSON(message.choices[0].message.content)
+  return _callGroq(prompt, { maxTokens: 800 });
 }
 
 const repurposeContent = async ({ content, sourcePlatform, targetPlatforms }) => {
@@ -264,13 +223,7 @@ Respond ONLY with valid JSON:
   }
 }`
 
-  const message = await groq.chat.completions.create({
-    model: MODEL,
-    max_tokens: 1000,
-    messages: [{ role: 'user', content: prompt }],
-  })
-
-  return parseJSON(message.choices[0].message.content)
+  return _callGroq(prompt, { maxTokens: 1000 });
 }
 
 const analyseContent = async ({ caption, platform, niche, archetype }) => {
@@ -287,13 +240,7 @@ Respond ONLY with valid JSON:
   "score": 82
 }`
 
-  const message = await groq.chat.completions.create({
-    model: MODEL,
-    max_tokens: 600,
-    messages: [{ role: 'user', content: prompt }],
-  })
-
-  return parseJSON(message.choices[0].message.content)
+  return _callGroq(prompt, { maxTokens: 600 });
 }
 
 const generateTrendInsights = async ({ niche, platform, followerRange, archetype, liveTrendsContext }) => {
@@ -316,13 +263,7 @@ Respond ONLY with valid JSON:
   ]
 }`
 
-  const message = await groq.chat.completions.create({
-    model: MODEL,
-    max_tokens: 1200,
-    messages: [{ role: 'user', content: prompt }],
-  })
-
-  return parseJSON(message.choices[0].message.content)
+  return _callGroq(prompt, { maxTokens: 1200 });
 }
 
 const generateSongInsights = async ({ niche, platform, archetype }) => {
@@ -344,13 +285,7 @@ Respond ONLY with valid JSON:
   ]
 }`
 
-  const message = await groq.chat.completions.create({
-    model: MODEL,
-    max_tokens: 1000,
-    messages: [{ role: 'user', content: prompt }],
-  })
-
-  return parseJSON(message.choices[0].message.content)
+  return _callGroq(prompt, { maxTokens: 1000 });
 }
 
 const generateRateCard = async ({ followers, engagement, niche, platform, archetype }) => {
@@ -372,13 +307,7 @@ Respond ONLY with valid JSON:
   "recommendation": "Your rate is competitive for your niche"
 }`
 
-  const message = await groq.chat.completions.create({
-    model: MODEL,
-    max_tokens: 500,
-    messages: [{ role: 'user', content: prompt }],
-  })
-
-  return parseJSON(message.choices[0].message.content)
+  return _callGroq(prompt, { maxTokens: 500 });
 }
 
 // ─── Internal ARIA caller — used by radar.service.js ──────────────────────
