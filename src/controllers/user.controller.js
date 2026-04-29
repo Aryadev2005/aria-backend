@@ -113,16 +113,17 @@ const getStats = async (req, reply) => {
 
 const updateSubscription = async (req, reply) => {
   try {
-    const { tier } = req.body
+    const { tier, receiptData, platform } = req.body
     const sql = getDB()
 
     const [updated] = await sql`
       UPDATE users SET
         subscription_tier = ${tier},
-        is_pro = ${tier !== 'free'},
-        updated_at = NOW()
+        is_pro            = ${tier !== 'free'},
+        subscription_store = ${platform === 'ios' ? 'APP_STORE' : 'PLAY_STORE'},
+        updated_at        = NOW()
       WHERE id = ${req.user.id}
-      RETURNING id, subscription_tier, is_pro
+      RETURNING id, subscription_tier, is_pro, subscription_store
     `
 
     await cache.del(CacheKeys.user(req.user.id))

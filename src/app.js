@@ -22,6 +22,7 @@ const agentRoutes = require('./routes/agent.routes')
 const studioRoutes = require('./routes/studio.routes')
 const launchRoutes = require('./routes/launch.routes')
 const profileRoutes = require('./routes/profile.routes')
+const webhookRoutes = require('./routes/webhook.routes')
 
 const buildApp = async () => {
   const app = Fastify({
@@ -102,6 +103,10 @@ const buildApp = async () => {
   })
 
   const API_PREFIX = `/api/${process.env.API_VERSION || 'v1'}`
+  
+  // Register webhook routes FIRST (no auth prefix conflicts)
+  app.register(webhookRoutes, { prefix: `${API_PREFIX}/webhooks` })
+  
   app.register(authRoutes,      { prefix: `${API_PREFIX}/auth` })
   app.register(userRoutes,      { prefix: `${API_PREFIX}/users` })
   app.register(trendRoutes,     { prefix: `${API_PREFIX}/trends` })
