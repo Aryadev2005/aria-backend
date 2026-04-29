@@ -10,11 +10,11 @@
     "test": "tests"
   },
   "scripts": {
-  "start": "node src/server.js",
-  "dev": "nodemon --watch src --ext js,json --ignore 'src/**/*.test.js' src/server.js",
-  "db:migrate": "node scripts/migrate.js",
-  "worker:all": "node src/workers/index.js"
-},
+    "start": "node src/server.js",
+    "dev": "nodemon --watch src --ext js,json --ignore 'src/**/*.test.js' src/server.js",
+    "db:migrate": "node scripts/migrate.js",
+    "worker:all": "node src/workers/index.js"
+  },
   "keywords": [],
   "author": "",
   "license": "ISC",
@@ -26,13 +26,9 @@
     "@fastify/jwt": "^10.0.0",
     "@fastify/rate-limit": "^10.3.0",
     "@fastify/sensible": "^6.0.4",
-    "@langchain/core": "^0.3.x",
-    "@langchain/groq": "^0.1.x",
-    "@langchain/langgraph": "^0.2.x",
-    "@langchain/langgraph-checkpoint-postgres": "^0.0.x",
     "axios": "^1.15.2",
     "bullmq": "^5.76.2",
-    "cheerio": "^1.0.0",
+    "cheerio": "^1.0.0-rc.12",
     "date-fns": "^4.1.0",
     "dotenv": "^17.4.2",
     "fastify": "^5.8.5",

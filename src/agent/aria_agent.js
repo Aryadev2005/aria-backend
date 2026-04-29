@@ -5,12 +5,23 @@
 // Checkpointing via PostgresSaver — uses your existing Postgres DB.
 // Tools get DB connection injected at runtime so they can query live data.
 
-const { createReactAgent } = require('@langchain/langgraph/prebuilt')
-const { ChatGroq } = require('@langchain/groq')
-const { PostgresSaver } = require('@langchain/langgraph-checkpoint-postgres')
+const { createReactAgent }  = require('@langchain/langgraph/prebuilt')
+const { ChatGroq }          = require('@langchain/groq')
 const { HumanMessage, SystemMessage } = require('@langchain/core/messages')
-const { tool } = require('@langchain/core/tools')
-const { z } = require('zod')
+const { tool }              = require('@langchain/core/tools')
+const { z }                 = require('zod')
+
+// ── PostgresSaver is loaded LAZILY — not at module load time ──────────────────
+// The old top-level require('@langchain/langgraph-checkpoint-postgres') was
+// connecting to Postgres the moment Node required this file, hanging the server.
+// Now it only loads when the first brain/chat request comes in.
+let PostgresSaver = null
+const getPostgresSaver = () => {
+  if (!PostgresSaver) {
+    PostgresSaver = require('@langchain/langgraph-checkpoint-postgres').PostgresSaver
+  }
+  return PostgresSaver
+}
 
 const {
   getYouTubeVideoStats,
@@ -27,55 +38,62 @@ const {
   analyseYouTubeVideoQuick,
 } = require('./tools')
 
-const { buildARIASystemPrompt } = require('../services/aria_prompt.service')
+const { buildARIASystemPrompt }                          = require('../services/aria_prompt.service')
 const { getMemory, extractLearningsFromTurn, storeSuggestion } = require('../services/aria_memory.service')
-const { logger } = require('../utils/logger')
+const { logger }                                         = require('../utils/logger')
 
 // ── LLM setup ─────────────────────────────────────────────────────────────────
-// Using ChatGroq — same API key you already have.
-// For deeper analysis, swap to ChatAnthropic with claude-sonnet-4-6.
 const createLLM = () => new ChatGroq({
-  model: 'llama-3.3-70b-versatile',
-  apiKey: process.env.GROQ_API_KEY,
-  temperature: 0,          // deterministic for agent tool-calling
-  maxTokens: 2048,
-  streaming: false,
+  model:       'llama-3.3-70b-versatile',
+  apiKey:      process.env.GROQ_API_KEY,
+  temperature: 0,
+  maxTokens:   2048,
+  streaming:   false,
 })
 
-// ── Checkpointer setup ────────────────────────────────────────────────────────
-// PostgresSaver uses your existing DATABASE_URL — creates its own checkpoints table.
+// ── Checkpointer setup — lazy, only runs on first chat request ────────────────
 let _checkpointer = null
 const getCheckpointer = async () => {
   if (_checkpointer) return _checkpointer
-  _checkpointer = PostgresSaver.fromConnString(process.env.DATABASE_URL)
-  await _checkpointer.setup()  // Creates checkpoints table if not exists
-  return _checkpointer
+
+  try {
+    const Saver = getPostgresSaver()
+    _checkpointer = Saver.fromConnString(process.env.DATABASE_URL)
+
+    // 5s timeout — don't hang if DB is slow
+    await Promise.race([
+      _checkpointer.setup(),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Checkpointer setup timeout')), 5000)
+      ),
+    ])
+
+    logger.info('LangGraph checkpointer ready')
+    return _checkpointer
+  } catch (err) {
+    logger.warn({ err: err.message }, 'LangGraph checkpointer setup failed — will retry on next request')
+    _checkpointer = null // Reset so next request tries again
+    return null          // Caller handles null gracefully
+  }
 }
 
 // ── DB Tool injection ─────────────────────────────────────────────────────────
-// LangGraph tools can't access server state directly, so we create
-// DB-injected versions of tools that need database access.
 const createDBInjectedTools = (db, user) => {
-  // Wrap DB tools with the actual db connection baked in
   const getUserProfileWithDB = tool(
-    async () => {
-      return getUserProfile.invoke({ userId: user.id, db })
-    },
+    async () => getUserProfile.invoke({ userId: user.id, db }),
     {
-      name: 'get_user_profile',
+      name:        'get_user_profile',
       description: 'Get the current user\'s full creator profile: archetype, niche, followers, engagement rate, health score, and all ARIA memory learnings. ALWAYS call this first for personal questions.',
-      schema: z.object({}),
+      schema:      z.object({}),
     }
   )
 
   const getDBTrendsWithDB = tool(
-    async ({ niche, badge }) => {
-      return getDBLiveTrends.invoke({ niche, badge, db })
-    },
+    async ({ niche, badge }) => getDBLiveTrends.invoke({ niche, badge, db }),
     {
-      name: 'get_db_live_trends',
+      name:        'get_db_live_trends',
       description: 'Fetch live trending topics from ARIA\'s database. Fastest source for trend data. Use for content advice and trend-based recommendations.',
-      schema: z.object({
+      schema:      z.object({
         niche: z.string().optional(),
         badge: z.enum(['HOT', 'RISING', 'NEW', 'ALL']).optional(),
       }),
@@ -83,43 +101,37 @@ const createDBInjectedTools = (db, user) => {
   )
 
   const getDBSongsWithDB = tool(
-    async ({ language }) => {
-      return getDBTrendingSongs.invoke({ language, db })
-    },
+    async ({ language }) => getDBTrendingSongs.invoke({ language, db }),
     {
-      name: 'get_db_trending_songs',
+      name:        'get_db_trending_songs',
       description: 'Fetch trending songs from ARIA\'s live songs database. Use for BGM/audio recommendations.',
-      schema: z.object({
+      schema:      z.object({
         language: z.string().optional(),
       }),
     }
   )
 
   const getContentHistoryWithDB = tool(
-    async ({ limit }) => {
-      return getUserContentHistory.invoke({ userId: user.id, limit, db })
-    },
+    async ({ limit }) => getUserContentHistory.invoke({ userId: user.id, limit, db }),
     {
-      name: 'get_user_content_history',
+      name:        'get_user_content_history',
       description: 'Fetch what content the user has created recently. Use to avoid repetitive suggestions.',
-      schema: z.object({
+      schema:      z.object({
         limit: z.number().optional(),
       }),
     }
   )
 
   const getInstagramWithToken = tool(
-    async ({ metric }) => {
-      return getInstagramPersonalStats.invoke({
-        userId:      user.instagram_user_id,
-        accessToken: user.instagram_access_token,
-        metric,
-      })
-    },
+    async ({ metric }) => getInstagramPersonalStats.invoke({
+      userId:      user.instagram_user_id,
+      accessToken: user.instagram_access_token,
+      metric,
+    }),
     {
-      name: 'get_instagram_personal_stats',
+      name:        'get_instagram_personal_stats',
       description: 'Fetch user\'s own Instagram post performance and account insights. Only works if Instagram Business account is connected.',
-      schema: z.object({
+      schema:      z.object({
         metric: z.enum(['posts', 'insights']).optional(),
       }),
     }
@@ -136,10 +148,9 @@ const createDBInjectedTools = (db, user) => {
 
 // ── Build the ARIA agent ──────────────────────────────────────────────────────
 const buildARIAAgent = async (db, user) => {
-  const llm         = createLLM()
-  const checkpointer = await getCheckpointer()
+  const llm          = createLLM()
+  const checkpointer = await getCheckpointer() // null-safe — may be null if DB slow
 
-  // Combine: DB-injected tools + pure API tools (no DB needed)
   const tools = [
     ...createDBInjectedTools(db, user),
     getYouTubeVideoStats,
@@ -151,69 +162,62 @@ const buildARIAAgent = async (db, user) => {
     analyseYouTubeVideoQuick,
   ]
 
-  // Load user memory for system prompt
-  const memory = await getMemory(user.id).catch(() => ({}))
-
-  // Build dynamic system prompt (same function from your existing aria_prompt.service.js)
+  const memory       = await getMemory(user.id).catch(() => ({}))
   const systemPrompt = buildARIASystemPrompt({
     user,
     memory,
-    sessionContext: {},
-    entryScreen:    'brain',
+    sessionContext:     {},
+    entryScreen:        'brain',
     pendingSuggestions: [],
   })
 
-  const agent = createReactAgent({
+  const agentConfig = {
     llm,
     tools,
-    checkpointSaver: checkpointer,
-    // Inject system prompt as state modifier
     stateModifier: (state) => {
       const hasSystem = state.messages.some(m => m._getType?.() === 'system')
       if (hasSystem) return state.messages
       return [new SystemMessage(systemPrompt), ...state.messages]
     },
-    // Safety: prevent runaway tool loops
     recursionLimit: 15,
-  })
+  }
 
-  return agent
+  // Only add checkpointer if it initialized successfully
+  if (checkpointer) {
+    agentConfig.checkpointSaver = checkpointer
+  } else {
+    logger.warn({ userId: user.id }, 'Running without checkpointer — session memory disabled for this request')
+  }
+
+  return createReactAgent(agentConfig)
 }
 
-// ── Main invocation function (called by controller) ───────────────────────────
+// ── Main invocation ───────────────────────────────────────────────────────────
 const invokeARIAAgent = async ({
   message,
   sessionId,
   user,
   db,
-  entryScreen = 'brain',
+  entryScreen    = 'brain',
   sessionContext = {},
-  onToolCall = null,    // optional callback for streaming tool use events
+  onToolCall     = null,
 }) => {
   const startTime = Date.now()
 
   try {
     logger.info({ userId: user.id, sessionId }, 'ARIA agent invoked')
 
-    const agent = await buildARIAAgent(db, user)
-
-    // Thread ID = sessionId → PostgresSaver checkpoints per session automatically
+    const agent  = await buildARIAAgent(db, user)
     const config = {
       configurable: { thread_id: sessionId },
       recursionLimit: 15,
     }
 
-    const result = await agent.invoke(
-      { messages: [new HumanMessage(message)] },
-      config
-    )
-
-    // Extract the final AI message
+    const result   = await agent.invoke({ messages: [new HumanMessage(message)] }, config)
     const messages = result.messages
     const finalMsg = messages.findLast(m => m._getType?.() === 'ai' && !m.tool_calls?.length)
     const response = finalMsg?.content || 'I was unable to generate a response.'
 
-    // Which tools did the agent call?
     const toolsUsed = messages
       .filter(m => m._getType?.() === 'tool')
       .map(m => m.name)
@@ -222,31 +226,24 @@ const invokeARIAAgent = async ({
     const duration = Date.now() - startTime
     logger.info({ userId: user.id, toolsUsed, duration }, 'ARIA agent completed')
 
-    // Extract learnings + suggestions asynchronously (non-blocking)
+    // Non-blocking post-turn learning
     Promise.all([
       extractLearningsFromTurn(user.id, message, response),
       _extractAndStoreSuggestions(user.id, sessionId, response),
-    ]).catch(err => logger.warn({ err }, 'Post-turn learning extraction failed'))
+    ]).catch(err => logger.warn({ err }, 'Post-turn learning failed'))
 
-    return {
-      message: response,
-      toolsUsed,
-      sessionId,
-      duration,
-    }
+    return { message: response, toolsUsed, sessionId, duration }
 
   } catch (err) {
-    logger.error({ err, userId: user.id, sessionId }, 'ARIA agent failed')
-
-    // Graceful degradation — fall back to simple Groq call without tools
+    logger.error({ err, userId: user.id, sessionId }, 'ARIA agent failed — falling back')
     return _fallbackResponse(message, user)
   }
 }
 
-// ── Streaming version (token by token + tool events) ─────────────────────────
+// ── Streaming version ─────────────────────────────────────────────────────────
 async function* streamARIAAgent({ message, sessionId, user, db }) {
   try {
-    const agent = await buildARIAAgent(db, user)
+    const agent  = await buildARIAAgent(db, user)
     const config = { configurable: { thread_id: sessionId }, recursionLimit: 15 }
 
     const stream = agent.streamEvents(
@@ -255,26 +252,20 @@ async function* streamARIAAgent({ message, sessionId, user, db }) {
     )
 
     for await (const event of stream) {
-      // Tool call started
       if (event.event === 'on_tool_start') {
         yield { type: 'tool_start', tool: event.name, input: event.data?.input }
       }
-      // Tool call finished
       if (event.event === 'on_tool_end') {
         yield { type: 'tool_end', tool: event.name }
       }
-      // Token streamed
       if (event.event === 'on_chat_model_stream') {
         const token = event.data?.chunk?.content
         if (token) yield { type: 'token', content: token }
       }
-      // Final message complete
       if (event.event === 'on_chain_end' && event.name === 'LangGraph') {
-        const msgs = event.data?.output?.messages || []
+        const msgs  = event.data?.output?.messages || []
         const final = msgs.findLast(m => m._getType?.() === 'ai' && !m.tool_calls?.length)
-        if (final) {
-          yield { type: 'done', message: final.content }
-        }
+        if (final) yield { type: 'done', message: final.content }
       }
     }
   } catch (err) {
@@ -286,14 +277,21 @@ async function* streamARIAAgent({ message, sessionId, user, db }) {
 // ── Fallback: plain Groq call if agent fails ──────────────────────────────────
 const _fallbackResponse = async (message, user) => {
   try {
-    const llm = new ChatGroq({ model: 'llama-3.3-70b-versatile', apiKey: process.env.GROQ_API_KEY })
+    const llm = new ChatGroq({
+      model:  'llama-3.3-70b-versatile',
+      apiKey: process.env.GROQ_API_KEY,
+    })
     const res = await llm.invoke([
       new SystemMessage(`You are ARIA, India's AI creator assistant. Help ${user.archetype || 'this creator'} with their question.`),
       new HumanMessage(message),
     ])
     return { message: res.content, toolsUsed: [], sessionId: null, fallback: true }
   } catch {
-    return { message: 'ARIA is currently unavailable. Please try again in a moment.', toolsUsed: [], fallback: true }
+    return {
+      message:   'ARIA is currently unavailable. Please try again in a moment.',
+      toolsUsed: [],
+      fallback:  true,
+    }
   }
 }
 

@@ -18,12 +18,12 @@ const analyticsRoutes = require('./routes/analytics.routes')
 const calendarRoutes = require('./routes/calendar.js')
 const radarRoutes = require('./routes/radar.routes')
 const onboardingRoutes = require('./routes/onboarding.routes')
-const agentRoutes = require('./routes/agent.routes')
+// const agentRoutes = require('./routes/agent.routes')
 const studioRoutes = require('./routes/studio.routes')
 const launchRoutes = require('./routes/launch.routes')
 const profileRoutes = require('./routes/profile.routes')
 const webhookRoutes = require('./routes/webhook.routes')
-const brainRoutes = require('./routes/brain.routes')
+// const brainRoutes = require('./routes/brain.routes')
 const videoDnaRoutes = require('./routes/video_dna.routes')
 
 const buildApp = async () => {
@@ -118,11 +118,11 @@ const buildApp = async () => {
   app.register(calendarRoutes,  { prefix: `${API_PREFIX}/calendar` })
   app.register(radarRoutes, { prefix: `${API_PREFIX}/discover` })
   app.register(onboardingRoutes, { prefix: `${API_PREFIX}/onboarding` })
-  app.register(agentRoutes, { prefix: `${API_PREFIX}/agent` })
+  // app.register(agentRoutes, { prefix: `${API_PREFIX}/agent` })
   app.register(studioRoutes, { prefix: `${API_PREFIX}/studio` })
   app.register(launchRoutes, { prefix: `${API_PREFIX}/launch` })
   app.register(profileRoutes, { prefix: `${API_PREFIX}/profile` })
-  app.register(brainRoutes, { prefix: `${API_PREFIX}/brain` })
+  // app.register(brainRoutes, { prefix: `${API_PREFIX}/brain` })
   app.register(videoDnaRoutes, { prefix: `${API_PREFIX}/video-dna` })
 
   app.addHook('onClose', async (instance) => {
