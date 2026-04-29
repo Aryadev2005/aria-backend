@@ -4,6 +4,7 @@
 const radarService = require('../services/radar.service');
 const { success, errors } = require('../utils/response');
 const { logger } = require('../utils/logger');
+const { getPlatformContext, buildPlatformPromptContext } = require('../utils/platformRouter');
 
 /**
  * GET /api/v1/discover/intelligence
@@ -11,10 +12,11 @@ const { logger } = require('../utils/logger');
 const getIntelligence = async (req, reply) => {
   const user = req.user;
   try {
-    const niche         = user.niches?.[0] || req.query.niche || 'general';
-    const platform      = user.primaryPlatform || req.query.platform || 'instagram';
-    const archetype     = user.archetype || 'EDUCATOR';
-    const followerRange = user.followerRange || '1K–10K';
+    const ctx = getPlatformContext(user);
+    const niche         = req.query.niche || ctx.niche;
+    const platform      = req.query.platform || ctx.platform;
+    const archetype     = ctx.archetype;
+    const followerRange = ctx.followerRange;
 
     const intelligence = await radarService.getOrGenerateRadarSnapshot({
       niche, platform, archetype, followerRange,
@@ -36,9 +38,10 @@ const getIntelligence = async (req, reply) => {
 const getCompetitors = async (req, reply) => {
   const user = req.user;
   try {
-    const niche     = user.niches?.[0] || req.query.niche || 'general';
-    const platform  = user.primaryPlatform || req.query.platform || 'instagram';
-    const archetype = user.archetype || 'EDUCATOR';
+    const ctx = getPlatformContext(user);
+    const niche     = req.query.niche || ctx.niche;
+    const platform  = req.query.platform || ctx.platform;
+    const archetype = ctx.archetype;
 
     const data = await radarService.generateCompetitorIntelligence({ niche, platform, archetype });
     return success(reply, data);
@@ -54,10 +57,11 @@ const getCompetitors = async (req, reply) => {
 const getInspiration = async (req, reply) => {
   const user = req.user;
   try {
-    const niche         = user.niches?.[0] || req.query.niche || 'general';
-    const platform      = user.primaryPlatform || req.query.platform || 'instagram';
-    const archetype     = user.archetype || 'EDUCATOR';
-    const followerRange = user.followerRange || '1K–10K';
+    const ctx = getPlatformContext(user);
+    const niche         = req.query.niche || ctx.niche;
+    const platform      = req.query.platform || ctx.platform;
+    const archetype     = ctx.archetype;
+    const followerRange = ctx.followerRange;
 
     const data = await radarService.generateInspiration({ niche, platform, archetype, followerRange });
     return success(reply, data);

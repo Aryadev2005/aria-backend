@@ -11,6 +11,7 @@ const { logger }      = require('../utils/logger');
 const { getLiveTrendsForNiche } = require('./radar.service');
 const { searchYouTubeByNiche }  = require('./youtubeTrending.service');
 const { getUpcomingFestivals }  = require('./radar.service');
+const { getPlatformContext, buildPlatformPromptContext } = require('../utils/platformRouter');
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
@@ -254,8 +255,8 @@ const learnFromConversation = async (userId, userMessage, ariaResponse) => {
 // LIVE DATA INJECTION
 // ─────────────────────────────────────────────────────────────────────────────
 const buildLiveContext = async (user, memory) => {
-  const niche    = memory['current_niche']?.value || user.niches?.[0] || 'general';
-  const platform = user.primaryPlatform || 'instagram';
+  const ctx = getPlatformContext(user);
+  const niche    = memory['current_niche']?.value || ctx.niche;
   const parts    = [];
 
   try {
@@ -296,8 +297,8 @@ const buildLiveContext = async (user, memory) => {
 // CONTEXT ASSEMBLY
 // ─────────────────────────────────────────────────────────────────────────────
 const buildFullContext = async (user, memory, liveData) => {
-  const niche    = memory['current_niche']?.value || user.niches?.[0] || 'general';
-  const platform = user.primaryPlatform || 'instagram';
+  const ctx = getPlatformContext(user);
+  const niche    = memory['current_niche']?.value || ctx.niche;
 
   // Format memory for ARIA
   const memoryLines = Object.entries(memory)
@@ -307,7 +308,7 @@ const buildFullContext = async (user, memory, liveData) => {
 
   return `══ THIS CREATOR ══
 Name: ${user.name}
-Platform: ${platform} | Niche: ${niche}
+Platform: ${ctx.platform} | Niche: ${niche}
 Archetype: ${user.archetype || 'not yet detected'}
 Followers: ${user.followerRange || 'unknown'} | Engagement: ${user.engagementRate || 'unknown'}%
 ${memoryLines ? `\n══ WHAT ARIA REMEMBERS ══\n${memoryLines}` : ''}
