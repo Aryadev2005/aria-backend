@@ -38,6 +38,12 @@ const start = async () => {
     const db = await connectDB()
     if (db) {
       logger.info('PostgreSQL connected')
+      
+      // Initialize LangGraph checkpointer
+      const { PostgresSaver } = require('@langchain/langgraph-checkpoint-postgres')
+      const checkpointer = PostgresSaver.fromConnString(process.env.DATABASE_URL)
+      await checkpointer.setup()
+      logger.info('LangGraph checkpointer ready')
     }
 
     await connectRedis()

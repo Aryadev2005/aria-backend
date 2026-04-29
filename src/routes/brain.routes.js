@@ -4,7 +4,7 @@
 //   const brainRoutes = require('./routes/brain.routes')
 //   app.register(brainRoutes, { prefix: `${API_PREFIX}/brain` })
 
-const { chat, greet } = require('../controllers/aria_chat.controller')
+const { chat, greet, chatStream } = require('../controllers/aria_agent.controller')
 const { authenticateFirebase } = require('../middleware/auth.middleware')
 
 const aiRateLimit = {
@@ -61,6 +61,12 @@ module.exports = async (app) => {
       },
     },
   }, chat)
+
+  // POST /api/v1/brain/chat/stream
+  app.post('/chat/stream', {
+    preHandler: [authenticateFirebase],
+    config: { rateLimit: { max: 30, timeWindow: '1 minute' } }
+  }, chatStream)
 
   // GET /api/v1/brain/greet
   // Called when user opens Brain — returns proactive opening message
