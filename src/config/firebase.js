@@ -5,7 +5,9 @@ const { logger } = require('../utils/logger')
 
 let firebaseApp = null
 
-const initFirebase = async () => {
+// Synchronous — admin.initializeApp() does NOT make network calls.
+// Network calls happen lazily on first auth/messaging use.
+const initFirebase = () => {
   if (firebaseApp) return firebaseApp
   try {
     firebaseApp = admin.initializeApp({
@@ -16,11 +18,11 @@ const initFirebase = async () => {
       }),
       storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
     })
-    logger.info({ projectId: process.env.FIREBASE_PROJECT_ID }, 'Firebase initialized')
+    logger.info({ projectId: process.env.FIREBASE_PROJECT_ID }, 'Firebase Admin initialized')
     return firebaseApp
   } catch (err) {
-    logger.error({ err }, 'Firebase init failed')
-    throw err
+    logger.warn({ err: err.message }, 'Firebase init failed — auth middleware will handle retries')
+    return null
   }
 }
 

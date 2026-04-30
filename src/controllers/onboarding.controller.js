@@ -4,7 +4,7 @@
 
 const { getDB }            = require('../config/database');
 const { cache, CacheKeys } = require('../config/redis');
-const { enqueueScrapeJob } = require('../config/queue');
+// const { enqueueScrapeJob } = require('../config/queue');
 const { success, errors }  = require('../utils/response');
 const { logger }           = require('../utils/logger');
 const groqService          = require('../services/ai/groq.service');
@@ -15,6 +15,7 @@ const youtubeSvc           = require('../services/youtubeTrending.service');
 // Step 1: Creator submits handle. ARIA scrapes + analyses immediately.
 // Returns full ARIA profile summary in one response.
 const connectHandle = async (req, reply) => {
+  const { enqueueScrapeJob } = require('../config/queue'); // Import here to avoid circular dependency with scraperService
   const user     = req.user;
   const { handle, platform } = req.body;
   const sql      = getDB();

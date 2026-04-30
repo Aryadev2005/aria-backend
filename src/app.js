@@ -1,59 +1,64 @@
 'use strict'
 
-const Fastify = require('fastify')
-const cors = require('@fastify/cors')
-const helmet = require('@fastify/helmet')
-const jwt = require('@fastify/jwt')
-const rateLimit = require('@fastify/rate-limit')
-const compress = require('@fastify/compress')
-const sensible = require('@fastify/sensible')
-const { logger } = require('./utils/logger')
+const Fastify     = require('fastify')
+const cors        = require('@fastify/cors')
+const helmet      = require('@fastify/helmet')
+const jwt         = require('@fastify/jwt')
+const rateLimit   = require('@fastify/rate-limit')
+const compress    = require('@fastify/compress')
+const sensible    = require('@fastify/sensible')
+const { logger }  = require('./utils/logger')
 
-const authRoutes      = require('./routes/auth.routes')
-const userRoutes      = require('./routes/user.routes')
-const trendRoutes     = require('./routes/trend.routes')
-const songRoutes      = require('./routes/song.routes')
-const contentRoutes   = require('./routes/content.routes')
-const analyticsRoutes = require('./routes/analytics.routes')
-const calendarRoutes = require('./routes/calendar.js')
-const radarRoutes = require('./routes/radar.routes')
-const onboardingRoutes = require('./routes/onboarding.routes')
-// const agentRoutes = require('./routes/agent.routes')
-const studioRoutes = require('./routes/studio.routes')
-const launchRoutes = require('./routes/launch.routes')
-const profileRoutes = require('./routes/profile.routes')
-const webhookRoutes = require('./routes/webhook.routes')
-// const brainRoutes = require('./routes/brain.routes')
-const videoDnaRoutes = require('./routes/video_dna.routes')
+// No top-level route requires — all loaded lazily inside buildApp()
+// to prevent module-level hangs from controller/service imports.
 
 const buildApp = async () => {
   const app = Fastify({
-  logger: {
-    level: process.env.LOG_LEVEL || 'info',
-    transport: process.env.NODE_ENV !== 'production' ? {
-      target: 'pino-pretty',
-      options: {
-        colorize: true,
-        translateTime: 'SYS:HH:MM:ss',
-        ignore: 'pid,hostname',
-      },
-    } : undefined,
-  },
-  genReqId: (req) => {
-    return req.headers['x-request-id'] ||
-      `req_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
-  },
-  trustProxy: true,
-  ajv: {
-    customOptions: {
-      removeAdditional: true,
-      useDefaults: true,
-      coerceTypes: true,
-      allErrors: false,
+    logger: {
+      level: process.env.LOG_LEVEL || 'info',
+      transport: process.env.NODE_ENV !== 'production' ? {
+        target: 'pino-pretty',
+        options: {
+          colorize: true,
+          translateTime: 'SYS:HH:MM:ss',
+          ignore: 'pid,hostname',
+        },
+      } : undefined,
     },
-  },
-})
+    genReqId: (req) => {
+      return req.headers['x-request-id'] ||
+        `req_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
+    },
+    trustProxy: true,
+    ajv: {
+      customOptions: {
+        removeAdditional: true,
+        useDefaults: true,
+        coerceTypes: true,
+        allErrors: false,
+      },
+    },
+  })
 
+  // ── Lazy route requires (inside buildApp to avoid module-level hangs) ──────
+  const authRoutes      = require('./routes/auth.routes')
+  const userRoutes      = require('./routes/user.routes')
+  const trendRoutes     = require('./routes/trend.routes')
+  const songRoutes      = require('./routes/song.routes')
+  const contentRoutes   = require('./routes/content.routes')
+  const analyticsRoutes = require('./routes/analytics.routes')
+  const calendarRoutes  = require('./routes/calendar.js')
+  const radarRoutes     = require('./routes/radar.routes')
+  const onboardingRoutes = require('./routes/onboarding.routes')
+  // const agentRoutes  = require('./routes/agent.routes')   // LangChain — keep disabled
+  const studioRoutes    = require('./routes/studio.routes')
+  const launchRoutes    = require('./routes/launch.routes')
+  const profileRoutes   = require('./routes/profile.routes')
+  const webhookRoutes   = require('./routes/webhook.routes')
+  // const brainRoutes  = require('./routes/brain.routes')   // LangChain — keep disabled
+  const videoDnaRoutes  = require('./routes/video_dna.routes')
+
+  // ── Plugins ────────────────────────────────────────────────────────────────
   await app.register(helmet, {
     contentSecurityPolicy: false,
     crossOriginEmbedderPolicy: false,
@@ -95,6 +100,7 @@ const buildApp = async () => {
 
   await app.register(sensible)
 
+  // ── Health check ───────────────────────────────────────────────────────────
   app.get('/health', async (req, reply) => {
     return {
       status: 'healthy',
@@ -104,11 +110,10 @@ const buildApp = async () => {
     }
   })
 
+  // ── Routes ─────────────────────────────────────────────────────────────────
   const API_PREFIX = `/api/${process.env.API_VERSION || 'v1'}`
-  
-  // Register webhook routes FIRST (no auth prefix conflicts)
-  app.register(webhookRoutes, { prefix: `${API_PREFIX}/webhooks` })
-  
+
+  app.register(webhookRoutes,   { prefix: `${API_PREFIX}/webhooks` })
   app.register(authRoutes,      { prefix: `${API_PREFIX}/auth` })
   app.register(userRoutes,      { prefix: `${API_PREFIX}/users` })
   app.register(trendRoutes,     { prefix: `${API_PREFIX}/trends` })
@@ -116,15 +121,16 @@ const buildApp = async () => {
   app.register(contentRoutes,   { prefix: `${API_PREFIX}/content` })
   app.register(analyticsRoutes, { prefix: `${API_PREFIX}/analytics` })
   app.register(calendarRoutes,  { prefix: `${API_PREFIX}/calendar` })
-  app.register(radarRoutes, { prefix: `${API_PREFIX}/discover` })
-  app.register(onboardingRoutes, { prefix: `${API_PREFIX}/onboarding` })
-  // app.register(agentRoutes, { prefix: `${API_PREFIX}/agent` })
-  app.register(studioRoutes, { prefix: `${API_PREFIX}/studio` })
-  app.register(launchRoutes, { prefix: `${API_PREFIX}/launch` })
-  app.register(profileRoutes, { prefix: `${API_PREFIX}/profile` })
-  // app.register(brainRoutes, { prefix: `${API_PREFIX}/brain` })
-  app.register(videoDnaRoutes, { prefix: `${API_PREFIX}/video-dna` })
+  app.register(radarRoutes,     { prefix: `${API_PREFIX}/discover` })
+  app.register(onboardingRoutes,{ prefix: `${API_PREFIX}/onboarding` })
+  // app.register(agentRoutes,  { prefix: `${API_PREFIX}/agent` })   // LangChain — keep disabled
+  app.register(studioRoutes,    { prefix: `${API_PREFIX}/studio` })
+  app.register(launchRoutes,    { prefix: `${API_PREFIX}/launch` })
+  app.register(profileRoutes,   { prefix: `${API_PREFIX}/profile` })
+  // app.register(brainRoutes,  { prefix: `${API_PREFIX}/brain` })   // LangChain — keep disabled
+  app.register(videoDnaRoutes,  { prefix: `${API_PREFIX}/video-dna` })
 
+  // ── Lifecycle / error handlers ─────────────────────────────────────────────
   app.addHook('onClose', async (instance) => {
     // cleanup if needed
   })
