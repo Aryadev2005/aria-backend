@@ -288,6 +288,10 @@ model users {
   subscription_product_id String?
   subscription_expires_at DateTime?            @db.Timestamptz(6)
   subscription_store      String?
+  deletion_requested_at   DateTime?            @db.Timestamptz(6)
+  deletion_confirmation_code String?
+  deletion_source         String?
+  deleted_at              DateTime?            @db.Timestamptz(6)
   analytics               analytics[]
   aria_chat_sessions      aria_chat_sessions[]
   aria_feedback           aria_feedback[]
@@ -302,4 +306,6 @@ model users {
 
   @@index([archetype], map: "idx_users_archetype")
   @@index([firebase_uid], map: "idx_users_firebase_uid")
+  @@index([deletion_confirmation_code], map: "idx_users_deletion_code", where: raw("(deletion_confirmation_code IS NOT NULL)"))
+  @@index([deletion_requested_at], map: "idx_users_deletion_pending", where: raw("(deletion_requested_at IS NOT NULL AND deleted_at IS NULL)"))
 }

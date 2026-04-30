@@ -32,7 +32,7 @@ This module uses **Groq's LLaMA 3.3 70B model** to deliver intelligent, creator-
 | `src/controllers/launch.controller.js` | Controller | Handle launch endpoint requests | ✅ Created |
 | `src/routes/launch.routes.js` | Routes | Define launch API endpoints | ✅ Created |
 | `src/services/launch.service.js` | Service | Core launch logic & Groq integration | ✅ Created |
-| `scripts/migrations/006_launch.sql` | Migration | Database schema for launch_packages | ✅ Created |
+| `prisma/migrations (Prisma-managed)` | Migration | Database schema for launch_packages | ✅ Created |
 
 ### 📝 Modified Files
 
@@ -583,10 +583,10 @@ module.exports = {
 
 ---
 
-### File 4: `scripts/migrations/006_launch.sql`
+### File 4: `prisma/migrations (Prisma-managed)`
 
 ```sql
--- scripts/migrations/006_launch.sql
+-- prisma/migrations (Prisma-managed)
 -- Migration: 006_launch
 -- launch_packages: stores generated posting packages per user
 
@@ -646,7 +646,7 @@ app.register(launchRoutes,    { prefix: `${API_PREFIX}/launch` })
 
 ```bash
 # Run the launch migration to create launch_packages table
-npm run db:migrate
+npx prisma migrate deploy
 ```
 
 This will execute `006_launch.sql` and create:
@@ -1029,7 +1029,7 @@ FIREBASE_CLIENT_EMAIL=your-client-email
 1. ✅ `src/controllers/launch.controller.js` - 71 lines
 2. ✅ `src/routes/launch.routes.js` - 30 lines
 3. ✅ `src/services/launch.service.js` - 270 lines
-4. ✅ `scripts/migrations/006_launch.sql` - 16 lines
+4. ✅ `prisma/migrations (Prisma-managed)` - 16 lines
 
 ### Updated Files
 1. ✅ `src/app.js` - Added import + route registration (2 lines changed)
@@ -1178,7 +1178,7 @@ export GROQ_API_KEY=gsk_your_key_here
 ### Error: "launch_packages table not found"
 **Solution:** Run migration
 ```bash
-npm run db:migrate
+npx prisma migrate deploy
 ```
 
 ### Error: "Invalid JSON from Groq"
@@ -1211,7 +1211,7 @@ If this fails, logs will show error. Check Groq API status.
 ## ✅ Deployment Checklist
 
 - [ ] Run `npm install` (groq-sdk already in package.json)
-- [ ] Run `npm run db:migrate` (creates launch_packages table)
+- [ ] Run `npx prisma migrate deploy` (creates launch_packages table)
 - [ ] Set `GROQ_API_KEY` in `.env`
 - [ ] Verify Firebase auth is configured
 - [ ] Test endpoints with curl or Postman
@@ -1243,3 +1243,4 @@ The **Launch Backend** is a complete creator strategy engine:
 ---
 
 **End of Documentation**
+

@@ -1,46 +1,52 @@
-import Fastify, { FastifyInstance } from 'fastify'
-import cors from '@fastify/cors'
-import helmet from '@fastify/helmet'
-import jwt from '@fastify/jwt'
-import rateLimit from '@fastify/rate-limit'
-import compress from '@fastify/compress'
-import sensible from '@fastify/sensible'
-import { getRedisClient } from './config/redis'
+import Fastify, { FastifyInstance } from "fastify";
+import cors from "@fastify/cors";
+import helmet from "@fastify/helmet";
+import jwt from "@fastify/jwt";
+import rateLimit from "@fastify/rate-limit";
+import compress from "@fastify/compress";
+import sensible from "@fastify/sensible";
+import { getRedisClient } from "./config/redis";
 
 // Route Imports
-import authRoutes from './routes/auth.routes'
-import userRoutes from './routes/user.routes'
-import trendRoutes from './routes/trend.routes'
-import songRoutes from './routes/song.routes'
-import contentRoutes from './routes/content.routes'
-import analyticsRoutes from './routes/analytics.routes'
-import calendarRoutes from './routes/calendar.routes'
-import radarRoutes from './routes/radar.routes'
-import onboardingRoutes from './routes/onboarding.routes'
-import agentRoutes from './routes/agent.routes'
-import studioRoutes from './routes/studio.routes'
-import launchRoutes from './routes/launch.routes'
-import profileRoutes from './routes/profile.routes'
-import webhookRoutes from './routes/webhook.routes'
-import brainRoutes from './routes/brain.routes'
-import videoDnaRoutes from './routes/video_dna.routes'
+import authRoutes from "./routes/auth.routes";
+import userRoutes from "./routes/user.routes";
+import trendRoutes from "./routes/trend.routes";
+import songRoutes from "./routes/song.routes";
+import contentRoutes from "./routes/content.routes";
+import analyticsRoutes from "./routes/analytics.routes";
+import calendarRoutes from "./routes/calendar.routes";
+import radarRoutes from "./routes/radar.routes";
+import onboardingRoutes from "./routes/onboarding.routes";
+import agentRoutes from "./routes/agent.routes";
+import studioRoutes from "./routes/studio.routes";
+import launchRoutes from "./routes/launch.routes";
+import profileRoutes from "./routes/profile.routes";
+import webhookRoutes from "./routes/webhook.routes";
+import brainRoutes from "./routes/brain.routes";
+import videoDnaRoutes from "./routes/video_dna.routes";
+import dataDeletionRoutes from "./routes/dataDeletion.routes";
 
 export const buildApp = async (): Promise<FastifyInstance> => {
   const app = Fastify({
     logger: {
-      level: process.env.LOG_LEVEL || 'info',
-      transport: process.env.NODE_ENV !== 'production' ? {
-        target: 'pino-pretty',
-        options: {
-          colorize: true,
-          translateTime: 'SYS:HH:MM:ss',
-          ignore: 'pid,hostname',
-        },
-      } : undefined,
+      level: process.env.LOG_LEVEL || "info",
+      transport:
+        process.env.NODE_ENV !== "production"
+          ? {
+              target: "pino-pretty",
+              options: {
+                colorize: true,
+                translateTime: "SYS:HH:MM:ss",
+                ignore: "pid,hostname",
+              },
+            }
+          : undefined,
     },
     genReqId: (req) => {
-      return (req.headers['x-request-id'] as string) ||
+      return (
+        (req.headers["x-request-id"] as string) ||
         `req_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
+      );
     },
     trustProxy: true,
     ajv: {
@@ -51,108 +57,109 @@ export const buildApp = async (): Promise<FastifyInstance> => {
         allErrors: false,
       },
     },
-  })
+  });
 
   // ── Plugins ────────────────────────────────────────────────────────────────
   await app.register(helmet, {
     contentSecurityPolicy: false,
     crossOriginEmbedderPolicy: false,
-  })
+  });
 
   await app.register(cors, {
-    origin: process.env.ALLOWED_ORIGINS?.split(',') || '*',
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-ID'],
+    origin: process.env.ALLOWED_ORIGINS?.split(",") || "*",
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Request-ID"],
     credentials: true,
     maxAge: 86400,
-  })
+  });
 
   await app.register(compress, {
     global: true,
     threshold: 1024,
-    encodings: ['br', 'gzip', 'deflate'],
-  })
+    encodings: ["br", "gzip", "deflate"],
+  });
 
   await app.register(rateLimit, {
     global: true,
-    max: parseInt(process.env.RATE_LIMIT_MAX || '100', 10),
-    timeWindow: parseInt(process.env.RATE_LIMIT_WINDOW || '60000', 10),
+    max: parseInt(process.env.RATE_LIMIT_MAX || "100", 10),
+    timeWindow: parseInt(process.env.RATE_LIMIT_WINDOW || "60000", 10),
     redis: getRedisClient(),
-    keyGenerator: (req) => (req.headers['x-forwarded-for'] as string) || req.ip,
+    keyGenerator: (req) => (req.headers["x-forwarded-for"] as string) || req.ip,
     errorResponseBuilder: (req, context) => ({
       success: false,
-      error: 'RATE_LIMIT_EXCEEDED',
+      error: "RATE_LIMIT_EXCEEDED",
       message: `Too many requests. Try again in ${Math.ceil(context.ttl / 1000)} seconds.`,
       retryAfter: Math.ceil(context.ttl / 1000),
     }),
-  })
+  });
 
   await app.register(jwt, {
     secret: process.env.JWT_SECRET as string,
-    sign: { expiresIn: process.env.JWT_EXPIRES_IN || '7d', algorithm: 'HS256' },
-    verify: { algorithms: ['HS256'] },
-  })
+    sign: { expiresIn: process.env.JWT_EXPIRES_IN || "7d", algorithm: "HS256" },
+    verify: { algorithms: ["HS256"] },
+  });
 
-  await app.register(sensible)
+  await app.register(sensible);
 
   // ── Health check ───────────────────────────────────────────────────────────
-  app.get('/health', async () => {
+  app.get("/health", async () => {
     return {
-      status: 'healthy',
+      status: "healthy",
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
-      version: process.env.npm_package_version || '1.0.0',
-    }
-  })
+      version: process.env.npm_package_version || "1.0.0",
+    };
+  });
 
   // ── Routes ─────────────────────────────────────────────────────────────────
-  const API_PREFIX = `/api/${process.env.API_VERSION || 'v1'}`
+  const API_PREFIX = `/api/${process.env.API_VERSION || "v1"}`;
 
-  await app.register(webhookRoutes,    { prefix: `${API_PREFIX}/webhooks` })
-  await app.register(authRoutes,       { prefix: `${API_PREFIX}/auth` })
-  await app.register(userRoutes,       { prefix: `${API_PREFIX}/users` })
-  await app.register(trendRoutes,      { prefix: `${API_PREFIX}/trends` })
-  await app.register(songRoutes,       { prefix: `${API_PREFIX}/songs` })
-  await app.register(contentRoutes,    { prefix: `${API_PREFIX}/content` })
-  await app.register(analyticsRoutes,  { prefix: `${API_PREFIX}/analytics` })
-  await app.register(calendarRoutes,   { prefix: `${API_PREFIX}/calendar` })
-  await app.register(radarRoutes,      { prefix: `${API_PREFIX}/discover` })
-  await app.register(onboardingRoutes, { prefix: `${API_PREFIX}/onboarding` })
-  await app.register(agentRoutes,      { prefix: `${API_PREFIX}/agent` })
-  await app.register(studioRoutes,     { prefix: `${API_PREFIX}/studio` })
-  await app.register(launchRoutes,     { prefix: `${API_PREFIX}/launch` })
-  await app.register(profileRoutes,    { prefix: `${API_PREFIX}/profile` })
-  await app.register(brainRoutes,      { prefix: `${API_PREFIX}/brain` })
-  await app.register(videoDnaRoutes,   { prefix: `${API_PREFIX}/video-dna` })
+  await app.register(webhookRoutes, { prefix: `${API_PREFIX}/webhooks` });
+  await app.register(dataDeletionRoutes, { prefix: `${API_PREFIX}/auth` });
+  await app.register(authRoutes, { prefix: `${API_PREFIX}/auth` });
+  await app.register(userRoutes, { prefix: `${API_PREFIX}/users` });
+  await app.register(trendRoutes, { prefix: `${API_PREFIX}/trends` });
+  await app.register(songRoutes, { prefix: `${API_PREFIX}/songs` });
+  await app.register(contentRoutes, { prefix: `${API_PREFIX}/content` });
+  await app.register(analyticsRoutes, { prefix: `${API_PREFIX}/analytics` });
+  await app.register(calendarRoutes, { prefix: `${API_PREFIX}/calendar` });
+  await app.register(radarRoutes, { prefix: `${API_PREFIX}/discover` });
+  await app.register(onboardingRoutes, { prefix: `${API_PREFIX}/onboarding` });
+  await app.register(agentRoutes, { prefix: `${API_PREFIX}/agent` });
+  await app.register(studioRoutes, { prefix: `${API_PREFIX}/studio` });
+  await app.register(launchRoutes, { prefix: `${API_PREFIX}/launch` });
+  await app.register(profileRoutes, { prefix: `${API_PREFIX}/profile` });
+  await app.register(brainRoutes, { prefix: `${API_PREFIX}/brain` });
+  await app.register(videoDnaRoutes, { prefix: `${API_PREFIX}/video-dna` });
 
   // ── Lifecycle / error handlers ─────────────────────────────────────────────
   app.setNotFoundHandler((req, reply) => {
     reply.code(404).send({
       success: false,
-      error: 'NOT_FOUND',
+      error: "NOT_FOUND",
       message: `Route ${req.method} ${req.url} not found`,
-    })
-  })
+    });
+  });
 
   app.setErrorHandler((err: any, req, reply) => {
-    const statusCode = err.statusCode || 500
+    const statusCode = err.statusCode || 500;
     if (statusCode >= 500) {
-      req.log.error({ err, req: { url: req.url, method: req.method } })
+      req.log.error({ err, req: { url: req.url, method: req.method } });
     }
-    if (err.code === 'FST_ERR_VALIDATION') {
+    if (err.code === "FST_ERR_VALIDATION") {
       return reply.code(400).send({
         success: false,
-        error: 'VALIDATION_ERROR',
-        message: 'Invalid request data',
+        error: "VALIDATION_ERROR",
+        message: "Invalid request data",
         details: err.validation,
-      })
+      });
     }
     reply.code(statusCode).send({
       success: false,
-      error: err.code || 'INTERNAL_ERROR',
-      message: statusCode >= 500 ? 'Internal server error' : err.message,
-    })
-  })
+      error: err.code || "INTERNAL_ERROR",
+      message: statusCode >= 500 ? "Internal server error" : err.message,
+    });
+  });
 
-  return app
-}
+  return app;
+};

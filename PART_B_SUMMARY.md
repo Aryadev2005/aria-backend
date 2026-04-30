@@ -252,7 +252,7 @@ export REDIS_URL=redis://localhost:6379
 export DATABASE_URL=postgresql://...
 
 # 4. Run database migration (if not done in Part A)
-npm run db:migrate
+npx prisma migrate deploy
 
 # 5. Start the server (workers auto-start)
 npm run dev
@@ -557,3 +557,4 @@ TrendAI is ready for scale. 🚀
 **Next**: Deploy to staging, run integration tests, deploy to production
 
 Let's make TrendAI the #1 AI creator intelligence platform in India! 🇮🇳
+

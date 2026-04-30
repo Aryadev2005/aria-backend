@@ -381,14 +381,14 @@ module.exports = {
 
 ---
 
-### File 4️⃣: `scripts/migrations/006_launch.sql`
+### File 4️⃣: `prisma/migrations (Prisma-managed)`
 
 **Type**: Database Migration  
 **Lines**: 16  
 **Purpose**: Create launch_packages table
 
 ```sql
--- scripts/migrations/006_launch.sql
+-- prisma/migrations (Prisma-managed)
 -- Migration: 006_launch
 -- launch_packages: stores generated posting packages per user
 
@@ -637,3 +637,4 @@ After deploying, verify:
 ---
 
 **End of Code Changes Summary**
+

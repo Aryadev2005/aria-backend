@@ -69,7 +69,7 @@
 ---
 
 ### 4. Database Migration ✅
-**File**: `scripts/migrations/003_aria_columns.sql` (80 lines)
+**File**: `prisma/migrations (Prisma-managed)` (80 lines)
 
 **Users Table - 15 New Columns:**
 ```
@@ -169,7 +169,7 @@ npm install
 export GROQ_API_KEY=gsk_xxxxxxxxxxxx
 
 # 3. Run database migration
-npm run db:migrate
+npx prisma migrate deploy
 
 # 4. Start server
 npm run dev
@@ -430,3 +430,4 @@ All code has been:
 
 **TrendAI Backend v2.0 - Groq Edition**  
 **Let's make TrendAI the #1 creator intelligence platform in India! 🚀**
+

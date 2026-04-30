@@ -489,7 +489,7 @@ streams_today, language, raw_data, fetched_at
 ## Migration Path
 
 1. **Install** → `npm install`
-2. **Migrate** → `npm run db:migrate`
+2. **Migrate** → `npx prisma migrate deploy`
 3. **Set Env** → Add `GROQ_API_KEY`
 4. **Start** → `npm run dev`
 5. **Test** → Hit endpoints
@@ -501,3 +501,4 @@ streams_today, language, raw_data, fetched_at
 
 **Version**: TrendAI Backend v2.0 (Groq Edition)
 **Status**: ✅ Production Ready
+

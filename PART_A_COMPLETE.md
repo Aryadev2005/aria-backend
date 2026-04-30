@@ -27,7 +27,7 @@
 - **analytics.routes.js** → Enhanced ✅
 
 ### ✅ 4. Database Migration
-- **File**: `scripts/migrations/003_aria_columns.sql`
+- **File**: `prisma/migrations (Prisma-managed)`
 - **Status**: ✅ Ready to deploy
 
 ### ✅ 5. Package.json Updated
@@ -118,7 +118,7 @@ The app no longer crashes on the missing Anthropic SDK! ✅
 | `src/controllers/analytics.controller.js` | Updated | ✅ |
 | `src/routes/trend.routes.js` | Fixed & Updated | ✅ |
 | `src/routes/analytics.routes.js` | Updated | ✅ |
-| `scripts/migrations/003_aria_columns.sql` | Created | ✅ |
+| `prisma/migrations (Prisma-managed)` | Created | ✅ |
 
 ---
 
@@ -168,7 +168,7 @@ POST /api/v1/analytics/scrape
 ```bash
 # 1. Pull latest code (all changes already in place)
 # 2. Run: npm install
-# 3. Run: npm run db:migrate
+# 3. Run: npx prisma migrate deploy
 # 4. Add to .env: GROQ_API_KEY=gsk_xxxxx
 # 5. Start server: npm run dev
 ```
@@ -226,3 +226,4 @@ All code changes have been successfully integrated. The application no longer de
 **Next Phase**: PART B - BullMQ Workers
 
 Let's build the future of creator intelligence! 🚀
+

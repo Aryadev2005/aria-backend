@@ -20,7 +20,7 @@ Get your GROQ_API_KEY from: https://console.groq.com
 
 ### 3. Run Database Migration
 ```bash
-npm run db:migrate
+npx prisma migrate deploy
 ```
 
 This will:
@@ -168,7 +168,7 @@ groqService.generateContent({
 
 ### Error Handling
 - If Groq API fails: Returns 503 Service Down
-- If DB migration fails: Run `npm run db:migrate` again
+- If DB migration fails: Run `npx prisma migrate deploy` again
 - If archetype detection fails: Logs error but doesn't block dashboard
 
 ---
@@ -211,7 +211,7 @@ aria_analyzed_at TIMESTAMPTZ      -- When last analyzed
 
 - [ ] Installed dependencies: `npm install`
 - [ ] Set GROQ_API_KEY in `.env`
-- [ ] Ran migration: `npm run db:migrate`
+- [ ] Ran migration: `npx prisma migrate deploy`
 - [ ] Started server: `npm run dev`
 - [ ] Can GET `/api/v1/trends` (public)
 - [ ] Can GET `/api/v1/trends/personalized` (auth)
@@ -306,3 +306,4 @@ POST /api/v1/analytics/scrape ← NEW
 **Status**: ✅ **PART A COMPLETE**
 
 All Groq integration is ready for production. PART B (Workers) will add live data pipelines.
+

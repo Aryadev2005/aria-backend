@@ -42,7 +42,7 @@
   - [x] Added groq-sdk ^0.7.0
 
 ### Phase 2: Database Schema ✅
-- [x] Created `scripts/migrations/003_aria_columns.sql`
+- [x] Created `prisma/migrations (Prisma-managed)`
   - [x] 15 new columns added to users table
   - [x] Created aria_feedback table
   - [x] Created live_trends table
@@ -145,7 +145,7 @@ npm ls groq-sdk  # Should show ^0.7.0
 ### Step 4: Migrate Database
 ```bash
 # Run migrations
-npm run db:migrate
+npx prisma migrate deploy
 
 # Verify migration succeeded
 # Check PostgreSQL for new columns in users table:
@@ -311,7 +311,7 @@ cat .env | grep GROQ_API_KEY
 psql $DATABASE_URL -c "SELECT 1"
 
 # Run migration again
-npm run db:migrate
+npx prisma migrate deploy
 
 # Check migration status
 psql $DATABASE_URL -c "\d users" | grep archetype
@@ -495,3 +495,4 @@ After PART A is confirmed working:
 **Deployment Owner**: [Your Name]
 **Deployment Date**: [To be filled]
 **Deployment Approved By**: [To be filled]
+

@@ -15,7 +15,7 @@
 | `src/controllers/launch.controller.js` | 71 | Handle API requests for posting packages, timing, brand alerts |
 | `src/routes/launch.routes.js` | 30 | Define 3 API endpoints |
 | `src/services/launch.service.js` | 270 | Core logic: Groq prompts, Redis caching, DB saves |
-| `scripts/migrations/006_launch.sql` | 16 | Create `launch_packages` table |
+| `prisma/migrations (Prisma-managed)` | 16 | Create `launch_packages` table |
 
 ### 2 Modified Files
 
@@ -79,7 +79,7 @@ Returns:
 
 ### Step 1: Database
 ```bash
-npm run db:migrate
+npx prisma migrate deploy
 ```
 Creates `launch_packages` table.
 
@@ -232,7 +232,7 @@ Stores:
 
 ## ✅ Deployment Checklist
 
-- [ ] Run `npm run db:migrate`
+- [ ] Run `npx prisma migrate deploy`
 - [ ] Set `GROQ_API_KEY` in `.env`
 - [ ] Verify Firebase auth enabled
 - [ ] Test 3 endpoints with curl
@@ -255,3 +255,4 @@ Stores:
 ---
 
 **Full Documentation**: See `LAUNCH_BACKEND_COMPLETE.md` in workspace
+

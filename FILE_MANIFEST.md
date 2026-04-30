@@ -161,7 +161,7 @@ trendai-backend/
 ---
 
 ### 8. ✨ 003_aria_columns.sql (NEW - 80+ lines)
-**Location**: `scripts/migrations/003_aria_columns.sql`
+**Location**: `prisma/migrations (Prisma-managed)`
 **Purpose**: Database schema changes
 **Changes**:
 - Adds 15 columns to `users` table
@@ -311,7 +311,7 @@ if (!user.archetype) {
 
 1. **Backup Database** → Just in case
 2. **Install Dependencies** → `npm install`
-3. **Run Migration** → `npm run db:migrate`
+3. **Run Migration** → `npx prisma migrate deploy`
 4. **Set Environment** → Add `GROQ_API_KEY`
 5. **Restart Server** → `npm run dev` or production restart
 6. **Verify Health** → GET `/health`
@@ -345,7 +345,7 @@ All integration ready for production. Awaiting PART B (Workers) for full deploym
 For issues:
 1. Check `GROQ_QUICKSTART.md` troubleshooting section
 2. Verify `.env` has `GROQ_API_KEY`
-3. Run migration: `npm run db:migrate`
+3. Run migration: `npx prisma migrate deploy`
 4. Check server logs: `npm run dev`
 5. Test endpoint: `curl http://localhost:3000/health`
 
@@ -354,3 +354,4 @@ For issues:
 **Last Updated**: April 26, 2026
 **Integration Version**: 2.0
 **Status**: Production Ready
+

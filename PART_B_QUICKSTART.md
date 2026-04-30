@@ -21,7 +21,7 @@ export WORKER_CONCURRENCY=2
 
 ### 3. Run Migrations (if needed)
 ```bash
-npm run db:migrate
+npx prisma migrate deploy
 ```
 
 ### 4. Start Server
@@ -189,7 +189,7 @@ git pull origin main
 
 # 2. Install dependencies
 npm install
-npm run db:migrate
+npx prisma migrate deploy
 
 # 3. Start with process manager (e.g., PM2)
 pm2 start src/server.js --name trendai-backend
@@ -307,7 +307,7 @@ npm run worker:songs
 npm run worker:scrape
 
 # Database migration
-npm run db:migrate
+npx prisma migrate deploy
 
 # Test specific function
 node -e "require('./src/services/scraper.service.js')"
@@ -357,3 +357,4 @@ TrendAI Part B is now live. ARIA has real data. Go build something amazing!
 Questions? Check the full **PART_B_SUMMARY.md** for detailed documentation.
 
 Happy coding! 🎉
+

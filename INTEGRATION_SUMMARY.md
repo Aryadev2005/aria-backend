@@ -25,7 +25,7 @@
    + "groq-sdk": "^0.7.0"
    ```
 
-### 3. **Created Migration** `scripts/migrations/003_aria_columns.sql` ✅
+### 3. **Created Migration** `prisma/migrations (Prisma-managed)` ✅
    - Added 15 new columns to `users` table:
      - `archetype`, `archetype_label`, `archetype_confidence`
      - `growth_stage`, `tone_profile`, `health_score`
@@ -103,7 +103,7 @@ GROQ_MODEL=mixtral-8x7b-32768  # optional
 
 Run the migration:
 ```bash
-npm run db:migrate
+npx prisma migrate deploy
 ```
 
 This will:
@@ -158,7 +158,7 @@ None - all endpoints remain backward compatible.
 ✅ `src/controllers/analytics.controller.js`
 ✅ `src/routes/trend.routes.js`
 ✅ `src/routes/analytics.routes.js`
-✅ `scripts/migrations/003_aria_columns.sql` (NEW)
+✅ `prisma/migrations (Prisma-managed)` (NEW)
 
 ---
 
@@ -178,3 +178,4 @@ None - all endpoints remain backward compatible.
 **Status: PART A COMPLETE** ✅
 
 All code changes are production-ready. Awaiting PART B (BullMQ workers) for complete implementation.
+
