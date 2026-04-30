@@ -1,0 +1,305 @@
+generator client {
+  provider        = "prisma-client-js"
+  engineType      = "library"
+  previewFeatures = ["partialIndexes"]
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model analytics {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id    String?   @db.Uuid
+  event      String
+  platform   String?
+  niche      String?
+  metadata   Json?     @default("{}")
+  created_at DateTime? @default(now()) @db.Timestamptz(6)
+  users      users?    @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([event], map: "idx_analytics_event")
+  @@index([user_id], map: "idx_analytics_user_id")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model aria_chat_sessions {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id          String?   @db.Uuid
+  session_id       String
+  role             String
+  content          String
+  tool_calls       Json?
+  tool_result      Json?
+  entry_screen     String?
+  context_snapshot Json?
+  created_at       DateTime? @default(now()) @db.Timestamptz(6)
+  users            users?    @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([created_at(sort: Desc)], map: "idx_chat_sessions_created")
+  @@index([user_id, session_id], map: "idx_chat_sessions_user")
+}
+
+model aria_feedback {
+  id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id             String?   @db.Uuid
+  recommendation_type String
+  recommendation_data Json
+  was_helpful         Boolean?
+  result_notes        String?
+  created_at          DateTime? @default(now()) @db.Timestamptz(6)
+  users               users?    @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([user_id], map: "idx_aria_feedback_user")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model aria_memory {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id      String?   @db.Uuid
+  category     String
+  key          String
+  value        String
+  confidence   Int?      @default(50)
+  source       String?   @default("inferred")
+  times_seen   Int?      @default(1)
+  last_seen_at DateTime? @default(now()) @db.Timestamptz(6)
+  created_at   DateTime? @default(now()) @db.Timestamptz(6)
+  users        users?    @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([user_id, category, key])
+  @@index([user_id, confidence(sort: Desc)], map: "idx_aria_memory_confidence")
+  @@index([user_id, category], map: "idx_aria_memory_user")
+}
+
+model aria_suggestions {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id         String?   @db.Uuid
+  session_id      String?
+  suggestion_type String
+  suggestion_data Json
+  status          String?   @default("pending")
+  result_data     Json?
+  follow_up_sent  Boolean?  @default(false)
+  follow_up_at    DateTime? @db.Timestamptz(6)
+  created_at      DateTime? @default(now()) @db.Timestamptz(6)
+  users           users?    @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([follow_up_at], map: "idx_suggestions_followup", where: raw("((follow_up_sent = false) AND (status = 'pending'::text))"))
+  @@index([user_id, status], map: "idx_suggestions_user")
+}
+
+model checkpoint_blobs {
+  thread_id     String
+  checkpoint_ns String @default("")
+  channel       String
+  version       String
+  type          String
+  blob          Bytes?
+
+  @@id([thread_id, checkpoint_ns, channel, version])
+}
+
+model checkpoint_migrations {
+  v Int @id
+}
+
+model checkpoint_writes {
+  thread_id     String
+  checkpoint_ns String  @default("")
+  checkpoint_id String
+  task_id       String
+  idx           Int
+  channel       String
+  type          String?
+  blob          Bytes
+
+  @@id([thread_id, checkpoint_ns, checkpoint_id, task_id, idx])
+}
+
+model checkpoints {
+  thread_id            String
+  checkpoint_ns        String  @default("")
+  checkpoint_id        String
+  parent_checkpoint_id String?
+  type                 String?
+  checkpoint           Json
+  metadata             Json    @default("{}")
+
+  @@id([thread_id, checkpoint_ns, checkpoint_id])
+}
+
+model content_calendars {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id       String?   @db.Uuid
+  month         String
+  year          Int
+  calendar_data Json
+  created_at    DateTime? @default(now()) @db.Timestamptz(6)
+  updated_at    DateTime? @default(now()) @db.Timestamptz(6)
+  users         users?    @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([user_id, month, year])
+  @@index([user_id], map: "idx_calendars_user")
+  @@index([user_id, month, year], map: "idx_calendars_user_month")
+}
+
+model content_history {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id           String?   @db.Uuid
+  trend_title       String?
+  platform          String?
+  niche             String?
+  hook              String?
+  caption           String?
+  hashtags          Json?     @default("[]")
+  best_time_to_post String?
+  content_format    String?
+  thumbnail_text    String?
+  cta               String?
+  created_at        DateTime? @default(now()) @db.Timestamptz(6)
+  users             users?    @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([created_at(sort: Desc)], map: "idx_content_history_created_at")
+  @@index([user_id], map: "idx_content_history_user_id")
+}
+
+model studio_sessions {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id          String?   @db.Uuid
+  idea             String?
+  platform         String?
+  niche            String?
+  script_structure Json?
+  bgm_suggestions  Json?
+  shot_list        Json?
+  created_at       DateTime? @default(now()) @db.Timestamptz(6)
+  users            users?    @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([user_id, created_at(sort: Desc)], map: "idx_studio_sessions_user")
+}
+
+model launch_packages {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id      String?   @db.Uuid
+  package_data Json
+  created_at   DateTime? @default(now()) @db.Timestamptz(6)
+  users        users?    @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([user_id, created_at(sort: Desc)], map: "idx_launch_packages_user")
+}
+
+model live_songs {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  source         String
+  title          String
+  artist         String
+  chart_position Int?
+  chart_change   Int?
+  streams_today  BigInt?
+  language       String?
+  raw_data       Json?
+  fetched_at     DateTime? @default(now()) @db.Timestamptz(6)
+}
+
+model live_trends {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  source         String
+  title          String
+  search_volume  Int?
+  velocity       Decimal?  @db.Decimal(5, 2)
+  niche_tags     String[]
+  platform_tags  String[]
+  raw_data       Json?
+  fetched_at     DateTime? @default(now()) @db.Timestamptz(6)
+  expires_at     DateTime? @db.Timestamptz(6)
+  badge          String?
+  recommendation String?
+
+  @@index([badge], map: "idx_live_trends_badge")
+  @@index([expires_at], map: "idx_live_trends_expires")
+  @@index([niche_tags], map: "idx_live_trends_niche", type: Gin)
+  @@index([platform_tags], map: "idx_live_trends_platform", type: Gin)
+}
+
+model radar_snapshots {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  niche             String
+  platform          String
+  intelligence_data Json
+  generated_at      DateTime? @default(now()) @db.Timestamptz(6)
+  expires_at        DateTime? @default(dbgenerated("(now() + '06:00:00'::interval)")) @db.Timestamptz(6)
+
+  @@index([expires_at], map: "idx_radar_expires")
+  @@index([niche, platform], map: "idx_radar_niche_platform")
+}
+
+model rate_cards {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id      String?   @unique @db.Uuid
+  rate_data    Json
+  generated_at DateTime? @default(now()) @db.Timestamptz(6)
+  users        users?    @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([user_id], map: "idx_rate_cards_user")
+}
+
+model saved_trends {
+  id       String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id  String?   @db.Uuid
+  trend_id String
+  saved_at DateTime? @default(now()) @db.Timestamptz(6)
+  users    users?    @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([user_id, trend_id])
+  @@index([user_id], map: "idx_saved_trends_user_id")
+}
+
+model users {
+  id                      String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  firebase_uid            String               @unique
+  email                   String               @unique
+  name                    String
+  photo_url               String?
+  bio                     String?
+  instagram_handle        String?
+  youtube_handle          String?
+  fcm_token               String?
+  platform                String?
+  follower_range          String?
+  primary_platform        String?
+  niches                  Json?                @default("[]")
+  is_pro                  Boolean?             @default(false)
+  subscription_tier       String?              @default("free")
+  created_at              DateTime?            @default(now()) @db.Timestamptz(6)
+  updated_at              DateTime?            @default(now()) @db.Timestamptz(6)
+  archetype               String?
+  archetype_label         String?
+  archetype_confidence    Int?
+  growth_stage            String?              @default("DISCOVERY")
+  tone_profile            String?
+  health_score            Int?
+  scraped_summary         Json?
+  scraped_at              DateTime?            @db.Timestamptz(6)
+  engagement_rate         Decimal?             @db.Decimal(5, 2)
+  creator_intent          String?              @default("grow_organically")
+  aria_last_analysis      Json?
+  aria_analyzed_at        DateTime?            @db.Timestamptz(6)
+  subscription_product_id String?
+  subscription_expires_at DateTime?            @db.Timestamptz(6)
+  subscription_store      String?
+  analytics               analytics[]
+  aria_chat_sessions      aria_chat_sessions[]
+  aria_feedback           aria_feedback[]
+  aria_memory             aria_memory[]
+  aria_suggestions        aria_suggestions[]
+  content_calendars       content_calendars[]
+  content_history         content_history[]
+  launch_packages         launch_packages[]
+  rate_cards              rate_cards?
+  saved_trends            saved_trends[]
+  studio_sessions         studio_sessions[]
+
+  @@index([archetype], map: "idx_users_archetype")
+  @@index([firebase_uid], map: "idx_users_firebase_uid")
+}

@@ -3,3 +3,5 @@ node_modules/
 logs/
 *.log
 .DS_Store
+
+/src/generated/prisma
