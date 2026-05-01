@@ -83,7 +83,7 @@ export interface OnboardingBody {
 /**
  * Mark onboarding as complete and save initial preferences
  */
-export const completeOnboarding = async (req: FastifyRequest<{ Body: OnboardingBody }>, reply: FastifyReply) => {
+export const completeOnboarding = async (req: FastifyRequest<{ Body: Partial<OnboardingBody> }>, reply: FastifyReply) => {
   try {
     const user = req.user as any
     const { followerRange, primaryPlatform, niches } = req.body
@@ -91,9 +91,9 @@ export const completeOnboarding = async (req: FastifyRequest<{ Body: OnboardingB
     const updated = await (prisma.users as any).update({
       where: { id: user.id },
       data: {
-        follower_range: followerRange,
-        primary_platform: primaryPlatform,
-        niches: niches,
+        ...(followerRange !== undefined && { follower_range: followerRange }),
+        ...(primaryPlatform !== undefined && { primary_platform: primaryPlatform }),
+        ...(niches !== undefined && { niches: niches }),
         updated_at: new Date()
       },
       select: {
@@ -103,7 +103,7 @@ export const completeOnboarding = async (req: FastifyRequest<{ Body: OnboardingB
     })
 
     await cache.del(CacheKeys.user(user.id))
-    logger.info({ userId: user.id }, 'Onboarding completed')
+    logger.info({ userId: user.id }, 'Onboarding updated')
     return success(reply, updated)
   } catch (err) {
     logger.error({ err }, 'Onboarding failed')

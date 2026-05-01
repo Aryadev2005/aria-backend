@@ -7,10 +7,43 @@ import { logger } from '../utils/logger'
 /**
  * Handle Firebase login and update user session/FCM token
  */
-export const firebaseLogin = async (req: FastifyRequest<{ Body: { fcmToken?: string, platform?: string } }>, reply: FastifyReply) => {
+export const firebaseLogin = async (req: FastifyRequest<{ Body: { idToken: string, fcmToken?: string, platform?: string } }>, reply: FastifyReply) => {
   try {
-    const { fcmToken, platform } = req.body
-    const user = req.user as any
+    const { idToken, fcmToken, platform } = req.body
+    
+    // Import verifyFirebaseToken here to avoid circular dependency
+    const { verifyFirebaseToken } = require('../config/firebase')
+    const firebaseUser = await verifyFirebaseToken(idToken)
+
+    let user = await (prisma.users as any).findUnique({
+      where: { firebase_uid: firebaseUser.uid },
+      select: {
+        id: true, firebase_uid: true, email: true, name: true, photo_url: true,
+        follower_range: true, primary_platform: true, niches: true,
+        is_pro: true, subscription_tier: true, created_at: true
+      }
+    })
+
+    if (!user) {
+      user = await (prisma.users as any).create({
+        data: {
+          firebase_uid: firebaseUser.uid,
+          email: firebaseUser.email as string,
+          name: firebaseUser.name as string,
+          photo_url: firebaseUser.picture || null
+        },
+        select: {
+          id: true, firebase_uid: true, email: true, name: true, photo_url: true,
+          follower_range: true, primary_platform: true, niches: true,
+          is_pro: true, subscription_tier: true, created_at: true
+        }
+      })
+      logger.info({ userId: user.id }, 'New user created')
+    }
+
+    // Cache the user so future requests with this token are fast
+    const cacheKey = `fb:${idToken.slice(-20)}`
+    await cache.set(cacheKey, user, 300)
 
     // Update FCM token for push notifications
     if (fcmToken) {
@@ -29,14 +62,14 @@ export const firebaseLogin = async (req: FastifyRequest<{ Body: { fcmToken?: str
         id:              user.id,
         email:           user.email,
         name:            user.name,
-        photoUrl:        user.photoUrl,
-        followerRange:   user.followerRange,
-        primaryPlatform: user.primaryPlatform,
+        photoUrl:        user.photo_url,
+        followerRange:   user.follower_range,
+        primaryPlatform: user.primary_platform,
         niches:          user.niches,
-        isPro:           user.isPro,
-        subscriptionTier: user.subscriptionTier,
+        isPro:           user.is_pro,
+        subscriptionTier: user.subscription_tier,
       },
-      isNewUser: !user.primaryPlatform,
+      isNewUser: !user.primary_platform,
     })
   } catch (err) {
     logger.error({ err }, 'Firebase login failed')

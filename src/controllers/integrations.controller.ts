@@ -8,6 +8,23 @@ import * as groqService from '../services/ai/groq.service';
 import axios from 'axios';
 import crypto from 'crypto';
 
+// ── Provider imports ──────────────────────────────────────────────────────
+import {
+  generateYouTubeAuthUrl,
+  exchangeYouTubeCode,
+  getYouTubeChannelInfo,
+  getValidYouTubeToken,
+  revokeYouTubeToken,
+  isTokenExpired,
+} from '../providers/youtube.provider';
+
+import {
+  generateInstagramAuthUrl,
+  completeInstagramOAuth,
+  getValidInstagramToken,
+  getInstagramRecentMedia,
+} from '../providers/instagram.provider';
+
 // ── Encryption ────────────────────────────────────────────────────────────
 // Key is validated at runtime — if missing, token operations will throw clearly
 function getEncryptionKey(): Buffer {
@@ -38,25 +55,13 @@ export function decryptToken(encryptedToken: string): string {
 // ── GET /api/v1/integrations/instagram/auth-url ───────────────────────────
 export const getInstagramAuthUrl = async (req: FastifyRequest, reply: FastifyReply) => {
   const user = (req as any).user;
-  const state = Buffer.from(JSON.stringify({ userId: user.id, ts: Date.now() })).toString('base64');
-
-  const params = new URLSearchParams({
-    client_id: process.env.INSTAGRAM_APP_ID!,
-    redirect_uri: `${process.env.BACKEND_URL || 'http://localhost:3000'}/api/v1/integrations/instagram/callback`,
-    scope: 'instagram_basic,instagram_content_publish,pages_show_list,pages_read_engagement',
-    response_type: 'code',
-    state,
-  });
-
-  return success(reply, {
-    url: `https://www.facebook.com/v18.0/dialog/oauth?${params.toString()}`,
-  });
+  const url = generateInstagramAuthUrl(user.id);
+  return success(reply, { url });
 };
 
 // ── GET /api/v1/integrations/youtube/auth-url ─────────────────────────────
 export const getYoutubeAuthUrl = async (req: FastifyRequest, reply: FastifyReply) => {
   const user = (req as any).user;
-  const state = Buffer.from(JSON.stringify({ userId: user.id, ts: Date.now() })).toString('base64');
 
   // YOUTUBE_CLIENT_ID is the OAuth client ID — different from YOUTUBE_API_KEY
   if (!process.env.YOUTUBE_CLIENT_ID) {
@@ -64,19 +69,8 @@ export const getYoutubeAuthUrl = async (req: FastifyRequest, reply: FastifyReply
     return reply.status(503).send({ success: false, error: 'YouTube OAuth not configured' });
   }
 
-  const params = new URLSearchParams({
-    client_id: process.env.YOUTUBE_CLIENT_ID,
-    redirect_uri: `${process.env.BACKEND_URL || 'http://localhost:3000'}/api/v1/integrations/youtube/callback`,
-    scope: 'https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/youtube.upload',
-    response_type: 'code',
-    access_type: 'offline',
-    prompt: 'consent',
-    state,
-  });
-
-  return success(reply, {
-    url: `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`,
-  });
+  const url = generateYouTubeAuthUrl(user.id);
+  return success(reply, { url });
 };
 
 // ── GET /api/v1/integrations/instagram/callback ───────────────────────────
@@ -94,39 +88,9 @@ export const instagramCallback = async (
   try {
     const { userId } = JSON.parse(Buffer.from(state, 'base64').toString());
 
-    // Exchange code for short-lived token
-    const tokenRes = await fetch('https://api.instagram.com/oauth/access_token', {
-      method: 'POST',
-      body: new URLSearchParams({
-        client_id: process.env.INSTAGRAM_APP_ID!,
-        client_secret: process.env.INSTAGRAM_APP_SECRET!,
-        grant_type: 'authorization_code',
-        redirect_uri: `${process.env.BACKEND_URL || 'http://localhost:3000'}/api/v1/integrations/instagram/callback`,
-        code,
-      }),
-    });
-    const tokenData = await tokenRes.json() as any;
-
-    if (tokenData.error) {
-      logger.error({ tokenData }, 'Instagram token exchange failed');
-      return reply.redirect(`${frontendUrl}/onboarding?error=instagram_token_failed`);
-    }
-
-    // Exchange for long-lived token (valid 60 days)
-    const longTokenRes = await fetch(
-      `https://graph.instagram.com/access_token?grant_type=ig_exchange_token&client_secret=${process.env.INSTAGRAM_APP_SECRET}&access_token=${tokenData.access_token}`,
-    );
-    const longToken = await longTokenRes.json() as any;
-
-    const finalToken = longToken.access_token || tokenData.access_token;
-    const expiresIn = longToken.expires_in || null;
-
-    // Get basic profile
-    const profileRes = await fetch(
-      `https://graph.instagram.com/me?fields=id,username,account_type,media_count&access_token=${finalToken}`,
-    );
-    const profile = await profileRes.json() as any;
-    const handle = profile.username || '';
+    // Complete the full OAuth flow via the provider
+    const { accessToken, expiresAt, profile } = await completeInstagramOAuth(code);
+    const handle = profile.username;
 
     // Save encrypted token to DB
     await (prisma as any).account_connections.upsert({
@@ -134,17 +98,17 @@ export const instagramCallback = async (
       create: {
         user_id: userId,
         platform: 'instagram',
-        platform_user_id: profile.id || tokenData.user_id || '',
+        platform_user_id: profile.igUserId,
         handle,
-        encrypted_token: encryptToken(finalToken),
-        token_expires_at: expiresIn ? new Date(Date.now() + expiresIn * 1000) : null,
+        encrypted_token: encryptToken(accessToken),
+        token_expires_at: expiresAt,
         scopes: ['instagram_basic', 'instagram_content_publish'],
         connected_at: new Date(),
       },
       update: {
         handle,
-        encrypted_token: encryptToken(finalToken),
-        token_expires_at: expiresIn ? new Date(Date.now() + expiresIn * 1000) : null,
+        encrypted_token: encryptToken(accessToken),
+        token_expires_at: expiresAt,
         connected_at: new Date(),
       },
     });
@@ -184,38 +148,18 @@ export const youtubeCallback = async (
   try {
     const { userId } = JSON.parse(Buffer.from(state, 'base64').toString());
 
-    // Exchange code for access + refresh tokens
-    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        client_id: process.env.YOUTUBE_CLIENT_ID!,
-        client_secret: process.env.YOUTUBE_CLIENT_SECRET!,
-        redirect_uri: `${process.env.BACKEND_URL || 'http://localhost:3000'}/api/v1/integrations/youtube/callback`,
-        grant_type: 'authorization_code',
-        code,
-      }),
-    });
-    const tokenData = await tokenRes.json() as any;
+    // Exchange code for tokens via the provider
+    const { accessToken, refreshToken, expiresAt } = await exchangeYouTubeCode(code);
 
-    if (tokenData.error) {
-      logger.error({ tokenData }, 'YouTube token exchange failed');
-      return reply.redirect(`${frontendUrl}/onboarding?error=youtube_token_failed`);
-    }
-
-    // Get channel info
-    const channelRes = await fetch(
-      `https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics&mine=true&access_token=${tokenData.access_token}`,
-    );
-    const channelData = await channelRes.json() as any;
-    const channel = channelData.items?.[0];
-    const handle = channel?.snippet?.customUrl || channel?.snippet?.title || '';
-    const channelId = channel?.id || '';
+    // Get channel details via the provider
+    const channelInfo = await getYouTubeChannelInfo(accessToken);
+    const handle = channelInfo.handle;
+    const channelId = channelInfo.channelId;
 
     // Store both tokens encrypted as JSON
     const tokenPayload = JSON.stringify({
-      access_token: tokenData.access_token,
-      refresh_token: tokenData.refresh_token,
+      access_token: accessToken,
+      refresh_token: refreshToken,
     });
 
     await (prisma as any).account_connections.upsert({
@@ -226,18 +170,14 @@ export const youtubeCallback = async (
         platform_user_id: channelId,
         handle,
         encrypted_token: encryptToken(tokenPayload),
-        token_expires_at: tokenData.expires_in
-          ? new Date(Date.now() + tokenData.expires_in * 1000)
-          : null,
-        scopes: ['youtube.readonly', 'youtube.upload'],
+        token_expires_at: expiresAt,
+        scopes: ['youtube.readonly', 'youtube.upload', 'youtube.force-ssl'],
         connected_at: new Date(),
       },
       update: {
         handle,
         encrypted_token: encryptToken(tokenPayload),
-        token_expires_at: tokenData.expires_in
-          ? new Date(Date.now() + tokenData.expires_in * 1000)
-          : null,
+        token_expires_at: expiresAt,
         connected_at: new Date(),
       },
     });
@@ -299,6 +239,25 @@ export const disconnectPlatform = async (
   const user = (req as any).user;
   const { platform } = req.params;
 
+  // Revoke tokens before deleting (best-effort)
+  if (platform === 'youtube') {
+    try {
+      const connection = await (prisma as any).account_connections.findFirst({
+        where: { user_id: user.id, platform: 'youtube' },
+        select: { encrypted_token: true },
+      });
+      if (connection?.encrypted_token) {
+        const decrypted = decryptToken(connection.encrypted_token);
+        const payload = JSON.parse(decrypted) as { access_token: string; refresh_token: string };
+        await revokeYouTubeToken(payload.access_token);
+      }
+    } catch (revokeErr) {
+      // Don't fail the disconnect if revoke fails — token will expire on its own
+      logger.warn({ err: revokeErr, platform }, 'YouTube token revocation failed — proceeding with disconnect');
+    }
+  }
+  // Instagram: no reliable revoke endpoint — skip
+
   await (prisma as any).account_connections.deleteMany({
     where: { user_id: user.id, platform },
   });
@@ -324,6 +283,37 @@ async function triggerNicheDetection(userId: string, handle: string, platform: s
     }
   } catch (err: any) {
     logger.warn({ err: err.message, handle, platform }, 'Scrape failed during niche detection — using handle only');
+  }
+
+  // Enhancement: fetch Instagram recent media captions for better niche detection
+  let instagramCaptions: string[] = [];
+  if (platform === 'instagram') {
+    try {
+      const connection = await (prisma as any).account_connections.findFirst({
+        where: { user_id: userId, platform: 'instagram' },
+        select: { encrypted_token: true, token_expires_at: true },
+      });
+      if (connection?.encrypted_token) {
+        const decryptedToken = decryptToken(connection.encrypted_token);
+        const validToken = await getValidInstagramToken(
+          decryptedToken,
+          connection.token_expires_at ? new Date(connection.token_expires_at) : null,
+          async (newToken, newExpiresAt) => {
+            await (prisma as any).account_connections.updateMany({
+              where: { user_id: userId, platform: 'instagram' },
+              data: { encrypted_token: encryptToken(newToken), token_expires_at: newExpiresAt },
+            });
+          },
+        );
+        const recentMedia = await getInstagramRecentMedia(validToken, 12);
+        instagramCaptions = recentMedia
+          .map((m: any) => m.caption)
+          .filter((c: string) => c && c.length > 10);
+      }
+    } catch (mediaErr: any) {
+      // Enhancement only — not critical path
+      logger.warn({ err: mediaErr.message }, 'Instagram media fetch for niche detection failed — continuing without');
+    }
   }
 
   // Build ARIA prompt with whatever data we have
@@ -352,6 +342,7 @@ Engagement Rate: ${engagement}%
 Posts/Videos Analyzed: ${postCount}
 ${topPosts.length > 0 ? `Top content: ${topPosts.slice(0, 5).join(', ')}` : ''}
 ${recentVideos.length > 0 ? `Recent videos: ${recentVideos.slice(0, 5).map((v: any) => v.title).join(', ')}` : ''}
+${instagramCaptions.length > 0 ? `Recent Instagram post captions:\n${instagramCaptions.slice(0, 8).map((c, i) => `  ${i + 1}. "${c.slice(0, 200)}"`).join('\n')}` : ''}
 
 Respond ONLY with valid JSON:
 {

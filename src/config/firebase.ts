@@ -1,5 +1,6 @@
 import { cert, getApps, initializeApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
+import { getMessaging } from "firebase-admin/messaging";
 import { logger } from "../utils/logger";
 
 let firebaseApp: ReturnType<typeof initializeApp> | null = null;
@@ -61,8 +62,7 @@ export const sendPushNotification = async ({
   data?: Record<string, string>;
 }) => {
   try {
-    return await getAuth()
-      .app.messaging()
+    return await getMessaging()
       .send({
         token,
         notification: { title, body },

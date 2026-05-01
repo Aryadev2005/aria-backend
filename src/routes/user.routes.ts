@@ -56,14 +56,13 @@ export default async function userRoutes(app: FastifyInstance) {
       schema: {
         body: {
           type: "object",
-          required: ["followerRange", "primaryPlatform", "niches"],
+          required: ["followerRange"],
           properties: {
             followerRange: { type: "string" },
             primaryPlatform: { type: "string" },
             niches: {
               type: "array",
               items: { type: "string" },
-              minItems: 1,
               maxItems: 5,
             },
           },
