@@ -23,6 +23,9 @@ import {
   completeInstagramOAuth,
   getValidInstagramToken,
   getInstagramRecentMedia,
+  instagramTokenIsExpired,
+  instagramTokenNeedsRefresh,
+  type InstagramUserProfile,
 } from '../providers/instagram.provider';
 
 // ── Encryption ────────────────────────────────────────────────────────────
@@ -55,8 +58,17 @@ export function decryptToken(encryptedToken: string): string {
 // ── GET /api/v1/integrations/instagram/auth-url ───────────────────────────
 export const getInstagramAuthUrl = async (req: FastifyRequest, reply: FastifyReply) => {
   const user = (req as any).user;
-  const url = generateInstagramAuthUrl(user.id);
-  return success(reply, { url });
+  try {
+    const url = generateInstagramAuthUrl(user.id);
+    return success(reply, { url });
+  } catch (err: any) {
+    logger.error({ err }, 'Failed to generate Instagram auth URL');
+    return reply.status(503).send({
+      success: false,
+      error:   'Instagram OAuth not configured',
+      message: err.message,
+    });
+  }
 };
 
 // ── GET /api/v1/integrations/youtube/auth-url ─────────────────────────────
@@ -75,72 +87,92 @@ export const getYoutubeAuthUrl = async (req: FastifyRequest, reply: FastifyReply
 
 // ── GET /api/v1/integrations/instagram/callback ───────────────────────────
 export const instagramCallback = async (
-  req: FastifyRequest<{ Querystring: { code: string; state: string; error?: string } }>,
+  req: FastifyRequest<{ Querystring: { code: string; state: string; error?: string; error_reason?: string } }>,
   reply: FastifyReply,
 ) => {
   const { code, state, error } = req.query;
   const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
 
   if (error) {
-    return reply.redirect(`${frontendUrl}/onboarding?error=instagram_denied`);
+    logger.warn({ error, error_reason: req.query.error_reason }, 'Instagram OAuth denied');
+    return reply.redirect(`${frontendUrl}/register?oauth_error=instagram_denied`);
+  }
+
+  let userId: string;
+  try {
+    const decoded = JSON.parse(Buffer.from(state, 'base64').toString());
+    userId = decoded.userId;
+    if (!userId) throw new Error('No userId in state');
+  } catch {
+    return reply.redirect(`${frontendUrl}/register?oauth_error=invalid_state`);
   }
 
   try {
-    const { userId } = JSON.parse(Buffer.from(state, 'base64').toString());
-
-    // Complete the full OAuth flow via the provider
-    const { accessToken, expiresAt, profile } = await completeInstagramOAuth(code);
-    const handle = profile.username;
+    // Single call — handles code exchange + long-lived token + profile fetch
+    const { accessToken, expiresAt, profile, permissions } = await completeInstagramOAuth(code);
 
     // Save encrypted token to DB
     await (prisma as any).account_connections.upsert({
       where: { user_id_platform: { user_id: userId, platform: 'instagram' } },
       create: {
-        user_id: userId,
-        platform: 'instagram',
-        platform_user_id: profile.igUserId,
-        handle,
-        encrypted_token: encryptToken(accessToken),
+        user_id:          userId,
+        platform:         'instagram',
+        platform_user_id: profile.user_id,
+        handle:           profile.username,
+        encrypted_token:  encryptToken(accessToken),
         token_expires_at: expiresAt,
-        scopes: ['instagram_basic', 'instagram_content_publish'],
-        connected_at: new Date(),
+        scopes:           ['instagram_business_basic'],
+        connected_at:     new Date(),
       },
       update: {
-        handle,
-        encrypted_token: encryptToken(accessToken),
+        platform_user_id: profile.user_id,
+        handle:           profile.username,
+        encrypted_token:  encryptToken(accessToken),
         token_expires_at: expiresAt,
-        connected_at: new Date(),
+        connected_at:     new Date(),
       },
     });
 
-    // Update user handle
+    // Update user table
     await (prisma as any).users.update({
       where: { id: userId },
-      data: { instagram_handle: handle },
+      data: {
+        instagram_handle:  profile.username,
+        // Store follower count if column exists
+        ...(profile.followers_count > 0 ? { follower_count: profile.followers_count } : {}),
+      },
     });
 
     await cache.del(CacheKeys.user(userId));
 
-    // Fire-and-forget niche detection — don't await, don't block the redirect
-    triggerNicheDetection(userId, handle, 'instagram').catch((err) =>
-      logger.warn({ err }, 'Background niche detection failed'),
+    // Fire-and-forget niche detection — do NOT await
+    triggerNicheDetection(userId, profile.username, 'instagram').catch((err) =>
+      logger.warn({ err }, 'Niche detection failed — not critical'),
     );
 
-    // Detect if request came from onboarding or registration
-    // State contains userId — check their onboarding_step
+    // Detect if still registering or reconnecting from settings
     const userRecord = await (prisma.users as any).findUnique({
-      where: { id: userId },
-      select: { onboarding_step: true }
+      where:  { id: userId },
+      select: { onboarding_step: true },
     });
 
     const isRegistering = !userRecord?.onboarding_step || userRecord.onboarding_step === 'new';
-    const redirectBase = isRegistering ? '/register' : '/onboarding';
-    const paramName = isRegistering ? 'oauth_success' : 'success';
+    const redirectBase  = isRegistering ? '/register' : '/dashboard/profile';
+    const successParam  = isRegistering ? 'oauth_success' : 'oauth_success';
 
-    return reply.redirect(`${frontendUrl}${redirectBase}?${paramName}=instagram&handle=${handle}`);
-  } catch (err) {
-    logger.error({ err }, 'Instagram callback failed');
-    return reply.redirect(`${frontendUrl}/onboarding?error=instagram_failed`);
+    return reply.redirect(
+      `${frontendUrl}${redirectBase}?${successParam}=instagram&handle=${profile.username}`
+    );
+  } catch (err: any) {
+    logger.error({ err, userId }, 'Instagram callback failed');
+
+    // Check for professional account error
+    const msg = err.message || '';
+    if (msg.includes('professional') || msg.includes('business') || msg.includes('creator')) {
+      return reply.redirect(`${frontendUrl}/register?oauth_error=instagram_not_professional`);
+    }
+
+    return reply.redirect(`${frontendUrl}/register?oauth_error=instagram_failed`);
   }
 };
 
@@ -312,29 +344,35 @@ async function triggerNicheDetection(userId: string, handle: string, platform: s
   if (platform === 'instagram') {
     try {
       const connection = await (prisma as any).account_connections.findFirst({
-        where: { user_id: userId, platform: 'instagram' },
-        select: { encrypted_token: true, token_expires_at: true },
+        where:  { user_id: userId, platform: 'instagram' },
+        select: { encrypted_token: true, token_expires_at: true, platform_user_id: true },
       });
+
       if (connection?.encrypted_token) {
-        const decryptedToken = decryptToken(connection.encrypted_token);
+        const decrypted = decryptToken(connection.encrypted_token);
         const validToken = await getValidInstagramToken(
-          decryptedToken,
+          decrypted,
           connection.token_expires_at ? new Date(connection.token_expires_at) : null,
           async (newToken, newExpiresAt) => {
             await (prisma as any).account_connections.updateMany({
               where: { user_id: userId, platform: 'instagram' },
-              data: { encrypted_token: encryptToken(newToken), token_expires_at: newExpiresAt },
+              data:  { encrypted_token: encryptToken(newToken), token_expires_at: newExpiresAt },
             });
           },
         );
-        const recentMedia = await getInstagramRecentMedia(validToken, 12);
+
+        // Pass the platform_user_id (IG professional account ID) to media endpoint
+        const igUserId   = connection.platform_user_id || '';
+        const recentMedia = igUserId
+          ? await getInstagramRecentMedia(validToken, igUserId, 12)
+          : [];
+
         instagramCaptions = recentMedia
           .map((m: any) => m.caption)
           .filter((c: string) => c && c.length > 10);
       }
     } catch (mediaErr: any) {
-      // Enhancement only — not critical path
-      logger.warn({ err: mediaErr.message }, 'Instagram media fetch for niche detection failed — continuing without');
+      logger.warn({ err: mediaErr.message }, 'Media fetch failed — continuing without captions');
     }
   }
 

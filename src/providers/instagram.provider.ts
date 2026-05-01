@@ -1,95 +1,109 @@
-/**
- * ARIA — Instagram OAuth Provider
- * Extracted and adapted from Postiz (AGPL-3.0)
- * Uses Instagram Graph API via Facebook OAuth — no SDK needed
- */
+export interface InstagramUserProfile {
+  user_id: string;
+  username: string;
+  followers_count: number;
+}
 
-const INSTAGRAM_SCOPES = [
-  'instagram_basic',
-  'instagram_content_publish',
-  'pages_show_list',
-  'pages_read_engagement',
-].join(',');
+export interface InstagramOAuthResult {
+  accessToken: string;
+  expiresAt: Date;
+  profile: InstagramUserProfile;
+  permissions?: any;
+}
 
-const FB_OAUTH_BASE = 'https://www.facebook.com/v18.0/dialog/oauth';
-const FB_TOKEN_URL = 'https://graph.facebook.com/v18.0/oauth/access_token';
-const IG_GRAPH_BASE = 'https://graph.instagram.com';
+const IG_AUTH_URL = 'https://www.instagram.com/oauth/authorize';
+const IG_TOKEN_URL = 'https://api.instagram.com/oauth/access_token';
+const IG_LONG_LIVED_TOKEN_URL = 'https://graph.instagram.com/access_token';
+const IG_GRAPH_BASE = 'https://graph.instagram.com/v25.0';
 
 function getRedirectUri(): string {
-  const baseUrl = (process.env.BACKEND_URL || 'http://localhost:3000').replace(/\/+$/, '');
-  return `${baseUrl}/api/v1/integrations/instagram/callback`;
+  const base = (process.env.BACKEND_URL || 'http://localhost:3000').replace(/\/+$/, '');
+  return `${base}/api/v1/integrations/instagram/callback`;
 }
 
 export function generateInstagramAuthUrl(userId: string): string {
+  if (!process.env.INSTAGRAM_APP_ID) {
+    throw new Error('INSTAGRAM_APP_ID is not set in environment variables');
+  }
   const state = Buffer.from(JSON.stringify({ userId, ts: Date.now() })).toString('base64');
   const params = new URLSearchParams({
-    client_id: process.env.INSTAGRAM_APP_ID!,
+    client_id: process.env.INSTAGRAM_APP_ID,
     redirect_uri: getRedirectUri(),
-    scope: INSTAGRAM_SCOPES,
+    scope: 'instagram_business_basic',
     response_type: 'code',
     state,
   });
-  return `${FB_OAUTH_BASE}?${params.toString()}`;
+  return `${IG_AUTH_URL}?${params.toString()}`;
 }
 
-export async function exchangeInstagramCode(code: string): Promise<{ access_token: string; user_id?: string }> {
-  const res = await fetch(FB_TOKEN_URL, {
+export async function completeInstagramOAuth(code: string): Promise<InstagramOAuthResult> {
+  if (!process.env.INSTAGRAM_APP_ID || !process.env.INSTAGRAM_APP_SECRET) {
+    throw new Error('INSTAGRAM credentials missing');
+  }
+
+  // 1. Code exchange
+  const shortLivedRes = await fetch(IG_TOKEN_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
-      client_id: process.env.INSTAGRAM_APP_ID!,
-      client_secret: process.env.INSTAGRAM_APP_SECRET!,
+      client_id: process.env.INSTAGRAM_APP_ID,
+      client_secret: process.env.INSTAGRAM_APP_SECRET,
       grant_type: 'authorization_code',
       redirect_uri: getRedirectUri(),
       code,
     }),
   });
-  const data = await res.json() as any;
-  if (data.error) throw new Error(`Instagram code exchange failed: ${data.error.message || JSON.stringify(data.error)}`);
-  return data;
-}
+  
+  const rawData = await shortLivedRes.json() as any;
+  const shortLived = (rawData.data && Array.isArray(rawData.data)) ? rawData.data[0] : rawData;
+  
+  if (!shortLived || !shortLived.access_token) {
+    throw new Error(`Code exchange failed: ${JSON.stringify(rawData)}`);
+  }
+  
+  const shortAccessToken = shortLived.access_token;
 
-export async function exchangeToLongLivedToken(shortLivedToken: string): Promise<{ access_token: string; expires_in: number }> {
-  const params = new URLSearchParams({
+  // 2. Long-lived token
+  const llParams = new URLSearchParams({
     grant_type: 'ig_exchange_token',
-    client_secret: process.env.INSTAGRAM_APP_SECRET!,
-    access_token: shortLivedToken,
+    client_secret: process.env.INSTAGRAM_APP_SECRET,
+    access_token: shortAccessToken,
   });
-  const res = await fetch(`${IG_GRAPH_BASE}/access_token?${params.toString()}`);
-  const data = await res.json() as any;
-  if (data.error) throw new Error(`Long-lived token exchange failed: ${data.error.message}`);
-  return data;
-}
+  
+  const llRes = await fetch(`${IG_LONG_LIVED_TOKEN_URL}?${llParams.toString()}`);
+  const llData = await llRes.json() as any;
+  
+  if (llData.error) {
+    throw new Error(`Long-lived exchange failed: ${llData.error.message || JSON.stringify(llData.error)}`);
+  }
+  
+  const longAccessToken = llData.access_token;
+  const expiresIn = llData.expires_in || 5184000; // default 60 days
+  const expiresAt = new Date(Date.now() + expiresIn * 1000);
 
-export interface InstagramProfile {
-  igUserId: string;
-  username: string;
-  accountType: string;
-  mediaCount: number;
-}
-
-export async function getInstagramProfile(accessToken: string): Promise<InstagramProfile> {
-  const params = new URLSearchParams({
-    fields: 'id,username,account_type,media_count',
-    access_token: accessToken,
+  // 3. Get profile
+  const profileParams = new URLSearchParams({
+    fields: 'id,username,followers_count',
+    access_token: longAccessToken,
   });
-  const res = await fetch(`${IG_GRAPH_BASE}/me?${params.toString()}`);
-  const data = await res.json() as any;
-  if (data.error) throw new Error(`Instagram profile fetch failed: ${data.error.message}`);
-  return { igUserId: data.id, username: data.username || '', accountType: data.account_type || 'UNKNOWN', mediaCount: data.media_count || 0 };
-}
+  
+  const profileRes = await fetch(`${IG_GRAPH_BASE}/me?${profileParams.toString()}`);
+  const profileData = await profileRes.json() as any;
+  
+  if (profileData.error) {
+    throw new Error(`Profile fetch failed: ${profileData.error.message}`);
+  }
 
-export async function refreshInstagramToken(longLivedToken: string): Promise<{ accessToken: string; expiresAt: Date }> {
-  const params = new URLSearchParams({ grant_type: 'ig_refresh_token', access_token: longLivedToken });
-  const res = await fetch(`${IG_GRAPH_BASE}/refresh_access_token?${params.toString()}`);
-  const data = await res.json() as any;
-  if (data.error) throw new Error(`Instagram token refresh failed: ${data.error.message}`);
-  return { accessToken: data.access_token, expiresAt: new Date(Date.now() + data.expires_in * 1000) };
-}
-
-export function instagramTokenNeedsRefresh(tokenExpiresAt: Date | null): boolean {
-  if (!tokenExpiresAt) return false;
-  return tokenExpiresAt.getTime() < Date.now() + 10 * 24 * 60 * 60 * 1000;
+  return {
+    accessToken: longAccessToken,
+    expiresAt,
+    profile: {
+      user_id: String(profileData.id),
+      username: profileData.username || '',
+      followers_count: profileData.followers_count || 0,
+    },
+    permissions: shortLived.permissions || null,
+  };
 }
 
 export function instagramTokenIsExpired(tokenExpiresAt: Date | null): boolean {
@@ -97,12 +111,38 @@ export function instagramTokenIsExpired(tokenExpiresAt: Date | null): boolean {
   return tokenExpiresAt.getTime() < Date.now();
 }
 
+export function instagramTokenNeedsRefresh(tokenExpiresAt: Date | null): boolean {
+  if (!tokenExpiresAt) return false;
+  const tenDaysMs = 10 * 24 * 60 * 60 * 1000;
+  return tokenExpiresAt.getTime() < Date.now() + tenDaysMs;
+}
+
+export async function refreshInstagramToken(longLivedToken: string): Promise<{ accessToken: string; expiresAt: Date }> {
+  const params = new URLSearchParams({
+    grant_type: 'ig_refresh_token',
+    access_token: longLivedToken,
+  });
+  const res = await fetch(`${IG_LONG_LIVED_TOKEN_URL}?${params.toString()}`);
+  const data = await res.json() as any;
+  
+  if (data.error) {
+    throw new Error(`Token refresh failed: ${data.error.message}`);
+  }
+  
+  return {
+    accessToken: data.access_token,
+    expiresAt: new Date(Date.now() + (data.expires_in || 5184000) * 1000),
+  };
+}
+
 export async function getValidInstagramToken(
   storedToken: string,
   tokenExpiresAt: Date | null,
   onRefreshed?: (newToken: string, newExpiresAt: Date) => Promise<void>
 ): Promise<string> {
-  if (instagramTokenIsExpired(tokenExpiresAt)) throw new Error('Instagram token expired — user must reconnect');
+  if (instagramTokenIsExpired(tokenExpiresAt)) {
+    throw new Error('Instagram token expired');
+  }
   if (instagramTokenNeedsRefresh(tokenExpiresAt)) {
     const { accessToken, expiresAt } = await refreshInstagramToken(storedToken);
     if (onRefreshed) await onRefreshed(accessToken, expiresAt);
@@ -111,31 +151,27 @@ export async function getValidInstagramToken(
   return storedToken;
 }
 
-export interface InstagramOAuthResult {
-  accessToken: string;
-  expiresAt: Date;
-  profile: InstagramProfile;
-}
-
-export async function completeInstagramOAuth(code: string): Promise<InstagramOAuthResult> {
-  const shortLived = await exchangeInstagramCode(code);
-  const longLived = await exchangeToLongLivedToken(shortLived.access_token);
-  const profile = await getInstagramProfile(longLived.access_token);
-  return { accessToken: longLived.access_token, expiresAt: new Date(Date.now() + longLived.expires_in * 1000), profile };
-}
-
-export async function getInstagramRecentMedia(accessToken: string, limit = 12): Promise<any[]> {
+export async function getInstagramRecentMedia(
+  accessToken: string,
+  igUserId: string,
+  limit = 12
+): Promise<any[]> {
   const params = new URLSearchParams({
-    fields: 'id,caption,media_type,timestamp,like_count,comments_count,permalink',
+    fields: 'id,caption,media_type,timestamp,permalink',
     limit: String(limit),
     access_token: accessToken,
   });
-  const res = await fetch(`${IG_GRAPH_BASE}/me/media?${params.toString()}`);
+  
+  const res = await fetch(`${IG_GRAPH_BASE}/${igUserId}/media?${params.toString()}`);
   const data = await res.json() as any;
-  if (data.error) return [];
-  return (data.data || []).map((item: any) => ({
-    id: item.id, caption: item.caption || '', mediaType: item.media_type || '',
-    timestamp: item.timestamp || '', likeCount: item.like_count || 0,
-    commentsCount: item.comments_count || 0, permalink: item.permalink || '',
+  
+  if (data.error || !data.data) return [];
+  
+  return (data.data as any[]).map(item => ({
+    id: item.id || '',
+    caption: item.caption || '',
+    mediaType: item.media_type || '',
+    timestamp: item.timestamp || '',
+    permalink: item.permalink || '',
   }));
 }
