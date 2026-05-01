@@ -21,9 +21,15 @@ export const getIntelligence = async (req: FastifyRequest<{ Querystring: RadarQu
     const archetype     = ctx.archetype;
     const followerRange = ctx.followerRange;
 
-    const intelligence = await radarService.getOrGenerateRadarSnapshot({
-      niche, platform, archetype, followerRange,
-    });
+    let intelligence: any;
+    try {
+      intelligence = await radarService.getOrGenerateRadarSnapshot({
+        niche, platform, archetype, followerRange,
+      });
+    } catch (e) {
+      logger.warn({ e }, "Groq intelligence failed");
+      intelligence = { ariaTopPick: { title: "Trend Intelligence loading...", reason: "Please try again in a moment." }, opportunities: [] };
+    }
 
     return success(reply, {
       intelligence,
@@ -46,7 +52,13 @@ export const getCompetitors = async (req: FastifyRequest<{ Querystring: RadarQue
     const platform  = req.query.platform || ctx.platform;
     const archetype = ctx.archetype;
 
-    const data = await radarService.generateCompetitorIntelligence({ niche, platform, archetype });
+    let data: any;
+    try {
+      data = await radarService.generateCompetitorIntelligence({ niche, platform, archetype });
+    } catch (e) {
+      logger.warn({ e }, "Groq competitor intel failed");
+      data = { weeklyWinners: [], gaps: [] };
+    }
     return success(reply, data);
   } catch (err) {
     logger.error({ err, userId: user.id }, 'getCompetitors failed');
@@ -66,7 +78,13 @@ export const getInspiration = async (req: FastifyRequest<{ Querystring: RadarQue
     const archetype     = ctx.archetype;
     const followerRange = ctx.followerRange;
 
-    const data = await radarService.generateInspiration({ niche, platform, archetype, followerRange });
+    let data: any;
+    try {
+      data = await radarService.generateInspiration({ niche, platform, archetype, followerRange });
+    } catch (e) {
+      logger.warn({ e }, "Groq inspiration failed");
+      data = { ideas: [] };
+    }
     return success(reply, data);
   } catch (err) {
     logger.error({ err, userId: user.id }, 'getInspiration failed');

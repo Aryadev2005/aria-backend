@@ -26,10 +26,16 @@ export const getSongs = async (
     let songs: any[] | null = await cache.get(cacheKey);
 
     if (!songs) {
-      const result: any = await groqService.generateSongInsights({
-        niche,
-        platform: "instagram",
-      });
+      let result: any;
+      try {
+        result = await groqService.generateSongInsights({
+          niche,
+          platform: "instagram",
+        });
+      } catch (e) {
+        logger.warn({ e }, "Groq song insights failed");
+        result = { songs: [] };
+      }
       songs = result.songs || result;
       if (songs) {
         await cache.set(cacheKey, songs, TTL.SONG);
@@ -65,10 +71,16 @@ export const getTop10 = async (
     let songs: any[] | null = await cache.get(cacheKey);
 
     if (!songs) {
-      const result: any = await groqService.generateSongInsights({
-        niche,
-        platform: "instagram",
-      });
+      let result: any;
+      try {
+        result = await groqService.generateSongInsights({
+          niche,
+          platform: "instagram",
+        });
+      } catch (e) {
+        logger.warn({ e }, "Groq top10 songs failed");
+        result = { songs: [] };
+      }
       songs = result.songs || result;
       if (songs) {
         await cache.set(cacheKey, songs, TTL.SONG);
@@ -107,10 +119,16 @@ export const predictTrendingSongs = async (
 ) => {
   try {
     const user = req.user as User;
-    const result: any = await groqService.generateSongInsights({
-      niche: user.niches?.[0] || "fashion",
-      platform: user.primary_platform || "instagram",
-    });
+    let result: any;
+    try {
+      result = await groqService.generateSongInsights({
+        niche: user.niches?.[0] || "fashion",
+        platform: user.primary_platform || "instagram",
+      });
+    } catch (e) {
+      logger.warn({ e }, "Groq predict songs failed");
+      result = { songs: [] };
+    }
 
     const songs = result.songs || result;
     const predictions = (songs || [])

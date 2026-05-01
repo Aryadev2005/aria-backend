@@ -1,13 +1,10 @@
 import 'dotenv/config'
-import path from 'path'
 
 import { buildApp } from './app'
 import { logger } from './utils/logger'
 import { connectDB } from './config/database'
 import { connectRedis } from './config/redis'
 import { initFirebase } from './config/firebase'
-import { initQueues, scheduleRecurringJobs, cleanupQueues } from './config/queue'
-import { startAllWorkers, stopAllWorkers } from './workers'
 import { FastifyInstance } from 'fastify'
 
 const PORT = parseInt(process.env.PORT || '3000', 10)
@@ -24,8 +21,6 @@ const withTimeout = <T>(promise: Promise<T>, ms: number, label: string): Promise
 const shutdown = async (app: FastifyInstance, signal: string) => {
   logger.info({ signal }, 'Shutdown signal received')
   try {
-    await stopAllWorkers()
-    await cleanupQueues()
     await app.close()
     logger.info('Server closed cleanly')
     process.exit(0)
@@ -36,7 +31,7 @@ const shutdown = async (app: FastifyInstance, signal: string) => {
 }
 
 const start = async () => {
-  // 1. Firebase — synchronous init, non-fatal
+  // 1. Firebase — synchronous, non-fatal
   try {
     initFirebase()
     logger.info('Firebase Admin initialized')
@@ -44,7 +39,7 @@ const start = async () => {
     logger.warn({ err: (err as Error).message }, 'Firebase init failed — auth will retry on first request')
   }
 
-  // 2. PostgreSQL — fatal if unavailable
+  // 2. PostgreSQL — fatal
   try {
     await withTimeout(connectDB(), 5000, 'PostgreSQL')
     logger.info('PostgreSQL connected')
@@ -53,7 +48,7 @@ const start = async () => {
     process.exit(1)
   }
 
-  // 3. Redis — fatal if unavailable
+  // 3. Redis — fatal
   try {
     await withTimeout(connectRedis(), 5000, 'Redis')
     logger.info('Redis connected')
@@ -62,28 +57,7 @@ const start = async () => {
     process.exit(1)
   }
 
-  // 4. Queue init — non-fatal (setInterval-based, always fast)
-  try {
-    await withTimeout(Promise.resolve(initQueues()), 3000, 'Queue init')
-  } catch (err) {
-    logger.warn({ err: (err as Error).message }, 'Queue init failed — continuing without scheduled jobs')
-  }
-
-  // 5. Schedule recurring jobs — non-fatal
-  try {
-    await withTimeout(scheduleRecurringJobs(), 3000, 'scheduleRecurringJobs')
-  } catch (err) {
-    logger.warn({ err: (err as Error).message }, 'Job scheduling failed — continuing without recurring jobs')
-  }
-
-  // 6. Workers — non-fatal
-  try {
-    await withTimeout(startAllWorkers(), 3000, 'startAllWorkers')
-  } catch (err) {
-    logger.warn({ err: (err as Error).message }, 'Worker startup failed — continuing without workers')
-  }
-
-  // 7. Build and start Fastify
+  // 4. Build Fastify app
   let app: FastifyInstance
   try {
     app = await buildApp()
@@ -92,21 +66,20 @@ const start = async () => {
     process.exit(1)
   }
 
+  // 5. Health check is handled in app.ts
+
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGUSR2']) {
     process.once(signal, () => shutdown(app, signal))
   }
 
   await app.listen({ port: PORT, host: HOST })
 
-  logger.info({
-    port: PORT,
-    env:  process.env.NODE_ENV,
-    pid:  process.pid,
-  }, 'TrendAI Backend is live')
+  logger.info({ port: PORT, env: process.env.NODE_ENV, pid: process.pid }, 'ARIA Backend is live')
 }
 
-process.on('unhandledRejection', (reason, promise) => {
-  logger.error({ reason, promise }, 'Unhandled Rejection')
+process.on('unhandledRejection', (reason) => {
+  logger.error({ reason }, 'Unhandled Rejection — exiting')
+  process.exit(1)
 })
 
 process.on('uncaughtException', (err) => {

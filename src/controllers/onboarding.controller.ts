@@ -7,7 +7,6 @@ import * as groqService from "../services/ai/groq.service";
 import * as scraperService from "../services/scraper.service";
 import axios from "axios";
 import { User } from "../types";
-import { enqueueScrapeJob } from "../config/queue";
 
 export interface ConnectHandleBody {
   handle: string;
@@ -25,10 +24,7 @@ export const connectHandle = async (
   const { handle, platform } = req.body;
 
   try {
-    logger.info(
-      { userId: user.id, handle, platform },
-      "Onboarding: handle connect started",
-    );
+    logger.info({ userId: user.id, handle, platform }, "Onboarding: handle connect started");
 
     let scrapedData: any = null;
     let scrapeError: string | null = null;
@@ -36,17 +32,10 @@ export const connectHandle = async (
     // ── Scrape account ────────────────────────────────────────────────────
     if (platform === "instagram") {
       try {
-        scrapedData = await scraperService.scrapeAndSaveProfile(
-          user.id,
-          handle,
-          platform,
-        );
+        scrapedData = await scraperService.scrapeAndSaveProfile(user.id, handle, platform);
       } catch (err: any) {
         scrapeError = err.message;
-        logger.warn(
-          { err: err.message, handle },
-          "Instagram scrape failed — using handle only",
-        );
+        logger.warn({ err: err.message, handle }, "Instagram scrape failed — using handle only");
       }
     }
 
@@ -55,29 +44,19 @@ export const connectHandle = async (
         scrapedData = await scrapeYouTubePublic(handle);
       } catch (err: any) {
         scrapeError = err.message;
-        logger.warn(
-          { err: err.message, handle },
-          "YouTube scrape failed — using handle only",
-        );
+        logger.warn({ err: err.message, handle }, "YouTube scrape failed — using handle only");
       }
     }
 
-    // ── Build ARIA analysis prompt with whatever data we have ─────────────
-    const ariaAnalysis = await generateARIAProfileSummary({
-      handle,
-      platform,
-      scrapedData,
-      userId: user.id,
-    });
+    // ── ARIA analysis ─────────────────────────────────────────────────────
+    const ariaAnalysis = await generateARIAProfileSummary({ handle, platform, scrapedData });
 
-    // ── Save handle + analysis to DB ──────────────────────────────────────
+    // ── Save to DB ────────────────────────────────────────────────────────
     await (prisma.users as any).update({
       where: { id: user.id },
       data: {
-        instagram_handle:
-          platform === "instagram" ? handle : user.instagram_handle || null,
-        youtube_handle:
-          platform === "youtube" ? handle : user.youtube_handle || null,
+        instagram_handle: platform === "instagram" ? handle : user.instagram_handle || null,
+        youtube_handle: platform === "youtube" ? handle : user.youtube_handle || null,
         archetype: ariaAnalysis.archetype,
         niches: ariaAnalysis.detectedNiches,
         aria_profile: ariaAnalysis,
@@ -86,17 +65,7 @@ export const connectHandle = async (
       },
     });
 
-    // Invalidate cache
     await cache.del(CacheKeys.user(user.id));
-
-    // Trigger full background scrape if not already done successfully
-    if (!scrapedData) {
-      try {
-        await enqueueScrapeJob(user.id, handle, platform);
-      } catch (qErr) {
-        logger.warn({ qErr }, "Failed to enqueue background scrape");
-      }
-    }
 
     return success(reply, {
       ariaAnalysis,
@@ -132,11 +101,9 @@ export const finaliseNiche = async (
   reply: FastifyReply,
 ) => {
   const user = req.user as User;
-  const { confirmedNiches, confirmedArchetype, platform, followerRange } =
-    req.body;
+  const { confirmedNiches, confirmedArchetype, platform, followerRange } = req.body;
 
   try {
-    // Update user profile with confirmed niche
     await (prisma.users as any).update({
       where: { id: user.id },
       data: {
@@ -151,14 +118,7 @@ export const finaliseNiche = async (
     await cache.del(CacheKeys.user(user.id));
     await cache.del(CacheKeys.dashboard(user.id));
 
-    logger.info(
-      {
-        userId: user.id,
-        niches: confirmedNiches,
-        archetype: confirmedArchetype,
-      },
-      "Onboarding: niche finalised",
-    );
+    logger.info({ userId: user.id, niches: confirmedNiches, archetype: confirmedArchetype }, "Onboarding: niche finalised");
 
     return success(reply, {
       message: "Niche locked. ARIA is ready.",
@@ -209,65 +169,32 @@ export const getStatus = async (req: FastifyRequest, reply: FastifyReply) => {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
-/**
- * Scrape YouTube public channel data via YouTube Data API
- */
 async function scrapeYouTubePublic(handle: string) {
   const apiKey = process.env.YOUTUBE_API_KEY;
   if (!apiKey) throw new Error("YOUTUBE_API_KEY not set");
 
-  // Search for channel by handle
-  const searchRes = await axios.get(
-    "https://www.googleapis.com/youtube/v3/search",
-    {
-      params: {
-        part: "snippet",
-        q: handle,
-        type: "channel",
-        maxResults: 1,
-        key: apiKey,
-      },
-      timeout: 10000,
-    },
-  );
+  const searchRes = await axios.get("https://www.googleapis.com/youtube/v3/search", {
+    params: { part: "snippet", q: handle, type: "channel", maxResults: 1, key: apiKey },
+    timeout: 10000,
+  });
 
   const channelId = searchRes.data?.items?.[0]?.id?.channelId;
-  if (!channelId)
-    throw new Error(`YouTube channel not found for handle: ${handle}`);
+  if (!channelId) throw new Error(`YouTube channel not found for handle: ${handle}`);
 
-  // Get channel stats
-  const statsRes = await axios.get(
-    "https://www.googleapis.com/youtube/v3/channels",
-    {
-      params: {
-        part: "statistics,snippet,contentDetails",
-        id: channelId,
-        key: apiKey,
-      },
-      timeout: 10000,
-    },
-  );
+  const statsRes = await axios.get("https://www.googleapis.com/youtube/v3/channels", {
+    params: { part: "statistics,snippet,contentDetails", id: channelId, key: apiKey },
+    timeout: 10000,
+  });
 
   const channel = statsRes.data?.items?.[0];
   if (!channel) throw new Error("Could not fetch channel stats");
 
   const stats = channel.statistics || {};
 
-  // Get recent videos
-  const videosRes = await axios.get(
-    "https://www.googleapis.com/youtube/v3/search",
-    {
-      params: {
-        part: "snippet",
-        channelId,
-        order: "date",
-        maxResults: 10,
-        type: "video",
-        key: apiKey,
-      },
-      timeout: 10000,
-    },
-  );
+  const videosRes = await axios.get("https://www.googleapis.com/youtube/v3/search", {
+    params: { part: "snippet", channelId, order: "date", maxResults: 10, type: "video", key: apiKey },
+    timeout: 10000,
+  });
 
   const recentVideos = (videosRes.data?.items || []).map((v: any) => ({
     title: v.snippet?.title || "",
@@ -282,7 +209,7 @@ async function scrapeYouTubePublic(handle: string) {
     followers: subscriberCount,
     follower_count: subscriberCount,
     engagement_rate:
-      videoCount > 0
+      videoCount > 0 && subscriberCount > 0
         ? ((viewCount / videoCount / subscriberCount) * 100).toFixed(2)
         : "0",
     channel_name: channel.snippet?.title || handle,
@@ -298,35 +225,24 @@ async function scrapeYouTubePublic(handle: string) {
   };
 }
 
-/**
- * ARIA profile summary — the core intelligence generation
- */
-async function generateARIAProfileSummary({
-  handle,
-  platform,
-  scrapedData,
-}: any) {
+async function generateARIAProfileSummary({ handle, platform, scrapedData }: {
+  handle: string;
+  platform: string;
+  scrapedData: any;
+}) {
   const followers = scrapedData?.followers || scrapedData?.follower_count || 0;
   const engagement = scrapedData?.engagement_rate || "0";
-  const topPosts =
-    scrapedData?.scraped_summary?.topPosts ||
-    scrapedData?.scraped_summary?.topHashtags ||
-    [];
+  const topPosts = scrapedData?.scraped_summary?.topPosts || scrapedData?.scraped_summary?.topHashtags || [];
   const postCount = scrapedData?.scraped_summary?.totalPostsAnalyzed || 0;
   const recentVideos = scrapedData?.recent_videos || [];
 
   const followerRange =
-    followers > 500000
-      ? "500K+"
-      : followers > 100000
-        ? "100K–500K"
-        : followers > 50000
-          ? "50K–100K"
-          : followers > 10000
-            ? "10K–50K"
-            : followers > 1000
-              ? "1K–10K"
-              : "Under 1K";
+    followers > 500000 ? "500K+"
+    : followers > 100000 ? "100K–500K"
+    : followers > 50000 ? "50K–100K"
+    : followers > 10000 ? "10K–50K"
+    : followers > 1000 ? "1K–10K"
+    : "Under 1K";
 
   const prompt = `You are ARIA — India's creator intelligence engine.
 
@@ -338,14 +254,7 @@ Followers: ${followers.toLocaleString("en-IN")} (${followerRange})
 Engagement Rate: ${engagement}%
 Posts/Videos Analyzed: ${postCount}
 ${topPosts.length > 0 ? `Top content: ${topPosts.slice(0, 5).join(", ")}` : ""}
-${
-  recentVideos.length > 0
-    ? `Recent videos: ${recentVideos
-        .slice(0, 5)
-        .map((v: any) => v.title)
-        .join(", ")}`
-    : ""
-}
+${recentVideos.length > 0 ? `Recent videos: ${recentVideos.slice(0, 5).map((v: any) => v.title).join(", ")}` : ""}
 
 Detect the creator's PRIMARY niche (1-2 max), archetype, and generate a full ARIA intelligence brief.
 
@@ -359,14 +268,8 @@ Respond ONLY with valid JSON:
   "followerRange": "${followerRange}",
   "healthScore": 72,
   "growthStage": "DISCOVERY|GROWTH|MONETIZATION|SCALE",
-  "strengths": [
-    "Specific strength based on the data",
-    "Another specific strength"
-  ],
-  "gaps": [
-    "Specific gap ARIA detected",
-    "Another gap"
-  ],
+  "strengths": ["Specific strength based on the data", "Another specific strength"],
+  "gaps": ["Specific gap ARIA detected", "Another gap"],
   "topOpportunity": "One sentence — the single biggest opportunity for this creator right now",
   "contentInsights": {
     "bestFormat": "Reels|Shorts|Carousel",
@@ -383,13 +286,9 @@ Respond ONLY with valid JSON:
 }`;
 
   try {
-    return await groqService._callGroq(prompt, {
-      useLlama: true,
-      maxTokens: 1200,
-    });
+    return await groqService._callGroq(prompt, { useLlama: true, maxTokens: 1200 });
   } catch (err) {
     logger.error({ err }, "ARIA profile summary generation failed");
-    // Return sensible defaults so onboarding never breaks
     return {
       archetype: "EDUCATOR",
       archetypeLabel: "The Creator",

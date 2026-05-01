@@ -1,4 +1,4 @@
-import * as admin from 'firebase-admin'
+import admin from 'firebase-admin'
 import { logger } from '../utils/logger'
 
 let firebaseApp: admin.app.App | null = null
@@ -10,8 +10,8 @@ export const initFirebase = () => {
   try {
     firebaseApp = admin.initializeApp({
       credential: admin.credential.cert({
-        projectId:   process.env.FIREBASE_PROJECT_ID,
-        privateKey:  process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+        projectId: process.env.FIREBASE_PROJECT_ID,
+        privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
         clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
       }),
       storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
@@ -28,9 +28,9 @@ export const verifyFirebaseToken = async (idToken: string) => {
   try {
     const decoded = await admin.auth().verifyIdToken(idToken)
     return {
-      uid:     decoded.uid,
-      email:   decoded.email,
-      name:    decoded.name || decoded.email?.split('@')[0],
+      uid: decoded.uid,
+      email: decoded.email,
+      name: decoded.name || decoded.email?.split('@')[0],
       picture: decoded.picture,
     }
   } catch {

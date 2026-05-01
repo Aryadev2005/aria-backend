@@ -1,5 +1,6 @@
 import { FastifyRequest, FastifyReply } from "fastify";
 import * as groqService from "../services/ai/groq.service";
+import * as scraperService from "../services/scraper.service";
 import { cache, CacheKeys, TTL } from "../config/redis";
 import { prisma } from "../config/database";
 import { success, errors } from "../utils/response";
@@ -9,10 +10,7 @@ import { User } from "../types";
 /**
  * Get main analytics dashboard with ARIA persona growth map
  */
-export const getDashboard = async (
-  req: FastifyRequest,
-  reply: FastifyReply,
-) => {
+export const getDashboard = async (req: FastifyRequest, reply: FastifyReply) => {
   const user = req.user as User;
 
   try {
@@ -21,17 +19,27 @@ export const getDashboard = async (
     const dashboard = await cache.getOrSet(
       cacheKey,
       async () => {
-        // If archetype not yet detected, run detection first
         if (!user.archetype) {
-          const archetypeResult = await groqService.detectArchetype({
-            niche: user.niches?.[0] || "fashion",
-            platform: user.primary_platform || "instagram",
-            followerRange: user.follower_range || "0-1K",
-            creatorIntent: user.creator_intent || "general",
-            scrapedData: user.scraped_summary,
-          });
+          let archetypeResult: any;
+          try {
+            archetypeResult = await groqService.detectArchetype({
+              niche: user.niches?.[0] || "fashion",
+              platform: user.primary_platform || "instagram",
+              followerRange: user.follower_range || "0-1K",
+              creatorIntent: user.creator_intent || "general",
+              scrapedData: user.scraped_summary,
+            });
+          } catch (e) {
+            logger.warn({ e }, "Groq detectArchetype failed");
+            archetypeResult = {
+              archetype: "GENERAL",
+              archetypeLabel: "Creator",
+              archetypeConfidence: 0,
+              growthStage: "UNKNOWN",
+              toneProfile: "casual",
+            };
+          }
 
-          // Save archetype to DB async
           prisma.users
             .update({
               where: { id: user.id },
@@ -50,15 +58,23 @@ export const getDashboard = async (
           user.tone_profile = archetypeResult.toneProfile;
         }
 
-        // Run full persona growth map
-        return groqService.fullPersonaGrowthMap({
-          niche: user.niches?.[0] || "fashion",
-          platform: user.primary_platform || "instagram",
-          followerRange: user.follower_range || "0-1K",
-          creatorIntent: user.creator_intent || "general",
-          scrapedData: user.scraped_summary,
-          engagementRate: user.engagement_rate || 0,
-        });
+        try {
+          return await groqService.fullPersonaGrowthMap({
+            niche: user.niches?.[0] || "fashion",
+            platform: user.primary_platform || "instagram",
+            followerRange: user.follower_range || "0-1K",
+            creatorIntent: user.creator_intent || "general",
+            scrapedData: user.scraped_summary,
+            engagementRate: user.engagement_rate || 0,
+          });
+        } catch (e) {
+          logger.warn({ e }, "Groq fullPersonaGrowthMap failed");
+          return {
+            personaSummary: "Data currently unavailable",
+            growthStage: "UNKNOWN",
+            currentHealthScore: 0,
+          };
+        }
       },
       TTL.DASHBOARD,
     );
@@ -71,41 +87,51 @@ export const getDashboard = async (
 };
 
 /**
- * Get growth predictions and milestones
+ * Get growth predictions and milestones — AI generated
  */
-export const getGrowthPrediction = async (
-  req: FastifyRequest,
-  reply: FastifyReply,
-) => {
+export const getGrowthPrediction = async (req: FastifyRequest, reply: FastifyReply) => {
+  const user = req.user as User;
+
   try {
-    const prediction = {
-      currentFollowers: 24500,
-      predictedIn30Days: 27800,
-      predictedIn90Days: 35200,
-      daysTo10K: null,
-      daysTo50K: 67,
-      daysTo100K: 198,
-      growthRate: "+2.4% weekly",
-      recommendation:
-        "Posting 5x/week instead of 3x would cut your time to 50K by 40%",
-      milestones: [
-        {
-          target: 25000,
-          eta: "8 days",
-          reward: "Unlock Instagram Close Friends monetisation",
-        },
-        {
-          target: 50000,
-          eta: "67 days",
-          reward: "Brand deal rates increase 3x",
-        },
-        {
-          target: 100000,
-          eta: "198 days",
-          reward: "Meta Creator Fund eligibility",
-        },
-      ],
-    };
+    const cacheKey = `growth:${user.id}`;
+
+    const prediction = await cache.getOrSet(
+      cacheKey,
+      async () => {
+        const prompt = `You are ARIA — India's creator intelligence engine.
+
+Creator profile:
+- Niche: ${user.niches?.[0] || "general"}
+- Platform: ${user.primary_platform || "instagram"}
+- Followers: ${user.follower_range || "Under 1K"}
+- Engagement rate: ${user.engagement_rate || 0}%
+- Archetype: ${user.archetype || "CREATOR"}
+- Growth stage: ${user.growth_stage || "DISCOVERY"}
+
+Generate realistic growth predictions for this Indian creator.
+
+Respond ONLY with valid JSON:
+{
+  "currentFollowers": 0,
+  "predictedIn30Days": 0,
+  "predictedIn90Days": 0,
+  "daysTo10K": null,
+  "daysTo50K": null,
+  "daysTo100K": null,
+  "growthRate": "+X% weekly",
+  "recommendation": "One actionable recommendation to accelerate growth",
+  "milestones": [
+    { "target": 10000, "eta": "X days", "reward": "What unlocks at this milestone in India" },
+    { "target": 50000, "eta": "X days", "reward": "What unlocks at this milestone" },
+    { "target": 100000, "eta": "X days", "reward": "What unlocks at this milestone" }
+  ]
+}`;
+
+        return await groqService._callGroq(prompt, { useLlama: false, maxTokens: 600 });
+      },
+      TTL.DASHBOARD,
+    );
+
     return success(reply, prediction);
   } catch (err) {
     logger.error({ err }, "Growth prediction failed");
@@ -114,28 +140,49 @@ export const getGrowthPrediction = async (
 };
 
 /**
- * Get optimal posting times
+ * Get optimal posting times — AI generated based on niche + platform
  */
-export const getBestPostingTimes = async (
-  req: FastifyRequest,
-  reply: FastifyReply,
-) => {
+export const getBestPostingTimes = async (req: FastifyRequest, reply: FastifyReply) => {
+  const user = req.user as User;
+
   try {
-    const times = {
-      instagram: {
-        monday: ["7:00 PM", "9:00 AM"],
-        tuesday: ["8:00 PM", "12:00 PM"],
-        wednesday: ["7:00 PM", "6:00 PM"],
-        thursday: ["7:00 PM", "9:00 PM"],
-        friday: ["6:00 PM", "8:00 PM"],
-        saturday: ["11:00 AM", "7:00 PM"],
-        sunday: ["10:00 AM", "6:00 PM"],
+    const cacheKey = `best-times:${user.id}`;
+
+    const times = await cache.getOrSet(
+      cacheKey,
+      async () => {
+        const prompt = `You are ARIA — India's creator intelligence engine.
+
+Creator:
+- Niche: ${user.niches?.[0] || "general"}
+- Platform: ${user.primary_platform || "instagram"}
+- Followers: ${user.follower_range || "Under 1K"}
+- Location: India (IST timezone)
+
+Generate the best posting times for this creator based on Indian audience behaviour.
+
+Respond ONLY with valid JSON:
+{
+  "instagram": {
+    "monday": ["7:00 PM", "9:00 AM"],
+    "tuesday": ["8:00 PM", "12:00 PM"],
+    "wednesday": ["7:00 PM", "6:00 PM"],
+    "thursday": ["7:00 PM", "9:00 PM"],
+    "friday": ["6:00 PM", "8:00 PM"],
+    "saturday": ["11:00 AM", "7:00 PM"],
+    "sunday": ["10:00 AM", "6:00 PM"]
+  },
+  "bestDay": "Wednesday",
+  "bestTime": "7:00 PM IST",
+  "timezone": "Asia/Kolkata",
+  "note": "One sentence explaining why these times work for this niche in India"
+}`;
+
+        return await groqService._callGroq(prompt, { useLlama: false, maxTokens: 400 });
       },
-      bestDay: "Wednesday",
-      bestTime: "7:00 PM IST",
-      timezone: "Asia/Kolkata",
-      note: "Based on your audience demographics in India",
-    };
+      TTL.DASHBOARD,
+    );
+
     return success(reply, times);
   } catch (err) {
     logger.error({ err }, "Best times failed");
@@ -144,35 +191,48 @@ export const getBestPostingTimes = async (
 };
 
 /**
- * Get insights about competitors
+ * Get competitor insights — AI generated
  */
-export const getCompetitorInsights = async (
-  req: FastifyRequest,
-  reply: FastifyReply,
-) => {
+export const getCompetitorInsights = async (req: FastifyRequest, reply: FastifyReply) => {
+  const user = req.user as User;
+
   try {
-    const insights = {
-      competitors: [
-        {
-          handle: "@fashionwithpriya",
-          followers: 45000,
-          engagement: 3.2,
-          postsPerWeek: 5,
-          topFormat: "Reels",
-          gap: "Not posting about quiet luxury — opportunity for you",
-        },
-        {
-          handle: "@stylebyriya",
-          followers: 89000,
-          engagement: 2.1,
-          postsPerWeek: 7,
-          topFormat: "Carousels",
-          gap: "Low engagement on weekend posts — avoid their Saturday slot",
-        },
-      ],
-      yourAdvantage:
-        "Your engagement rate (4.8%) beats 73% of creators in your niche",
-    };
+    const cacheKey = `competitors:${user.id}`;
+
+    const insights = await cache.getOrSet(
+      cacheKey,
+      async () => {
+        const prompt = `You are ARIA — India's creator intelligence engine.
+
+Creator:
+- Niche: ${user.niches?.[0] || "general"}
+- Platform: ${user.primary_platform || "instagram"}
+- Followers: ${user.follower_range || "Under 1K"}
+- Engagement rate: ${user.engagement_rate || 0}%
+
+Generate realistic competitor analysis for Indian creators in this niche.
+Use plausible Indian creator handles (do not use real people).
+
+Respond ONLY with valid JSON:
+{
+  "competitors": [
+    {
+      "handle": "@handle",
+      "followers": 0,
+      "engagement": 0.0,
+      "postsPerWeek": 0,
+      "topFormat": "Reels|Carousels|Shorts",
+      "gap": "Specific gap this creator is missing that you can fill"
+    }
+  ],
+  "yourAdvantage": "One sentence about what gives this creator an edge over competitors"
+}`;
+
+        return await groqService._callGroq(prompt, { useLlama: false, maxTokens: 500 });
+      },
+      TTL.DASHBOARD,
+    );
+
     return success(reply, insights);
   } catch (err) {
     logger.error({ err }, "Competitor insights failed");
@@ -181,34 +241,55 @@ export const getCompetitorInsights = async (
 };
 
 /**
- * Get weekly performance report
+ * Get weekly performance report — AI generated
  */
-export const getWeeklyReport = async (
-  req: FastifyRequest,
-  reply: FastifyReply,
-) => {
+export const getWeeklyReport = async (req: FastifyRequest, reply: FastifyReply) => {
+  const user = req.user as User;
+
   try {
-    const report = {
-      week: "April 21–27, 2026",
-      summary: "Your best week in 3 months",
-      highlights: [
-        "Reached 24.5K followers (+580 this week)",
-        "Engagement rate up 0.6% from last week",
-        "Wednesday Reel hit 45K views — your best post",
-      ],
-      topPost: {
-        caption: "Quiet luxury look for ₹2,000...",
-        views: 45000,
-        likes: 2100,
-        saves: 890,
-        comments: 142,
+    const cacheKey = `weekly-report:${user.id}`;
+
+    const report = await cache.getOrSet(
+      cacheKey,
+      async () => {
+        const prompt = `You are ARIA — India's creator intelligence engine.
+
+Creator:
+- Niche: ${user.niches?.[0] || "general"}
+- Platform: ${user.primary_platform || "instagram"}
+- Followers: ${user.follower_range || "Under 1K"}
+- Archetype: ${user.archetype || "CREATOR"}
+
+Generate a motivating weekly performance summary and next-week plan for this Indian creator.
+
+Respond ONLY with valid JSON:
+{
+  "week": "current week date range",
+  "summary": "One sentence headline about this week",
+  "highlights": [
+    "Specific highlight 1",
+    "Specific highlight 2",
+    "Specific highlight 3"
+  ],
+  "topPost": {
+    "caption": "Example top post caption relevant to their niche",
+    "views": 0,
+    "likes": 0,
+    "saves": 0,
+    "comments": 0
+  },
+  "nextWeekPlan": [
+    "Specific action 1 with day and time in IST",
+    "Specific action 2 referencing Indian trends",
+    "Specific action 3 with format recommendation"
+  ]
+}`;
+
+        return await groqService._callGroq(prompt, { useLlama: false, maxTokens: 600 });
       },
-      nextWeekPlan: [
-        "Post capsule wardrobe Reel on Wednesday 7PM",
-        "Use trending song: Phir Aur Kya Chahiye",
-        "Try carousel format for budget outfit breakdown",
-      ],
-    };
+      TTL.DASHBOARD,
+    );
+
     return success(reply, report);
   } catch (err) {
     logger.error({ err }, "Weekly report failed");
@@ -219,13 +300,10 @@ export const getWeeklyReport = async (
 /**
  * Get detected creator archetype
  */
-export const getArchetype = async (
-  req: FastifyRequest,
-  reply: FastifyReply,
-) => {
+export const getArchetype = async (req: FastifyRequest, reply: FastifyReply) => {
   const user = req.user as User;
+
   try {
-    // If archetype not in session, fetch from DB
     if (!user.archetype) {
       const dbUser = await prisma.users.findUnique({
         where: { id: user.id },
@@ -240,11 +318,9 @@ export const getArchetype = async (
       });
 
       if (!dbUser?.archetype) {
-        // Trigger detection if not available
         return reply.status(202).send({
           status: "analyzing",
-          message:
-            "ARIA is detecting your archetype. Check back in 30 seconds.",
+          message: "ARIA is detecting your archetype. Check back in 30 seconds.",
         });
       }
 
@@ -272,7 +348,7 @@ export const getArchetype = async (
 };
 
 /**
- * Trigger background scrape for a handle
+ * Trigger scrape for a handle — runs inline, no queue
  */
 export interface TriggerScrapeBody {
   handle: string;
@@ -285,37 +361,36 @@ export const triggerScrape = async (
 ) => {
   const { handle, platform } = req.body;
   const user = req.user as User;
+
   try {
-    // Validate handle format
-    if (!handle || !handle.trim()) {
+    if (!handle?.trim()) {
       return errors.badRequest(reply, "Handle cannot be empty");
     }
 
-    // Save handle and trigger background scrape
-    const updateData: Record<string, any> = {
-      scraped_at: null,
-    };
-
-    if (platform === "instagram") {
-      updateData.instagram_handle = handle;
-    }
-    if (platform === "youtube") {
-      updateData.youtube_handle = handle;
-    }
-
+    // Save handle to DB first
     await prisma.users.update({
       where: { id: user.id },
-      data: updateData,
+      data: {
+        ...(platform === "instagram" && { instagram_handle: handle }),
+        ...(platform === "youtube" && { youtube_handle: handle }),
+        scraped_at: null,
+      },
     });
 
-    // Import queue config dynamically or via top-level import if converted
-    const { enqueueScrapeJob } = await import("../config/queue");
-    const jobId = await enqueueScrapeJob(user.id, handle, platform);
+    // Run scrape inline — fire-and-forget so response is immediate
+    scraperService
+      .scrapeAndSaveProfile(user.id, handle, platform)
+      .then(() => {
+        logger.info({ userId: user.id, handle, platform }, "Background scrape complete");
+        // Bust dashboard cache so next load gets fresh data
+        cache.del(CacheKeys.dashboard(user.id)).catch(() => {});
+        cache.del(CacheKeys.user(user.id)).catch(() => {});
+      })
+      .catch((err) => logger.warn({ err, handle }, "Background scrape failed"));
 
     return reply.status(202).send({
-      status: "queued",
-      message: `Scraping ${platform} handle @${handle}. Analysis will be ready in 2-3 minutes.`,
-      jobId,
+      status: "scraping",
+      message: `Scraping ${platform} handle @${handle}. Analysis will be ready in 2–3 minutes.`,
       handle,
       platform,
     });
