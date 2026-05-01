@@ -59,8 +59,6 @@ export const chat = async (
         scraped_summary: true,
         instagram_handle: true,
         youtube_handle: true,
-        instagram_access_token: true,
-        instagram_user_id: true,
       },
     });
 
@@ -187,8 +185,6 @@ export const chatStream = async (
       follower_range: true,
       engagement_rate: true,
       health_score: true,
-      instagram_access_token: true,
-      instagram_user_id: true,
     },
   });
 

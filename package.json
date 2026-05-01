@@ -13,7 +13,8 @@
     "start": "node dist/server.js",
     "dev": "nodemon --watch src --ext js,json,ts --ignore 'src/**/*.test.js' --ignore 'src/**/*.test.ts' --exec tsx src/server.ts",
     "worker:all": "tsx src/workers/index.ts",
-    "build": "tsc"
+    "build": "tsc",
+    "mcp:health": "tsx src/agent/mcp_health_check.ts"
   },
   "keywords": [],
   "author": "",
@@ -29,6 +30,7 @@
     "@langchain/core": "^1.1.42",
     "@langchain/groq": "^1.2.0",
     "@langchain/langgraph-checkpoint-postgres": "^1.0.1",
+    "@modelcontextprotocol/sdk": "^1.0.0",
     "@prisma/adapter-pg": "^7.8.0",
     "@prisma/client": "^7.8.0",
     "@types/pg": "^8.20.0",
@@ -38,6 +40,7 @@
     "date-fns": "^4.1.0",
     "dotenv": "^17.4.2",
     "fastify": "^5.8.5",
+    "firebase": "^12.12.1",
     "firebase-admin": "^13.8.0",
     "fluent-ffmpeg": "^2.1.3",
     "google-trends-api": "^4.9.2",

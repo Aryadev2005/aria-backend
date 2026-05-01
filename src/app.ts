@@ -65,9 +65,21 @@ export const buildApp = async (): Promise<FastifyInstance> => {
     crossOriginEmbedderPolicy: false,
   });
 
+  const allowedOrigins = (process.env.ALLOWED_ORIGINS?.split(",") || [])
+    .map((origin) => origin.trim())
+    .filter(Boolean)
+    .concat(["http://localhost:5500", "http://127.0.0.1:5500"]);
+  const allowAllOrigins = allowedOrigins.includes("*");
+
   await app.register(cors, {
-    origin: process.env.ALLOWED_ORIGINS?.split(",") || "*",
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+    origin: (origin, cb) => {
+      if (!origin) return cb(null, true);
+      if (allowAllOrigins || allowedOrigins.includes(origin)) {
+        return cb(null, true);
+      }
+      return cb(new Error("CORS origin blocked"), false);
+    },
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization", "X-Request-ID"],
     credentials: true,
     maxAge: 86400,
@@ -100,6 +112,50 @@ export const buildApp = async (): Promise<FastifyInstance> => {
   });
 
   await app.register(sensible);
+
+  // ── Verbose logging ───────────────────────────────────────────────────────
+  app.addHook("onRequest", async (req, reply) => {
+    req.log.info(
+      {
+        reqId: req.id,
+        method: req.method,
+        url: req.url,
+        ip: req.ip,
+      },
+      "request started",
+    );
+  });
+
+  app.addHook("onResponse", async (req, reply) => {
+    const responseTime =
+      typeof (reply as any).getResponseTime === "function"
+        ? (reply as any).getResponseTime()
+        : (reply as any).elapsedTime;
+
+    req.log.info(
+      {
+        reqId: req.id,
+        method: req.method,
+        url: req.url,
+        statusCode: reply.statusCode,
+        responseTime,
+      },
+      "request completed",
+    );
+  });
+
+  app.addHook("onError", async (req, reply, err) => {
+    req.log.error(
+      {
+        reqId: req.id,
+        method: req.method,
+        url: req.url,
+        statusCode: reply.statusCode,
+        err,
+      },
+      "request error",
+    );
+  });
 
   // ── Health check ───────────────────────────────────────────────────────────
   app.get("/health", async () => {

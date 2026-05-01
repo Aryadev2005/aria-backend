@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Agentic Trace Console</title>
+    <style>
+      @import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,600&display=swap");
+
+      :root {
+        --bg: #0c1118;
+        --panel: #151c26;
+        --panel-2: #101722;
+        --ink: #e6edf6;
+        --muted: #95a6ba;
+        --accent: #ffb86b;
+        --accent-2: #5dd6ff;
+        --danger: #ff6b6b;
+        --line: #253142;
+        --success: #4cd29c;
+      }
+
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: "Manrope", system-ui, sans-serif;
+        background: radial-gradient(circle at top, #1a2330 0%, #0c1118 55%);
+        color: var(--ink);
+        min-height: 100vh;
+        padding: 28px 20px 50px;
+      }
+
+      .wrap {
+        max-width: 1200px;
+        margin: 0 auto;
+        display: grid;
+        gap: 16px;
+      }
+
+      header {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      h1 {
+        font-family: "Newsreader", serif;
+        font-size: 30px;
+        letter-spacing: 0.5px;
+      }
+
+      .sub {
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.5;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        gap: 16px;
+      }
+
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+
+      .card.alt {
+        background: var(--panel-2);
+      }
+
+      .card h3 {
+        font-size: 12px;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+
+      label {
+        font-size: 11px;
+        letter-spacing: 0.8px;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+
+      input,
+      textarea,
+      select {
+        width: 100%;
+        background: #0b1017;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 10px 12px;
+        color: var(--ink);
+        font-size: 13px;
+      }
+
+      textarea {
+        min-height: 90px;
+        resize: vertical;
+      }
+
+      button {
+        border: none;
+        border-radius: 10px;
+        padding: 10px 12px;
+        font-weight: 600;
+        font-size: 13px;
+        cursor: pointer;
+        color: #111;
+        background: linear-gradient(135deg, var(--accent), #ffd29b);
+        transition: transform 0.15s ease;
+      }
+
+      button.secondary {
+        background: linear-gradient(135deg, var(--accent-2), #9ae8ff);
+      }
+
+      button.ghost {
+        background: transparent;
+        border: 1px solid var(--line);
+        color: var(--muted);
+      }
+
+      button:active {
+        transform: translateY(1px);
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 10px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 600;
+        border: 1px solid var(--line);
+        color: var(--muted);
+      }
+
+      .pill.ok {
+        color: var(--success);
+        border-color: rgba(76, 210, 156, 0.4);
+      }
+
+      .pill.bad {
+        color: var(--danger);
+        border-color: rgba(255, 107, 107, 0.4);
+      }
+
+      .output {
+        background: #0b0f16;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 12px;
+        font-family: "Courier New", monospace;
+        font-size: 12px;
+        white-space: pre-wrap;
+        max-height: 320px;
+        overflow-y: auto;
+      }
+
+      .output.good {
+        border-color: rgba(76, 210, 156, 0.4);
+        color: #c7f7e2;
+      }
+
+      .output.bad {
+        border-color: rgba(255, 107, 107, 0.4);
+        color: #ffd1d1;
+      }
+
+      .trace-grid {
+        display: grid;
+        gap: 10px;
+      }
+
+      .trace-entry {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 10px;
+        background: #0f151f;
+      }
+
+      .trace-header {
+        display: flex;
+        justify-content: space-between;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .trace-body {
+        margin-top: 6px;
+        font-size: 12px;
+        white-space: pre-wrap;
+      }
+
+      .badge {
+        padding: 2px 6px;
+        border-radius: 6px;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.6px;
+        border: 1px solid var(--line);
+      }
+
+      .badge.tool {
+        color: var(--accent-2);
+        border-color: rgba(93, 214, 255, 0.4);
+      }
+
+      .badge.token {
+        color: var(--accent);
+        border-color: rgba(255, 184, 107, 0.4);
+      }
+
+      .badge.done {
+        color: var(--success);
+        border-color: rgba(76, 210, 156, 0.4);
+      }
+
+      .badge.error {
+        color: var(--danger);
+        border-color: rgba(255, 107, 107, 0.4);
+      }
+
+      @media (max-width: 820px) {
+        h1 {
+          font-size: 24px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <h1>Agentic Trace Console</h1>
+        <div class="sub">
+          Stream a full agent run and inspect tool calls, tokens, and final
+          output. Designed for the agentic route with detailed trace insights.
+        </div>
+      </header>
+
+      <section class="grid">
+        <div class="card">
+          <h3>Connection</h3>
+          <label>Backend URL</label>
+          <input id="backendUrl" value="http://localhost:3000" />
+          <label>Firebase Token (optional)</label>
+          <textarea id="firebaseToken" placeholder="Paste token"></textarea>
+          <div id="authStatus" class="pill">Not verified</div>
+          <button class="secondary" onclick="testConnection()">
+            Test /brain/greet
+          </button>
+        </div>
+
+        <div class="card">
+          <h3>Session</h3>
+          <label>Session ID</label>
+          <input id="sessionId" placeholder="session-" />
+          <label>Entry Screen</label>
+          <select id="entryScreen">
+            <option value="direct">direct</option>
+            <option value="discover">discover</option>
+            <option value="studio">studio</option>
+            <option value="launch">launch</option>
+            <option value="profile">profile</option>
+          </select>
+          <label>Context JSON (optional)</label>
+          <textarea
+            id="contextJson"
+            placeholder='{"platform":"instagram"}'
+          ></textarea>
+          <button onclick="generateSessionId()">Generate Session ID</button>
+        </div>
+
+        <div class="card alt">
+          <h3>Agentic Run</h3>
+          <label>Prompt</label>
+          <textarea id="agentPrompt">
+Analyze YouTube competitors for fitness creators and suggest 2 content ideas.</textarea
+          >
+          <button onclick="runAgenticTrace()">Run Agentic Trace</button>
+          <div id="agentOutput" class="output" style="display: none"></div>
+        </div>
+
+        <div class="card alt">
+          <h3>Trace Timeline</h3>
+          <div id="traceTimeline" class="trace-grid"></div>
+          <button class="ghost" onclick="clearTrace()">Clear Trace</button>
+        </div>
+      </section>
+    </div>
+
+    <script>
+      const API_V1_PREFIX = "/api/v1";
+      const traceTimeline = document.getElementById("traceTimeline");
+
+      function getBackendUrl() {
+        return document.getElementById("backendUrl").value.trim();
+      }
+
+      function getHeaders() {
+        const headers = { "Content-Type": "application/json" };
+        const token = document.getElementById("firebaseToken").value.trim();
+        if (token) headers.Authorization = `Bearer ${token}`;
+        return headers;
+      }
+
+      function getSessionId() {
+        const raw = document.getElementById("sessionId").value.trim();
+        return raw || `session-${Date.now()}`;
+      }
+
+      function generateSessionId() {
+        document.getElementById("sessionId").value = `session-${Date.now()}`;
+      }
+
+      function setAuthStatus(ok, text) {
+        const el = document.getElementById("authStatus");
+        el.textContent = text;
+        el.className = `pill ${ok ? "ok" : "bad"}`;
+      }
+
+      async function testConnection() {
+        try {
+          const url = `${getBackendUrl()}${API_V1_PREFIX}/brain/greet?sessionId=test`;
+          const response = await fetch(url, { headers: getHeaders() });
+          if (response.ok) {
+            setAuthStatus(true, "Connected");
+          } else {
+            setAuthStatus(false, "Auth failed");
+          }
+        } catch (err) {
+          setAuthStatus(false, "Connection error");
+        }
+      }
+
+      function showOutput(data, isError = false) {
+        const el = document.getElementById("agentOutput");
+        el.style.display = "block";
+        el.className = `output ${isError ? "bad" : "good"}`;
+        el.textContent =
+          typeof data === "string" ? data : JSON.stringify(data, null, 2);
+      }
+
+      function clearTrace() {
+        traceTimeline.innerHTML = "";
+      }
+
+      function addTraceEntry(type, payload) {
+        const card = document.createElement("div");
+        card.className = "trace-entry";
+
+        const header = document.createElement("div");
+        header.className = "trace-header";
+
+        const time = new Date().toLocaleTimeString();
+        const badge = document.createElement("span");
+        badge.className = `badge ${type}`;
+        badge.textContent = type;
+
+        const timestamp = document.createElement("span");
+        timestamp.textContent = time;
+
+        header.appendChild(badge);
+        header.appendChild(timestamp);
+
+        const body = document.createElement("div");
+        body.className = "trace-body";
+        body.textContent =
+          typeof payload === "string"
+            ? payload
+            : JSON.stringify(payload, null, 2);
+
+        card.appendChild(header);
+        card.appendChild(body);
+        traceTimeline.prepend(card);
+      }
+
+      async function runAgenticTrace() {
+        const prompt = document.getElementById("agentPrompt").value.trim();
+        if (!prompt) return showOutput("Missing prompt", true);
+
+        let context = null;
+        const rawContext = document.getElementById("contextJson").value.trim();
+        if (rawContext) {
+          try {
+            context = JSON.parse(rawContext);
+          } catch (err) {
+            return showOutput("Context JSON invalid", true);
+          }
+        }
+
+        const body = {
+          message: prompt,
+          sessionId: getSessionId(),
+          entryScreen: document.getElementById("entryScreen").value,
+        };
+        if (context) body.context = context;
+
+        clearTrace();
+        addTraceEntry("token", "Stream started");
+
+        try {
+          const response = await fetch(
+            `${getBackendUrl()}${API_V1_PREFIX}/brain/chat/stream`,
+            {
+              method: "POST",
+              headers: getHeaders(),
+              body: JSON.stringify(body),
+            },
+          );
+
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          let fullText = "";
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+
+            const parts = buffer.split("\n\n");
+            buffer = parts.pop() || "";
+
+            for (const part of parts) {
+              const line = part.trim();
+              if (!line.startsWith("data:")) continue;
+              const raw = line.replace(/^data:\s*/, "");
+
+              try {
+                const event = JSON.parse(raw);
+                if (event.type === "tool_start") {
+                  addTraceEntry("tool", {
+                    tool: event.tool,
+                    input: event.input || {},
+                  });
+                } else if (event.type === "tool_end") {
+                  addTraceEntry("tool", { tool: event.tool, status: "done" });
+                } else if (event.type === "token") {
+                  fullText += event.content || "";
+                  showOutput(fullText);
+                } else if (event.type === "done") {
+                  addTraceEntry("done", "Agent finished");
+                } else if (event.type === "error") {
+                  addTraceEntry("error", event.message || "error");
+                }
+              } catch (err) {
+                addTraceEntry("error", "Malformed SSE chunk");
+              }
+            }
+          }
+
+          if (!fullText) showOutput("No response received", true);
+        } catch (err) {
+          showOutput(err.message, true);
+          addTraceEntry("error", err.message);
+        }
+      }
+
+      generateSessionId();
+    </script>
+  </body>
+</html>
