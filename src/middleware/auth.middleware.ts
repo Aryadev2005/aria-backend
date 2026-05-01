@@ -54,8 +54,18 @@ export const authenticateFirebase = async (req: FastifyRequest, reply: FastifyRe
     await cache.set(cacheKey, user, 300)
 
   } catch (err: any) {
-    logger.error({ err }, 'Auth middleware error')
-    return errors.unauthorized(reply, 'Invalid or expired token')
+    logger.error({ 
+      err: err.message, 
+      stack: err.stack,
+      token_preview: req.headers.authorization?.slice(0, 20) 
+    }, 'Auth middleware error');
+    
+    // Distinguish between expired and actually invalid for better frontend debugging
+    const isExpired = err.message?.toLowerCase().includes('expired');
+    return errors.unauthorized(
+      reply, 
+      isExpired ? 'Token expired' : 'Invalid or expired token'
+    );
   }
 }
 

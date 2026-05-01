@@ -66,22 +66,67 @@ export const buildApp = async (): Promise<FastifyInstance> => {
     crossOriginEmbedderPolicy: false,
   });
 
+  const devWildcardOrigins =
+    process.env.NODE_ENV !== "production"
+      ? ["*.ngrok-free.dev", "*.ngrok.io"]
+      : [];
+
   const allowedOrigins = (process.env.ALLOWED_ORIGINS?.split(",") || [])
     .map((origin) => origin.trim())
     .filter(Boolean)
-    .concat(["http://localhost:5500", "http://127.0.0.1:5500"]);
+    .concat([
+      "http://localhost:5500",
+      "http://127.0.0.1:5500",
+      "http://localhost:5173",
+      ...devWildcardOrigins,
+    ]);
   const allowAllOrigins = allowedOrigins.includes("*");
+
+  const isOriginAllowed = (origin: string): boolean => {
+    if (allowAllOrigins) return true;
+    if (allowedOrigins.includes(origin)) return true;
+
+    let hostname: string;
+    try {
+      hostname = new URL(origin).hostname;
+    } catch {
+      return false;
+    }
+
+    return allowedOrigins.some((pattern) => {
+      if (!pattern.includes("*")) return false;
+      const normalized = pattern.replace(/^https?:\/\//, "");
+      if (normalized.startsWith("*.")) {
+        const suffix = normalized.slice(1);
+        return hostname.endsWith(suffix);
+      }
+      return false;
+    });
+  };
 
   await app.register(cors, {
     origin: (origin, cb) => {
       if (!origin) return cb(null, true);
-      if (allowAllOrigins || allowedOrigins.includes(origin)) {
+      if (process.env.NODE_ENV !== "production") return cb(null, true);
+      if (isOriginAllowed(origin)) {
         return cb(null, true);
       }
       return cb(new Error("CORS origin blocked"), false);
     },
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Request-ID"],
+    allowedHeaders: [
+      "Content-Type",
+      "content-type",
+      "Authorization",
+      "authorization",
+      "X-Request-ID",
+      "x-request-id",
+      "X-Requested-With",
+      "x-requested-with",
+      "ngrok-skip-browser-warning",
+    ],
+    preflightContinue: false,
+    optionsSuccessStatus: 204,
     credentials: true,
   });
 
