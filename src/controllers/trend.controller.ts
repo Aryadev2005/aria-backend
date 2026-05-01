@@ -49,12 +49,17 @@ export const getTrends = async (
         if (liveTrends.length >= 3) return liveTrends;
 
         // Fallback: generate with Groq
-        return groqService.generateTrendInsights({
-          niche,
-          platform,
-          followerRange: "10K-100K",
-          archetype: null,
-        });
+        try {
+          return await groqService.generateTrendInsights({
+            niche,
+            platform,
+            followerRange: "10K-100K",
+            archetype: null,
+          });
+        } catch (e) {
+          logger.warn({ e }, "Groq trend generation failed, returning empty");
+          return [];
+        }
       },
       TTL.TREND,
     );
@@ -99,13 +104,18 @@ export const getPersonalizedTrends = async (
         });
 
         // Feed live data into Groq with user's archetype
-        return groqService.generateTrendInsights({
-          niche,
-          platform,
-          followerRange: user.follower_range || "10K–50K",
-          archetype: user.archetype,
-          liveTrendsContext: liveTrends.map((t: any) => t.title).join(", "),
-        });
+        try {
+          return await groqService.generateTrendInsights({
+            niche,
+            platform,
+            followerRange: user.follower_range || "10K–50K",
+            archetype: user.archetype,
+            liveTrendsContext: liveTrends.map((t: any) => t.title).join(", "),
+          });
+        } catch (e) {
+          logger.warn({ e }, "Groq personalized trends failed");
+          return [];
+        }
       },
       300,
     ); // 5 min cache per user
@@ -126,12 +136,18 @@ export const getOpportunityWindows = async (
 ) => {
   try {
     const user = req.user as User;
-    const result = await groqService.generateTrendInsights({
-      niche: user.niches?.[0] || "fashion",
-      platform: user.primary_platform || "instagram",
-      followerRange: user.follower_range || "10K–50K",
-      archetype: user.archetype,
-    });
+    let result: any;
+    try {
+      result = await groqService.generateTrendInsights({
+        niche: user.niches?.[0] || "fashion",
+        platform: user.primary_platform || "instagram",
+        followerRange: user.follower_range || "10K–50K",
+        archetype: user.archetype,
+      });
+    } catch (e) {
+      logger.warn({ e }, "Groq opportunity windows failed");
+      return success(reply, []);
+    }
 
     // Filter to only trends with high opportunity score
     const windows = (result as any).trends
@@ -154,12 +170,18 @@ export const getViralRadar = async (
 ) => {
   try {
     const user = req.user as User;
-    const result = await groqService.generateTrendInsights({
-      niche: user.niches?.[0] || "fashion",
-      platform: user.primary_platform || "instagram",
-      followerRange: user.follower_range || "10K–50K",
-      archetype: user.archetype,
-    });
+    let result: any;
+    try {
+      result = await groqService.generateTrendInsights({
+        niche: user.niches?.[0] || "fashion",
+        platform: user.primary_platform || "instagram",
+        followerRange: user.follower_range || "10K–50K",
+        archetype: user.archetype,
+      });
+    } catch (e) {
+      logger.warn({ e }, "Groq viral radar failed");
+      return success(reply, []);
+    }
 
     const viralTrends = (result as any).trends
       .filter((t: any) => t.badge === "HOT" || t.velocity >= 90)
@@ -250,6 +272,7 @@ export const getSavedTrends = async (
     const trends = await prisma.saved_trends.findMany({
       where: { user_id: user.id },
       orderBy: { saved_at: "desc" },
+      take: 50,
     });
     return success(reply, trends);
   } catch (err) {

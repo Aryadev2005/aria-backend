@@ -11,10 +11,11 @@
   },
   "scripts": {
     "start": "node dist/server.js",
-    "dev": "nodemon --watch src --ext js,json,ts --ignore 'src/**/*.test.js' --ignore 'src/**/*.test.ts' --exec tsx src/server.ts",
+    "dev": "tsx watch src/server.ts",
     "worker:all": "tsx src/workers/index.ts",
     "build": "tsc",
-    "mcp:health": "tsx src/agent/mcp_health_check.ts"
+    "mcp:health": "tsx src/agent/mcp_health_check.ts",
+    "db:migrate": "npx prisma migrate dev --name=init --auto-approve"
   },
   "keywords": [],
   "author": "",
@@ -38,7 +39,6 @@
     "bullmq": "^5.76.2",
     "cheerio": "^1.0.0-rc.12",
     "date-fns": "^4.1.0",
-    "dotenv": "^17.4.2",
     "fastify": "^5.8.5",
     "firebase": "^12.12.1",
     "firebase-admin": "^13.8.0",
@@ -61,6 +61,7 @@
     "@types/jest": "^30.0.0",
     "@types/node": "^25.6.0",
     "@types/uuid": "^10.0.0",
+    "dotenv": "^17.4.2",
     "eslint": "^10.2.1",
     "jest": "^30.3.0",
     "nodemon": "^3.1.14",

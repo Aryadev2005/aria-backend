@@ -25,6 +25,7 @@ import webhookRoutes from "./routes/webhook.routes";
 import brainRoutes from "./routes/brain.routes";
 import videoDnaRoutes from "./routes/video_dna.routes";
 import dataDeletionRoutes from "./routes/dataDeletion.routes";
+import integrationRoutes from "./routes/integrations.routes";
 
 export const buildApp = async (): Promise<FastifyInstance> => {
   const app = Fastify({
@@ -82,7 +83,8 @@ export const buildApp = async (): Promise<FastifyInstance> => {
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization", "X-Request-ID"],
     credentials: true,
-    maxAge: 86400,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
   });
 
   await app.register(compress, {
@@ -187,6 +189,9 @@ export const buildApp = async (): Promise<FastifyInstance> => {
   await app.register(profileRoutes, { prefix: `${API_PREFIX}/profile` });
   await app.register(brainRoutes, { prefix: `${API_PREFIX}/brain` });
   await app.register(videoDnaRoutes, { prefix: `${API_PREFIX}/video-dna` });
+  await app.register(integrationRoutes, {
+    prefix: `${API_PREFIX}/integrations`,
+  });
 
   // ── Lifecycle / error handlers ─────────────────────────────────────────────
   app.setNotFoundHandler((req, reply) => {
@@ -197,23 +202,13 @@ export const buildApp = async (): Promise<FastifyInstance> => {
     });
   });
 
-  app.setErrorHandler((err: any, req, reply) => {
-    const statusCode = err.statusCode || 500;
-    if (statusCode >= 500) {
-      req.log.error({ err, req: { url: req.url, method: req.method } });
-    }
-    if (err.code === "FST_ERR_VALIDATION") {
-      return reply.code(400).send({
-        success: false,
-        error: "VALIDATION_ERROR",
-        message: "Invalid request data",
-        details: err.validation,
-      });
-    }
-    reply.code(statusCode).send({
+  app.setErrorHandler((error: any, request, reply) => {
+    app.log.error(error);
+    reply.status(error.statusCode || 500).send({
       success: false,
-      error: err.code || "INTERNAL_ERROR",
-      message: statusCode >= 500 ? "Internal server error" : err.message,
+      error: error.statusCode === 401 ? "UNAUTHORIZED" : "INTERNAL_ERROR",
+      message: error.message || "Internal server error",
+      timestamp: new Date().toISOString(),
     });
   });
 

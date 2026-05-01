@@ -6,7 +6,8 @@ import type {
   SubscriptionBody,
 } from "../controllers/user.controller";
 import { authenticateFirebase } from "../middleware/auth.middleware";
-
+import { prisma } from "../config/database";
+import { success } from "../utils/response";
 export default async function userRoutes(app: FastifyInstance) {
   app.get(
     "/profile",
@@ -14,6 +15,18 @@ export default async function userRoutes(app: FastifyInstance) {
       preHandler: [authenticateFirebase],
     },
     userController.getProfile,
+  );
+
+  app.get(
+    "/me",
+    {
+      preHandler: [authenticateFirebase],
+    },
+    async (req, reply) => {
+      const user = (req as any).user;
+      const full = await prisma.users.findUnique({ where: { id: user.id } });
+      return success(reply, { user: full });
+    }
   );
 
   app.put<{ Body: UpdateProfileBody }>(
