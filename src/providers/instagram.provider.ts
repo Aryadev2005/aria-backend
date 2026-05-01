@@ -16,7 +16,8 @@ const FB_TOKEN_URL = 'https://graph.facebook.com/v18.0/oauth/access_token';
 const IG_GRAPH_BASE = 'https://graph.instagram.com';
 
 function getRedirectUri(): string {
-  return `${process.env.BACKEND_URL || 'http://localhost:3000'}/api/v1/integrations/instagram/callback`;
+  const baseUrl = (process.env.BACKEND_URL || 'http://localhost:3000').replace(/\/+$/, '');
+  return `${baseUrl}/api/v1/integrations/instagram/callback`;
 }
 
 export function generateInstagramAuthUrl(userId: string): string {
