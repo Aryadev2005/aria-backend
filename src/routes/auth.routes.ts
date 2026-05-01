@@ -12,20 +12,20 @@ export default async function authRoutes(app: FastifyInstance) {
           idToken:  { type: 'string', minLength: 100 },
           fcmToken: { type: 'string' },
           platform: { type: 'string', enum: ['android', 'ios'] },
+          name: { type: 'string' },
+          phone: { type: 'string' }
         },
       },
     },
   }, authController.firebaseLogin);
 
+  app.get('/check-email', authController.checkEmail);
+
+  app.post<{ Body: { name: string; phone: string } }>('/update-profile', {
+    preHandler: [authenticateFirebase],
+  }, authController.updateRegistrationProfile);
+
   app.post('/logout', {
     preHandler: [authenticateFirebase],
   }, authController.logout);
-
-  app.get('/me', {
-    preHandler: [authenticateFirebase],
-  }, authController.getMe);
-
-  app.delete('/account', {
-    preHandler: [authenticateFirebase],
-  }, authController.deleteAccount);
 }

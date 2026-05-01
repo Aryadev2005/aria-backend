@@ -126,7 +126,18 @@ export const instagramCallback = async (
       logger.warn({ err }, 'Background niche detection failed'),
     );
 
-    return reply.redirect(`${frontendUrl}/onboarding?success=instagram&handle=${handle}`);
+    // Detect if request came from onboarding or registration
+    // State contains userId — check their onboarding_step
+    const userRecord = await (prisma.users as any).findUnique({
+      where: { id: userId },
+      select: { onboarding_step: true }
+    });
+
+    const isRegistering = !userRecord?.onboarding_step || userRecord.onboarding_step === 'new';
+    const redirectBase = isRegistering ? '/register' : '/onboarding';
+    const paramName = isRegistering ? 'oauth_success' : 'success';
+
+    return reply.redirect(`${frontendUrl}${redirectBase}?${paramName}=instagram&handle=${handle}`);
   } catch (err) {
     logger.error({ err }, 'Instagram callback failed');
     return reply.redirect(`${frontendUrl}/onboarding?error=instagram_failed`);
@@ -194,7 +205,18 @@ export const youtubeCallback = async (
       logger.warn({ err }, 'Background niche detection failed'),
     );
 
-    return reply.redirect(`${frontendUrl}/onboarding?success=youtube&handle=${handle}`);
+    // Detect if request came from onboarding or registration
+    // State contains userId — check their onboarding_step
+    const userRecord = await (prisma.users as any).findUnique({
+      where: { id: userId },
+      select: { onboarding_step: true }
+    });
+
+    const isRegistering = !userRecord?.onboarding_step || userRecord.onboarding_step === 'new';
+    const redirectBase = isRegistering ? '/register' : '/onboarding';
+    const paramName = isRegistering ? 'oauth_success' : 'success';
+
+    return reply.redirect(`${frontendUrl}${redirectBase}?${paramName}=youtube&handle=${handle}`);
   } catch (err) {
     logger.error({ err }, 'YouTube callback failed');
     return reply.redirect(`${frontendUrl}/onboarding?error=youtube_failed`);
