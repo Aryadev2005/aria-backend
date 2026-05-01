@@ -1,0 +1,48 @@
+{
+  "name": "@thomaswawra/artistlens",
+  "version": "0.4.12",
+  "description": "ArtistLens - A powerful Spotify Web API integration for accessing music, artists, albums, and recommendations",
+  "type": "module",
+  "bin": {
+    "artistlens": "./build/index.js"
+  },
+  "files": [
+    "build"
+  ],
+  "scripts": {
+    "build": "tsc && node -e \"require('fs').chmodSync('build/index.js', '755')\"",
+    "prepare": "npm run build",
+    "watch": "tsc --watch",
+    "inspector": "npx @modelcontextprotocol/inspector build/index.js",
+    "test": "NODE_OPTIONS=--experimental-vm-modules jest",
+    "test:watch": "NODE_OPTIONS=--experimental-vm-modules jest --watch"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "0.6.0",
+    "axios": "^1.7.9"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.14",
+    "@types/node": "^20.11.24",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.2.6",
+    "typescript": "^5.3.3"
+  },
+  "keywords": [
+    "mcp",
+    "spotify",
+    "music",
+    "api",
+    "modelcontextprotocol",
+    "artistlens"
+  ],
+  "author": "Thomas Wawra",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/superseoworld/artistlens.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

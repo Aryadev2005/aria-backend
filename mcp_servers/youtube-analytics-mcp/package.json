@@ -1,0 +1,30 @@
+{
+  "type": "module",
+  "name": "youtube-analytics-mcp",
+  "version": "1.0.0",
+  "description": "YouTube Analytics MCP",
+  "bin": {
+    "youtube-analytics-mcp": "./build/index.js"
+  },
+  "scripts": {
+    "build": "tsc && chmod 755 build/index.js",
+    "dev": "tsx src/index.ts",
+    "inspect": "npx @modelcontextprotocol/inspector tsx src/index.ts",
+    "test": "npm run build && ./test_all_tools.sh && npm run inspect"
+  },
+  "files": ["build"],
+  "author": "dogfrogfog",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.17.3",
+    "googleapis": "^128.0.0",
+    "@google-cloud/local-auth": "^2.1.0",
+    "google-auth-library": "^9.0.0",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "24.3.0",
+    "typescript": "5.9.2",
+    "tsx": "^4.0.0"
+  }
+}
