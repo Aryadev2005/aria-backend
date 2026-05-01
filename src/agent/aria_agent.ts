@@ -5,7 +5,7 @@
 // Tools get DB connection injected at runtime so they can query live data.
 
 import { createAgent } from "langchain";
-import { ChatGroq } from "@langchain/groq";
+import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
@@ -38,9 +38,9 @@ const getPostgresSaver = async () => {
 
 // ── LLM setup ─────────────────────────────────────────────────────────────────
 const createLLM = () =>
-  new ChatGroq({
-    model: "llama-3.3-70b-versatile",
-    apiKey: process.env.GROQ_API_KEY,
+  new ChatOpenAI({
+    model: "gpt-5.4-mini",
+    apiKey: process.env.OPENAI_API_KEY,
     temperature: 0,
     maxTokens: 2048,
     streaming: false,
@@ -296,9 +296,9 @@ export async function* streamARIAAgent({
 // ── Fallback: plain Groq call if agent fails ──────────────────────────────────
 const _fallbackResponse = async (message: string, user: any) => {
   try {
-    const llm = new ChatGroq({
-      model: "llama-3.3-70b-versatile",
-      apiKey: process.env.GROQ_API_KEY,
+    const llm = new ChatOpenAI({
+      model: "gpt-5.4-mini",
+      apiKey: process.env.OPENAI_API_KEY,
     });
     const res = await llm.invoke([
       new SystemMessage(

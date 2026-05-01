@@ -7,7 +7,7 @@ import {
   getPendingSuggestions,
 } from "../services/aria_memory.service";
 import { User } from "../types";
-import { ChatGroq } from "@langchain/groq";
+import { ChatOpenAI } from "@langchain/openai";
 
 // Dynamic import for agent logic to avoid issues if they are not yet TS or have circular deps
 // But since we are switching to ES Modules/TS, we can use import.
@@ -133,9 +133,9 @@ export const greet = async (
       .filter(Boolean)
       .join(" ");
 
-    const llm = new ChatGroq({
-      model: "llama-3.3-70b-versatile",
-      apiKey: process.env.GROQ_API_KEY,
+    const llm = new ChatOpenAI({
+      model: "gpt-5.4-mini",
+      apiKey: process.env.OPENAI_API_KEY,
       maxTokens: 120,
     });
 

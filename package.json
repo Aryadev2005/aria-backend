@@ -15,7 +15,7 @@
     "worker:all": "tsx src/workers/index.ts",
     "build": "tsc",
     "mcp:health": "tsx src/agent/mcp_health_check.ts",
-    "db:migrate": "npx prisma migrate dev --name=init --auto-approve"
+    "db:migrate": "npx prisma migrate dev --name=init"
   },
   "keywords": [],
   "author": "",
@@ -29,7 +29,7 @@
     "@fastify/rate-limit": "^10.3.0",
     "@fastify/sensible": "^6.0.4",
     "@langchain/core": "^1.1.42",
-    "@langchain/groq": "^1.2.0",
+    "@langchain/openai": "^1.1.0",
     "@langchain/langgraph-checkpoint-postgres": "^1.0.1",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "@prisma/adapter-pg": "^7.8.0",

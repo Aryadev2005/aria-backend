@@ -40,7 +40,7 @@ export const getProfile = async (req: FastifyRequest, reply: FastifyReply) => {
         engagement_rate: true,
         onboarding_step: true,
         aria_analyzed_at: true,
-        subscription_plan: true,
+        subscription_tier: true,
         follower_count: true,
       },
     });
