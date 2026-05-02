@@ -57,15 +57,22 @@ export const firebaseLogin = async (
 
     const isNewUser = !user;
 
+    const normalizedEmail = (firebaseUser.email as string)?.trim().toLowerCase();
+    const normalizedPhone =
+      typeof phone === "string" ? phone.replace(/\D/g, "") || null : null;
+
     if (!user) {
-      // Create new user record
+      // Create new user record (email normalized for uniqueness consistency)
       user = await (prisma.users as any).create({
         data: {
           firebase_uid: firebaseUser.uid,
-          email: firebaseUser.email as string,
-          name: name || (firebaseUser.name as string),
+          email: normalizedEmail,
+          name:
+            (name?.trim() as string) ||
+            (firebaseUser.name as string) ||
+            normalizedEmail.split("@")[0],
           photo_url: firebaseUser.picture || null,
-          phone: phone || null,
+          phone: normalizedPhone,
           onboarding_step: "new",
         },
         select: {
@@ -92,17 +99,27 @@ export const firebaseLogin = async (
         },
       });
       logger.info({ userId: user.id, email: user.email }, "New user created");
-    } else if (name && !user.name) {
-      // Update name if it was provided during registration but not set yet
-      await (prisma.users as any).update({
-        where: { id: user.id },
-        data: {
-          name,
-          ...(phone && !user.phone ? { phone } : {}),
-          updated_at: new Date(),
-        },
-      });
-      user.name = name;
+    } else {
+      const patch: Record<string, unknown> = {};
+      const trimmedName = name?.trim();
+      if (trimmedName && (!user.name || !String(user.name).trim()))
+        patch.name = trimmedName;
+      if (normalizedPhone && !user.phone) patch.phone = normalizedPhone;
+      if (
+        normalizedEmail &&
+        user.email?.toLowerCase() !== normalizedEmail
+      ) {
+        patch.email = normalizedEmail;
+      }
+      if (Object.keys(patch).length > 0) {
+        await (prisma.users as any).update({
+          where: { id: user.id },
+          data: { ...patch, updated_at: new Date() },
+        });
+        if (patch.name) user.name = patch.name as string;
+        if (patch.phone) user.phone = patch.phone as string;
+        if (patch.email) user.email = patch.email as string;
+      }
     }
 
     // Update FCM token for push notifications if provided

@@ -22,7 +22,7 @@ export default async function studioRoutes(app: FastifyInstance) {
         }
       }
     }
-  }, ctrl.getScriptStructure);
+  }, ctrl.getScriptStructure as any);
 
   app.post('/script/advise', {
     ...auth,
@@ -39,7 +39,7 @@ export default async function studioRoutes(app: FastifyInstance) {
         }
       }
     }
-  }, ctrl.adviseSection);
+  }, ctrl.adviseSection as any);
 
   app.post('/bgm/match', {
     ...auth,
@@ -55,7 +55,7 @@ export default async function studioRoutes(app: FastifyInstance) {
         }
       }
     }
-  }, ctrl.matchBGM);
+  }, ctrl.matchBGM as any);
 
   app.post('/shots', {
     ...auth,
@@ -70,7 +70,7 @@ export default async function studioRoutes(app: FastifyInstance) {
         }
       }
     }
-  }, ctrl.getShotList);
+  }, ctrl.getShotList as any);
 
   app.post('/editing/help', {
     ...auth,
@@ -84,7 +84,7 @@ export default async function studioRoutes(app: FastifyInstance) {
         }
       }
     }
-  }, ctrl.getEditingHelp);
+  }, ctrl.getEditingHelp as any);
 
   app.post('/analyse/url', {
     ...auth,
@@ -98,11 +98,11 @@ export default async function studioRoutes(app: FastifyInstance) {
         }
       }
     }
-  }, ctrl.analyseVideoUrl);
+  }, ctrl.analyseVideoUrl as any);
 
   app.post('/analyse/upload', {
     preHandler: [authenticateFirebase]
-  }, ctrl.analyseVideoUpload);
+  }, ctrl.analyseVideoUpload as any);
 
-  app.post('/session/save', { ...auth }, ctrl.saveSession);
+  app.post('/session/save', { ...auth }, ctrl.saveSession as any);
 }

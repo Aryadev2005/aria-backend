@@ -9,7 +9,7 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    // "moduleResolution": "bundler",
+    "moduleResolution": "bundler",
     "allowJs": true
   },
   "include": ["src/**/*"],

@@ -34,11 +34,15 @@ export const authenticateFirebase = async (req: FastifyRequest, reply: FastifyRe
     }) as User | null
 
     if (!user) {
+      const emailNorm = (firebaseUser.email as string)?.trim().toLowerCase()
       user = await prisma.users.create({
         data: {
           firebase_uid: firebaseUser.uid,
-          email: firebaseUser.email as string,
-          name: firebaseUser.name as string,
+          email: emailNorm,
+          name:
+            (firebaseUser.name as string)?.trim() ||
+            emailNorm.split('@')[0] ||
+            'Creator',
           photo_url: firebaseUser.picture || null
         },
         select: {
