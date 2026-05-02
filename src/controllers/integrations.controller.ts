@@ -21,16 +21,11 @@ import {
 import {
   generateInstagramAuthUrl,
   completeInstagramOAuth,
-  getInstagramRedirectUri,
-  buildInstagramRedirectUriFromCallbackRequest,
-  decodeInstagramOAuthState,
-  normalizeInstagramOAuthStateParam,
   getValidInstagramToken,
   fetchRecentMedia,
   buildTokenPayload,
   instagramTokenIsExpired,
   instagramTokenNeedsRefresh,
-  type InstagramOAuthClientFlow,
   type InstagramUserProfile,
 } from "../providers/instagram.provider";
 
@@ -151,15 +146,6 @@ export const instagramCallback = async (
     return reply.redirect(`${frontendUrl}/register?error=invalid_state`);
   }
 
-  logger.info(
-    {
-      configuredRedirectUri: getInstagramRedirectUri(),
-      callbackUrlFromRequest: buildInstagramRedirectUriFromCallbackRequest(req),
-      hasAuthRuInState: typeof authorizeRedirectFromState === 'string',
-    },
-    'Instagram OAuth callback',
-  );
-
   try {
     // Single call — handles code exchange + long-lived token + profile fetch
     const {
@@ -265,8 +251,7 @@ export const youtubeCallback = async (
   const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
 
   if (error) {
-    const flow = youtubeFlowFromStateString();
-    return reply.redirect(youtubeErrorRedirectUrl(frontendUrl, flow, 'youtube_denied'));
+    return reply.redirect(`${frontendUrl}/onboarding?error=youtube_denied`);
   }
 
   let userId: string;
@@ -617,20 +602,24 @@ Respond ONLY with valid JSON:
     };
   }
 
-  // Save to DB (columns match prisma `users` — use aria_last_analysis not aria_profile)
+  // Save to DB (columns match prisma `users` — use aria_last_analysis)
   await (prisma as any).users.update({
     where: { id: userId },
     data: {
       archetype: ariaAnalysis.archetype,
       archetype_label: ariaAnalysis.archetypeLabel ?? null,
       archetype_confidence:
-        typeof ariaAnalysis.archetypeConfidence === 'number' ? ariaAnalysis.archetypeConfidence : null,
+        typeof ariaAnalysis.archetypeConfidence === "number"
+          ? ariaAnalysis.archetypeConfidence
+          : null,
       niches: ariaAnalysis.detectedNiches,
-      aria_profile: ariaAnalysis,
+      aria_last_analysis: ariaAnalysis,
       onboarding_step: "analysed",
       aria_analyzed_at: new Date(),
       health_score:
-        typeof ariaAnalysis.healthScore === 'number' ? ariaAnalysis.healthScore : null,
+        typeof ariaAnalysis.healthScore === "number"
+          ? ariaAnalysis.healthScore
+          : null,
       growth_stage: ariaAnalysis.growthStage ?? undefined,
       follower_range: ariaAnalysis.followerRange ?? undefined,
     },

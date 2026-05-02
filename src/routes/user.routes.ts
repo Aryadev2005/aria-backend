@@ -27,7 +27,7 @@ export default async function userRoutes(app: FastifyInstance) {
           follower_range: true, primary_platform: true, niches: true,
           instagram_handle: true, youtube_handle: true,
           is_pro: true, subscription_tier: true,
-          archetype: true, archetype_label: true, aria_profile: true,
+          archetype: true, archetype_label: true, aria_last_analysis: true,
           onboarding_step: true, growth_stage: true, health_score: true,
           engagement_rate: true, aria_analyzed_at: true,
         }
