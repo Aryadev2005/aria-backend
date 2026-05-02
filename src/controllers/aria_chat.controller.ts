@@ -1,5 +1,5 @@
 import { FastifyRequest, FastifyReply } from "fastify";
-import Groq from "groq-sdk";
+import OpenAI from "openai";
 import { prisma } from "../config/database";
 import { success, errors } from "../utils/response";
 import { logger } from "../utils/logger";
@@ -13,8 +13,14 @@ import {
   getPendingSuggestions,
 } from "../services/aria_memory.service";
 
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
-const MODEL = "llama-3.3-70b-versatile";
+let _openai: OpenAI | null = null;
+const groq = () => {
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  if (!apiKey) throw new Error("OPENAI_API_KEY is required");
+  if (!_openai) _openai = new OpenAI({ apiKey });
+  return _openai;
+};
+const MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
 const MAX_HISTORY = 20; // rolling window to stay under token budget
 
 /**
@@ -224,7 +230,7 @@ export const chat = async (
     let finalResponse = "";
     let toolsUsed: any[] = [];
 
-    const firstCall = await groq.chat.completions.create({
+    const firstCall = await groq().chat.completions.create({
       model: MODEL,
       max_tokens: 1200,
       messages,
@@ -241,9 +247,9 @@ export const chat = async (
     ) {
       const toolCallMessages: any[] = [...messages, firstChoice.message];
 
-      for (const toolCall of firstChoice.message.tool_calls) {
-        const toolName = toolCall.function.name;
-        const toolArgs = JSON.parse(toolCall.function.arguments || "{}");
+      for (const toolCall of firstChoice.message.tool_calls as any[]) {
+        const toolName = (toolCall as any).function.name;
+        const toolArgs = JSON.parse((toolCall as any).function.arguments || "{}");
 
         const nicheList = Array.isArray(resolvedUser.niches)
           ? resolvedUser.niches
@@ -270,7 +276,7 @@ export const chat = async (
       }
 
       // Second LLM call with tool results injected
-      const secondCall = await groq.chat.completions.create({
+      const secondCall = await groq().chat.completions.create({
         model: MODEL,
         max_tokens: 1200,
         messages: toolCallMessages,
@@ -386,7 +392,7 @@ Write a SHORT, warm, specific opening message (2-3 sentences max).
 - Use Hinglish naturally if it fits
 - Do NOT list features, do NOT say "How can I help you today?"`;
 
-    const response = await groq.chat.completions.create({
+    const response = await groq().chat.completions.create({
       model: MODEL,
       max_tokens: 200,
       messages: [

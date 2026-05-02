@@ -1,8 +1,9 @@
 import { prisma } from "../config/database";
 import { cache } from "../config/redis";
 import { logger } from "../utils/logger";
-import Groq from "groq-sdk";
+import OpenAI from "openai";
 
+const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
 // ── Tool definitions (passed to Groq as tools: []) ──────────────────────────
 export const ARIA_TOOLS = [
   {
@@ -324,8 +325,11 @@ export const dispatchTool = async (
       }
 
       case "generate_hook_variations": {
-        // Import groq service to generate hooks
-        const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+        const apiKey = process.env.OPENAI_API_KEY?.trim();
+        if (!apiKey) {
+          throw new Error("OPENAI_API_KEY is required");
+        }
+        const groq = new OpenAI({ apiKey });
 
         const archetype = userContext?.archetype || "ENTERTAINER";
         const niche = userContext?.niche || "general";
@@ -342,13 +346,13 @@ Return ONLY a JSON array:
 ]`;
 
         const response = await groq.chat.completions.create({
-          model: "llama-3.3-70b-versatile",
+          model: OPENAI_MODEL,
           max_tokens: 600,
           messages: [{ role: "user", content: prompt }],
         });
 
         const content = response.choices[0].message.content;
-        if (!content) throw new Error("Empty response from Groq");
+        if (!content) throw new Error("Empty response from OpenAI");
 
         const raw = content
           .replace(/```json\n?/g, "")

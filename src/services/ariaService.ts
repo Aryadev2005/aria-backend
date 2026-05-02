@@ -1,9 +1,19 @@
-import Groq from 'groq-sdk';
+import OpenAI from 'openai';
 
-const client = new Groq({ apiKey: process.env.GROQ_API_KEY });
+let _client: OpenAI | null = null;
+const getClient = () => {
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  if (!apiKey) {
+    throw new Error('OPENAI_API_KEY is required');
+  }
+  if (!_client) {
+    _client = new OpenAI({ apiKey });
+  }
+  return _client;
+};
 
 // ── Model routing ──────────────────────────────────────────────────────────
-const MODEL = 'llama-3.3-70b-versatile';
+const MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 
 // ── ARIA System Prompt ─────────────────────────────────────────────────────
 const ARIA_SYSTEM = `You are ARIA — the AI intelligence engine inside TrendAI, India's first creator OS built for 40 lakh Indian content creators.
@@ -40,7 +50,7 @@ export interface AriaCallOptions {
 export async function callARIA(userMessage: string, { maxTokens = 2000 }: AriaCallOptions = {}): Promise<any> {
   const model = MODEL;
 
-  const response = await client.chat.completions.create({
+  const response = await getClient().chat.completions.create({
     model,
     max_tokens: maxTokens,
     messages: [
@@ -50,7 +60,7 @@ export async function callARIA(userMessage: string, { maxTokens = 2000 }: AriaCa
   });
 
   const content = response.choices[0].message.content;
-  if (!content) throw new Error('Empty response from Groq');
+  if (!content) throw new Error('Empty response from OpenAI');
 
   const raw = content
     .replace(/```json\n?/g, '')

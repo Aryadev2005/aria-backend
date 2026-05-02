@@ -1,4 +1,4 @@
-import Groq from 'groq-sdk';
+import OpenAI from 'openai';
 import axios from 'axios';
 import { prisma } from '../config/database';
 import { cache } from '../config/redis';
@@ -6,7 +6,14 @@ import { logger } from '../utils/logger';
 import { User } from '../types';
 import * as scraperService from './scraper.service';
 
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+let _openai: OpenAI | null = null;
+const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
+const groq = () => {
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  if (!apiKey) throw new Error('OPENAI_API_KEY is required');
+  if (!_openai) _openai = new OpenAI({ apiKey });
+  return _openai;
+};
 
 export interface YouTubeVideoAnalytics {
   title: string;
@@ -343,14 +350,14 @@ Respond ONLY with valid JSON:
 }`;
 
   try {
-    const res = await groq.chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
+    const res = await groq().chat.completions.create({
+      model: OPENAI_MODEL,
       max_tokens: 700,
       temperature: 0.65,
       messages: [{ role: 'user', content: prompt }],
     });
     const text  = res.choices[0].message.content;
-    if (!text) throw new Error('Empty response from Groq');
+    if (!text) throw new Error('Empty response from OpenAI');
     const clean = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
     return JSON.parse(clean);
   } catch (err) {

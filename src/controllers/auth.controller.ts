@@ -29,7 +29,7 @@ export const firebaseLogin = async (
     const firebaseUser = await verifyFirebaseToken(idToken);
 
     // Try to find existing user
-    let user = await (prisma.users as any).findUnique({
+    let user = await prisma.users.findUnique({
       where: { firebase_uid: firebaseUser.uid },
       select: {
         id: true,
@@ -63,7 +63,7 @@ export const firebaseLogin = async (
 
     if (!user) {
       // Create new user record (email normalized for uniqueness consistency)
-      user = await (prisma.users as any).create({
+      user = await prisma.users.create({
         data: {
           firebase_uid: firebaseUser.uid,
           email: normalizedEmail,
@@ -112,7 +112,7 @@ export const firebaseLogin = async (
         patch.email = normalizedEmail;
       }
       if (Object.keys(patch).length > 0) {
-        await (prisma.users as any).update({
+        await prisma.users.update({
           where: { id: user.id },
           data: { ...patch, updated_at: new Date() },
         });
@@ -124,7 +124,7 @@ export const firebaseLogin = async (
 
     // Update FCM token for push notifications if provided
     if (fcmToken) {
-      await (prisma.users as any)
+      await prisma.users
         .update({
           where: { id: user.id },
           data: {
@@ -183,7 +183,7 @@ export const updateRegistrationProfile = async (
   try {
     if (!name?.trim()) return errors.badRequest(reply, "Name is required");
 
-    const updated = await (prisma.users as any).update({
+    const updated = await prisma.users.update({
       where: { id: user.id },
       data: {
         name: name.trim(),
@@ -215,7 +215,7 @@ export const checkEmail = async (
   if (!email) return errors.badRequest(reply, "Email is required");
 
   try {
-    const user = await (prisma.users as any).findFirst({
+    const user = await prisma.users.findFirst({
       where: { email: email.trim().toLowerCase() },
       select: { id: true },
     });
@@ -234,7 +234,7 @@ export const logout = async (req: FastifyRequest, reply: FastifyReply) => {
     const user = (req as any).user;
     if (user?.id) {
       await cache.del(CacheKeys.user(user.id));
-      await (prisma.users as any)
+      await prisma.users
         .update({
           where: { id: user.id },
           data: { fcm_token: null, updated_at: new Date() },

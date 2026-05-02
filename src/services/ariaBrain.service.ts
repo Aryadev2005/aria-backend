@@ -1,4 +1,4 @@
-import Groq from "groq-sdk";
+import OpenAI from "openai";
 import { prisma } from "../config/database";
 import { cache } from "../config/redis";
 import { logger } from "../utils/logger";
@@ -51,10 +51,19 @@ const loadDeps = async () => {
 };
 
 // ─── Groq client ──────────────────────────────────────────────────────────────
-const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY,
-  timeout: 30000, // Global 30s — never hang a worker slot
-});
+let _openai: OpenAI | null = null;
+const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
+const groq = () => {
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  if (!apiKey) throw new Error("OPENAI_API_KEY is required");
+  if (!_openai) {
+    _openai = new OpenAI({
+      apiKey,
+      timeout: 30000, // Global 30s — never hang a worker slot
+    });
+  }
+  return _openai;
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ARIA'S CORE PERSONALITY
@@ -638,11 +647,11 @@ export const think = async ({
     content: (m.content || "").slice(0, 1000),
   }));
 
-  // 5. Call Groq
+  // 5. Call OpenAI
   let rawResponse = "";
   try {
-    const completion = await groq.chat.completions.create({
-      model: "llama-3.3-70b-versatile",
+    const completion = await groq().chat.completions.create({
+      model: OPENAI_MODEL,
       max_tokens: 700,
       temperature: 0.85,
       top_p: 0.9,
@@ -660,7 +669,7 @@ export const think = async ({
     });
     rawResponse = completion.choices[0].message.content || "";
   } catch (err) {
-    logger.error({ err }, "Groq call failed in ARIA Brain");
+    logger.error({ err }, "OpenAI call failed in ARIA Brain");
     rawResponse = "Yaar sorry, my brain had a moment 😅 Try again in a sec!";
   }
 

@@ -21,7 +21,16 @@ function makeYouTubeOAuthClient(redirectUri: string) {
 }
 
 function getRedirectUri(): string {
-  return `${process.env.BACKEND_URL || 'http://localhost:3000'}/api/v1/integrations/youtube/callback`;
+  const explicit = process.env.YOUTUBE_REDIRECT_URI?.trim();
+  if (explicit) return explicit;
+
+  const base = (
+    process.env.BACKEND_PUBLIC_URL?.trim() ||
+    process.env.BACKEND_URL?.trim() ||
+    'http://localhost:3000'
+  ).replace(/\/+$/, '');
+
+  return `${base}/api/v1/integrations/youtube/callback`;
 }
 
 export function generateYouTubeAuthUrl(

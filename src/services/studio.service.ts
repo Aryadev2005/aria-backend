@@ -1,8 +1,15 @@
-import Groq from "groq-sdk";
+import OpenAI from "openai";
 import { prisma } from "../config/database";
 import { logger } from "../utils/logger";
 
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+let _openai: OpenAI | null = null;
+const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
+const groq = () => {
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  if (!apiKey) throw new Error("OPENAI_API_KEY is required");
+  if (!_openai) _openai = new OpenAI({ apiKey });
+  return _openai;
+};
 
 export interface ScriptParams {
   idea: string;
@@ -103,15 +110,15 @@ Respond ONLY with valid JSON:
   "viralPotential": 78
 }`;
 
-  const res = await groq.chat.completions.create({
-    model: "llama-3.3-70b-versatile",
+  const res = await groq().chat.completions.create({
+    model: OPENAI_MODEL,
     max_tokens: 1400,
     temperature: 0.7,
     messages: [{ role: "user", content: prompt }],
   });
 
   const text = res.choices[0].message.content;
-  if (!text) throw new Error("Empty response from Groq");
+  if (!text) throw new Error("Empty response from OpenAI");
 
   const clean = text
     .replace(/```json\n?/g, "")
@@ -169,15 +176,15 @@ Respond ONLY with valid JSON:
   "keepOrReplace": "keep|replace|modify"
 }`;
 
-  const res = await groq.chat.completions.create({
-    model: "llama-3.3-70b-versatile",
+  const res = await groq().chat.completions.create({
+    model: OPENAI_MODEL,
     max_tokens: 600,
     temperature: 0.75,
     messages: [{ role: "user", content: prompt }],
   });
 
   const text = res.choices[0].message.content;
-  if (!text) throw new Error("Empty response from Groq");
+  if (!text) throw new Error("Empty response from OpenAI");
 
   const clean = text
     .replace(/```json\n?/g, "")
@@ -282,15 +289,15 @@ Respond ONLY with valid JSON:
   "avoidThis": "What audio to specifically avoid and why"
 }`;
 
-  const res = await groq.chat.completions.create({
-    model: "llama-3.3-70b-versatile",
+  const res = await groq().chat.completions.create({
+    model: OPENAI_MODEL,
     max_tokens: 800,
     temperature: 0.7,
     messages: [{ role: "user", content: prompt }],
   });
 
   const text = res.choices[0].message.content;
-  if (!text) throw new Error("Empty response from Groq");
+  if (!text) throw new Error("Empty response from OpenAI");
 
   const clean = text
     .replace(/```json\n?/g, "")
@@ -347,15 +354,15 @@ Respond ONLY with valid JSON:
   "goldenstateTime": "Best time of day for natural light for this content"
 }`;
 
-  const res = await groq.chat.completions.create({
-    model: "llama-3.3-70b-versatile",
+  const res = await groq().chat.completions.create({
+    model: OPENAI_MODEL,
     max_tokens: 1200,
     temperature: 0.7,
     messages: [{ role: "user", content: prompt }],
   });
 
   const text = res.choices[0].message.content;
-  if (!text) throw new Error("Empty response from Groq");
+  if (!text) throw new Error("Empty response from OpenAI");
 
   const clean = text
     .replace(/```json\n?/g, "")
@@ -417,15 +424,15 @@ Respond ONLY with valid JSON:
   "timeToLearn": "2 minutes|10 minutes|30 minutes"
 }`;
 
-  const res = await groq.chat.completions.create({
-    model: "llama-3.3-70b-versatile",
+  const res = await groq().chat.completions.create({
+    model: OPENAI_MODEL,
     max_tokens: 700,
     temperature: 0.6,
     messages: [{ role: "user", content: prompt }],
   });
 
   const text = res.choices[0].message.content;
-  if (!text) throw new Error("Empty response from Groq");
+  if (!text) throw new Error("Empty response from OpenAI");
 
   const clean = text
     .replace(/```json\n?/g, "")
