@@ -16,17 +16,91 @@ import {
   getValidYouTubeToken,
   revokeYouTubeToken,
   isTokenExpired,
+  type YouTubeOAuthClientFlow,
 } from '../providers/youtube.provider';
 
 import {
   generateInstagramAuthUrl,
   completeInstagramOAuth,
+  getInstagramRedirectUri,
+  buildInstagramRedirectUriFromCallbackRequest,
+  decodeInstagramOAuthState,
+  normalizeInstagramOAuthStateParam,
   getValidInstagramToken,
   getInstagramRecentMedia,
   instagramTokenIsExpired,
   instagramTokenNeedsRefresh,
+  type InstagramOAuthClientFlow,
   type InstagramUserProfile,
 } from '../providers/instagram.provider';
+import { pickFrontendBaseFromOAuthState, resolveFrontendBaseForOAuth } from '../utils/oauth-frontend';
+
+/** Query param ?flow= — default settings (dashboard Settings / Profile connect). */
+function parseOAuthFlowQuery(req: FastifyRequest): InstagramOAuthClientFlow {
+  const raw = String((req.query as { flow?: string })?.flow ?? '').trim().toLowerCase();
+  if (raw === 'register') return 'register';
+  if (raw === 'onboarding') return 'onboarding';
+  if (raw === 'settings') return 'settings';
+  return 'settings';
+}
+
+/** Decode flow from OAuth state JSON (legacy payloads omit flow → treat as register). */
+function instagramFlowFromStatePayload(flowRaw: unknown): InstagramOAuthClientFlow {
+  if (flowRaw === 'register' || flowRaw === 'settings' || flowRaw === 'onboarding') return flowRaw;
+  return 'settings';
+}
+
+function instagramSuccessRedirectUrl(
+  frontendUrl: string,
+  flow: InstagramOAuthClientFlow,
+  username: string,
+): string {
+  const h = encodeURIComponent(username);
+  const f = encodeURIComponent(flow);
+  if (flow === 'onboarding')
+    return `${frontendUrl}/onboarding?success=instagram&handle=${h}&integration_flow=${f}`;
+  if (flow === 'register')
+    return `${frontendUrl}/register?oauth_success=instagram&handle=${h}&integration_flow=${f}`;
+  return `${frontendUrl}/dashboard/settings?oauth_success=instagram&handle=${h}&integration_flow=${f}`;
+}
+
+function instagramErrorRedirectUrl(
+  frontendUrl: string,
+  flow: InstagramOAuthClientFlow,
+  key: string,
+): string {
+  const k = encodeURIComponent(key);
+  const f = encodeURIComponent(flow);
+  if (flow === 'onboarding') return `${frontendUrl}/onboarding?error=${k}&integration_flow=${f}`;
+  if (flow === 'register') return `${frontendUrl}/register?oauth_error=${k}&integration_flow=${f}`;
+  return `${frontendUrl}/dashboard/settings?oauth_error=${k}&integration_flow=${f}`;
+}
+
+function youtubeFlowFromStatePayload(flowRaw: unknown): YouTubeOAuthClientFlow {
+  return instagramFlowFromStatePayload(flowRaw) as YouTubeOAuthClientFlow;
+}
+
+function youtubeSuccessRedirectUrl(
+  frontendUrl: string,
+  flow: YouTubeOAuthClientFlow,
+  handle: string,
+): string {
+  const h = encodeURIComponent(handle);
+  if (flow === 'onboarding') return `${frontendUrl}/onboarding?success=youtube&handle=${h}`;
+  if (flow === 'register') return `${frontendUrl}/register?oauth_success=youtube&handle=${h}`;
+  return `${frontendUrl}/dashboard/settings?oauth_success=youtube&handle=${h}`;
+}
+
+function youtubeErrorRedirectUrl(
+  frontendUrl: string,
+  flow: YouTubeOAuthClientFlow,
+  key: string,
+): string {
+  const k = encodeURIComponent(key);
+  if (flow === 'onboarding') return `${frontendUrl}/onboarding?error=${k}`;
+  if (flow === 'register') return `${frontendUrl}/register?oauth_error=${k}`;
+  return `${frontendUrl}/dashboard/settings?oauth_error=${k}`;
+}
 
 // ── Encryption ────────────────────────────────────────────────────────────
 // Key is validated at runtime — if missing, token operations will throw clearly
@@ -59,7 +133,11 @@ export function decryptToken(encryptedToken: string): string {
 export const getInstagramAuthUrl = async (req: FastifyRequest, reply: FastifyReply) => {
   const user = (req as any).user;
   try {
-    const url = generateInstagramAuthUrl(user.id);
+    const clientFlow = parseOAuthFlowQuery(req);
+    const redirectUri = getInstagramRedirectUri();
+    const frontendBase = resolveFrontendBaseForOAuth(req);
+    logger.info({ redirectUri, clientFlow, frontendBase }, 'Instagram OAuth authorize redirect_uri');
+    const url = generateInstagramAuthUrl(user.id, clientFlow, frontendBase);
     return success(reply, { url });
   } catch (err: any) {
     logger.error({ err }, 'Failed to generate Instagram auth URL');
@@ -81,7 +159,8 @@ export const getYoutubeAuthUrl = async (req: FastifyRequest, reply: FastifyReply
     return reply.status(503).send({ success: false, error: 'YouTube OAuth not configured' });
   }
 
-  const url = generateYouTubeAuthUrl(user.id);
+  const clientFlow = parseOAuthFlowQuery(req);
+  const url = generateYouTubeAuthUrl(user.id, clientFlow);
   return success(reply, { url });
 };
 
@@ -90,26 +169,65 @@ export const instagramCallback = async (
   req: FastifyRequest<{ Querystring: { code: string; state: string; error?: string; error_reason?: string } }>,
   reply: FastifyReply,
 ) => {
-  const { code, state, error } = req.query;
-  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  const { code, state: stateRaw, error } = req.query;
+  const state = normalizeInstagramOAuthStateParam(stateRaw);
+  const fallbackFrontend = (
+    process.env.FRONTEND_PUBLIC_URL ||
+    process.env.FRONTEND_URL ||
+    'http://localhost:5173'
+  ).replace(/\/+$/, '');
+
+  const redirectWithInstagramError = (oauthErrorKey: string) => {
+    let flow: InstagramOAuthClientFlow = 'settings';
+    let returnFrontend = fallbackFrontend;
+    if (state) {
+      try {
+        const decoded = decodeInstagramOAuthState(state);
+        flow = instagramFlowFromStatePayload(decoded.flow);
+        returnFrontend = pickFrontendBaseFromOAuthState(decoded.fe, fallbackFrontend);
+      } catch {
+        flow = 'settings';
+      }
+    }
+    return reply.redirect(instagramErrorRedirectUrl(returnFrontend, flow, oauthErrorKey));
+  };
 
   if (error) {
     logger.warn({ error, error_reason: req.query.error_reason }, 'Instagram OAuth denied');
-    return reply.redirect(`${frontendUrl}/register?oauth_error=instagram_denied`);
+    return redirectWithInstagramError('instagram_denied');
   }
 
   let userId: string;
+  let clientFlow: InstagramOAuthClientFlow = 'settings';
+  let returnFrontend = fallbackFrontend;
+  let authorizeRedirectFromState: unknown;
   try {
-    const decoded = JSON.parse(Buffer.from(state, 'base64').toString());
-    userId = decoded.userId;
+    const decoded = decodeInstagramOAuthState(state);
+    userId = decoded.userId as string;
     if (!userId) throw new Error('No userId in state');
+    clientFlow = instagramFlowFromStatePayload(decoded.flow);
+    returnFrontend = pickFrontendBaseFromOAuthState(decoded.fe, fallbackFrontend);
+    authorizeRedirectFromState = decoded.auth_ru;
   } catch {
-    return reply.redirect(`${frontendUrl}/register?oauth_error=invalid_state`);
+    return redirectWithInstagramError('invalid_state');
   }
 
+  logger.info(
+    {
+      configuredRedirectUri: getInstagramRedirectUri(),
+      callbackUrlFromRequest: buildInstagramRedirectUriFromCallbackRequest(req),
+      hasAuthRuInState: typeof authorizeRedirectFromState === 'string',
+    },
+    'Instagram OAuth callback',
+  );
+
   try {
-    // Single call — handles code exchange + long-lived token + profile fetch
-    const { accessToken, expiresAt, profile, permissions } = await completeInstagramOAuth(code);
+    // Short-lived code exchange → long-lived exchange → profile (env INSTAGRAM_ACCESS_TOKEN is unrelated)
+    const { accessToken, expiresAt, profile, permissions } = await completeInstagramOAuth(
+      code,
+      req,
+      authorizeRedirectFromState,
+    );
 
     // Save encrypted token to DB
     await (prisma as any).account_connections.upsert({
@@ -150,29 +268,19 @@ export const instagramCallback = async (
       logger.warn({ err }, 'Niche detection failed — not critical'),
     );
 
-    // Detect if still registering or reconnecting from settings
-    const userRecord = await (prisma.users as any).findUnique({
-      where:  { id: userId },
-      select: { onboarding_step: true },
-    });
-
-    const isRegistering = !userRecord?.onboarding_step || userRecord.onboarding_step === 'new';
-    const redirectBase  = isRegistering ? '/register' : '/dashboard/profile';
-    const successParam  = isRegistering ? 'oauth_success' : 'oauth_success';
-
-    return reply.redirect(
-      `${frontendUrl}${redirectBase}?${successParam}=instagram&handle=${profile.username}`
-    );
+    return reply.redirect(instagramSuccessRedirectUrl(returnFrontend, clientFlow, profile.username));
   } catch (err: any) {
     logger.error({ err, userId }, 'Instagram callback failed');
 
-    // Check for professional account error
     const msg = err.message || '';
+
     if (msg.includes('professional') || msg.includes('business') || msg.includes('creator')) {
-      return reply.redirect(`${frontendUrl}/register?oauth_error=instagram_not_professional`);
+      return reply.redirect(
+        instagramErrorRedirectUrl(returnFrontend, clientFlow, 'instagram_not_professional'),
+      );
     }
 
-    return reply.redirect(`${frontendUrl}/register?oauth_error=instagram_failed`);
+    return reply.redirect(instagramErrorRedirectUrl(returnFrontend, clientFlow, 'instagram_failed'));
   }
 };
 
@@ -182,15 +290,35 @@ export const youtubeCallback = async (
   reply: FastifyReply,
 ) => {
   const { code, state, error } = req.query;
-  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/+$/, '');
+
+  const youtubeFlowFromStateString = (): YouTubeOAuthClientFlow => {
+    if (!state) return 'settings';
+    try {
+      const decoded = JSON.parse(Buffer.from(state, 'base64').toString()) as Record<string, unknown>;
+      return youtubeFlowFromStatePayload(decoded.flow);
+    } catch {
+      return 'settings';
+    }
+  };
 
   if (error) {
-    return reply.redirect(`${frontendUrl}/onboarding?error=youtube_denied`);
+    const flow = youtubeFlowFromStateString();
+    return reply.redirect(youtubeErrorRedirectUrl(frontendUrl, flow, 'youtube_denied'));
+  }
+
+  let userId: string;
+  let clientFlow: YouTubeOAuthClientFlow = 'settings';
+  try {
+    const decoded = JSON.parse(Buffer.from(state, 'base64').toString()) as Record<string, unknown>;
+    userId = decoded.userId as string;
+    if (!userId) throw new Error('No userId in state');
+    clientFlow = youtubeFlowFromStatePayload(decoded.flow);
+  } catch {
+    return reply.redirect(youtubeErrorRedirectUrl(frontendUrl, 'settings', 'youtube_failed'));
   }
 
   try {
-    const { userId } = JSON.parse(Buffer.from(state, 'base64').toString());
-
     // Exchange code for tokens via the provider
     const { accessToken, refreshToken, expiresAt } = await exchangeYouTubeCode(code);
 
@@ -237,21 +365,10 @@ export const youtubeCallback = async (
       logger.warn({ err }, 'Background niche detection failed'),
     );
 
-    // Detect if request came from onboarding or registration
-    // State contains userId — check their onboarding_step
-    const userRecord = await (prisma.users as any).findUnique({
-      where: { id: userId },
-      select: { onboarding_step: true }
-    });
-
-    const isRegistering = !userRecord?.onboarding_step || userRecord.onboarding_step === 'new';
-    const redirectBase = isRegistering ? '/register' : '/onboarding';
-    const paramName = isRegistering ? 'oauth_success' : 'success';
-
-    return reply.redirect(`${frontendUrl}${redirectBase}?${paramName}=youtube&handle=${handle}`);
+    return reply.redirect(youtubeSuccessRedirectUrl(frontendUrl, clientFlow, handle));
   } catch (err) {
     logger.error({ err }, 'YouTube callback failed');
-    return reply.redirect(`${frontendUrl}/onboarding?error=youtube_failed`);
+    return reply.redirect(youtubeErrorRedirectUrl(frontendUrl, clientFlow, 'youtube_failed'));
   }
 };
 
@@ -464,15 +581,22 @@ Respond ONLY with valid JSON:
     };
   }
 
-  // Save to DB
+  // Save to DB (columns match prisma `users` — use aria_last_analysis not aria_profile)
   await (prisma as any).users.update({
     where: { id: userId },
     data: {
       archetype: ariaAnalysis.archetype,
+      archetype_label: ariaAnalysis.archetypeLabel ?? null,
+      archetype_confidence:
+        typeof ariaAnalysis.archetypeConfidence === 'number' ? ariaAnalysis.archetypeConfidence : null,
       niches: ariaAnalysis.detectedNiches,
-      aria_profile: ariaAnalysis,
+      aria_last_analysis: ariaAnalysis,
       onboarding_step: 'analysed',
       aria_analyzed_at: new Date(),
+      health_score:
+        typeof ariaAnalysis.healthScore === 'number' ? ariaAnalysis.healthScore : null,
+      growth_stage: ariaAnalysis.growthStage ?? undefined,
+      follower_range: ariaAnalysis.followerRange ?? undefined,
     },
   });
 

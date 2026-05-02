@@ -1,4 +1,4 @@
-import Groq from 'groq-sdk';
+import OpenAI from 'openai';
 import path from 'path';
 import fs from 'fs';
 import { execFile } from 'child_process';
@@ -7,7 +7,14 @@ import os from 'os';
 import { logger } from '../utils/logger';
 
 const execFileAsync = promisify(execFile);
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+let _openai: OpenAI | null = null;
+const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
+const groq = () => {
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  if (!apiKey) throw new Error('OPENAI_API_KEY is required');
+  if (!_openai) _openai = new OpenAI({ apiKey });
+  return _openai;
+};
 
 /**
  * Check if FFmpeg is available
@@ -101,9 +108,9 @@ export const transcribeAudio = async (videoPath: string, outputDir: string): Pro
 
     // Use Groq Whisper for transcription
     const audioStream = fs.createReadStream(audioPath);
-    const transcription = await groq.audio.transcriptions.create({
+    const transcription = await groq().audio.transcriptions.create({
       file:  audioStream,
-      model: 'whisper-large-v3',
+      model: 'whisper-1',
     });
 
     logger.info('Audio transcribed successfully');
@@ -195,15 +202,15 @@ Respond ONLY with valid JSON:
   "estimatedReachAfterFixes": "60K-150K views after implementing top fix"
 }`;
 
-  const res = await groq.chat.completions.create({
-    model: 'llama-3.3-70b-versatile',
+  const res = await groq().chat.completions.create({
+    model: OPENAI_MODEL,
     max_tokens: 1200,
     temperature: 0.65,
     messages: [{ role: 'user', content: prompt }],
   });
 
   const text  = res.choices[0].message.content;
-  if (!text) throw new Error('Empty response from Groq');
+  if (!text) throw new Error('Empty response from OpenAI');
   const clean = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
   return JSON.parse(clean);
 };
@@ -264,15 +271,15 @@ Respond ONLY with valid JSON:
   "uploadForDeepAnalysis": "Upload the video file directly for ARIA's full AI analysis with timestamps"
 }`;
 
-  const res = await groq.chat.completions.create({
-    model: 'llama-3.3-70b-versatile',
+  const res = await groq().chat.completions.create({
+    model: OPENAI_MODEL,
     max_tokens: 800,
     temperature: 0.65,
     messages: [{ role: 'user', content: prompt }],
   });
 
   const text  = res.choices[0].message.content;
-  if (!text) throw new Error('Empty response from Groq');
+  if (!text) throw new Error('Empty response from OpenAI');
   const clean = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
   return JSON.parse(clean);
 };

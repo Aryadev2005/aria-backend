@@ -1,11 +1,17 @@
-import Groq from 'groq-sdk'
+import { ChatOpenAI } from '@langchain/openai'
 import { logger } from '../../utils/logger'
 
-// Global 30s timeout on client
-const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY,
-  timeout: 30000,
-})
+const createOpenAIClient = (useLlama = false, maxTokens = 1000) =>
+  new ChatOpenAI({
+    apiKey: process.env.OPENAI_API_KEY,
+    // Keep old "useLlama" toggle semantics by mapping to heavy/light OpenAI models.
+    model: useLlama
+      ? (process.env.OPENAI_REASONING_MODEL || process.env.OPENAI_MODEL || 'gpt-4o')
+      : (process.env.OPENAI_MODEL || 'gpt-4o-mini'),
+    temperature: 0,
+    maxTokens,
+    timeout: 25000,
+  })
 
 // ─── JSON parser — strips markdown fences if LLM adds them ────────────────
 const parseJSON = (text: string) => {
@@ -28,10 +34,12 @@ export interface GroqCallOptions {
  * Uses stricter system prompt on retry to fix JSON hallucinations
  */
 export const _callGroq = async (prompt: string, { maxTokens = 1000, useLlama = false, maxRetries = 3 }: GroqCallOptions = {}): Promise<any> => {
-  // Llama 70B for heavy reasoning, Mixtral for fast simple tasks
+  if (!process.env.OPENAI_API_KEY?.trim()) {
+    throw new Error('OPENAI_API_KEY is required for AI analysis')
+  }
   const model = useLlama
-    ? 'llama-3.3-70b-versatile'
-    : (process.env.GROQ_MODEL || 'mixtral-8x7b-32768')
+    ? (process.env.OPENAI_REASONING_MODEL || process.env.OPENAI_MODEL || 'gpt-4o')
+    : (process.env.OPENAI_MODEL || 'gpt-4o-mini')
 
   let lastErr: any = null
 
@@ -42,34 +50,32 @@ export const _callGroq = async (prompt: string, { maxTokens = 1000, useLlama = f
         ? "You are ARIA — India's creator intelligence engine. Always respond with valid JSON only. No preamble, no markdown fences."
         : 'CRITICAL: Respond ONLY with a raw JSON object. No text before or after. No ```json. No explanation. Start your response with { and end with }.'
 
-      const completion = await groq.chat.completions.create({
-        model,
-        max_tokens: maxTokens,
-        messages: [
-          { role: 'system', content: systemContent },
-          { role: 'user',   content: prompt },
-        ],
-      }, {
-        timeout: 25000, // 25s per attempt (under global 30s)
-      })
+      const llm = createOpenAIClient(useLlama, maxTokens)
+      const completion = await llm.invoke([
+        { role: 'system', content: systemContent },
+        { role: 'user', content: prompt },
+      ])
 
-      const content = completion.choices[0].message.content
-      if (!content) throw new Error('Empty response from Groq')
+      const rawContent = completion.content
+      const content = Array.isArray(rawContent)
+        ? rawContent.map((part: any) => (typeof part === 'string' ? part : (part?.text || ''))).join('')
+        : String(rawContent || '')
+      if (!content) throw new Error('Empty response from OpenAI')
 
       try {
         return parseJSON(content)
       } catch (jsonErr) {
-        logger.warn({ jsonErr, attempt, content: content.slice(0, 200) }, 'Groq JSON parse failed — will retry with stricter prompt')
+        logger.warn({ jsonErr, attempt, content: content.slice(0, 200) }, 'OpenAI JSON parse failed — will retry with stricter prompt')
         lastErr = jsonErr
         // Don't break — retry with stricter system prompt above
       }
 
     } catch (err: any) {
-      logger.warn({ err: err.message, attempt, model }, 'Groq API call failed')
+      logger.warn({ err: err.message, attempt, model }, 'OpenAI call failed')
       lastErr = err
 
       // Don't retry on auth errors — they won't resolve
-      if (err.status === 401 || err.status === 403) break
+      if (err.status === 401 || err.status === 403 || err.code === 'invalid_api_key') break
     }
 
     if (attempt < maxRetries) {
@@ -78,8 +84,8 @@ export const _callGroq = async (prompt: string, { maxTokens = 1000, useLlama = f
     }
   }
 
-  logger.error({ err: lastErr, prompt: prompt.slice(0, 100) }, 'Groq exhausted all retries')
-  throw lastErr || new Error('Groq call failed after retries')
+  logger.error({ err: lastErr, prompt: prompt.slice(0, 100) }, 'OpenAI exhausted all retries')
+  throw lastErr || new Error('OpenAI call failed after retries')
 }
 
 // Alias used by ariaService.js (older service)

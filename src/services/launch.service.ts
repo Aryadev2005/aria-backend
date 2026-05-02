@@ -1,10 +1,17 @@
-import Groq from "groq-sdk";
+import OpenAI from "openai";
 import { prisma } from "../config/database";
 import { cache } from "../config/redis";
 import { logger } from "../utils/logger";
 import { getPlatformTimingWindows } from "../utils/platformRouter";
 
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+let _openai: OpenAI | null = null;
+const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
+const groq = () => {
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  if (!apiKey) throw new Error("OPENAI_API_KEY is required");
+  if (!_openai) _openai = new OpenAI({ apiKey });
+  return _openai;
+};
 
 export interface PackageParams {
   niche: string;
@@ -58,15 +65,15 @@ Respond ONLY with valid JSON:
   "bestDayTime": "${timingWindows[0]} IST"
 }`;
 
-  const res = await groq.chat.completions.create({
-    model: "llama-3.3-70b-versatile",
+  const res = await groq().chat.completions.create({
+    model: OPENAI_MODEL,
     max_tokens: 900,
     temperature: 0.7,
     messages: [{ role: "user", content: prompt }],
   });
 
   const text = res.choices[0].message.content;
-  if (!text) throw new Error("Empty response from Groq");
+  if (!text) throw new Error("Empty response from OpenAI");
 
   const clean = text
     .replace(/```json\n?/g, "")
@@ -123,15 +130,15 @@ Respond ONLY with valid JSON:
   "ariaReason": "Why these windows work for a ${archetype} in ${niche} on ${platform} — 2 sentences, specific"
 }`;
 
-  const res = await groq.chat.completions.create({
-    model: "llama-3.3-70b-versatile",
+  const res = await groq().chat.completions.create({
+    model: OPENAI_MODEL,
     max_tokens: 600,
     temperature: 0.6,
     messages: [{ role: "user", content: prompt }],
   });
 
   const text = res.choices[0].message.content;
-  if (!text) throw new Error("Empty response from Groq");
+  if (!text) throw new Error("Empty response from OpenAI");
 
   const clean = text
     .replace(/```json\n?/g, "")
@@ -206,15 +213,15 @@ Respond ONLY with valid JSON:
   "ariaAdvice": "One sharp insight about brand deals for this archetype right now in India"
 }`;
 
-  const res = await groq.chat.completions.create({
-    model: "llama-3.3-70b-versatile",
+  const res = await groq().chat.completions.create({
+    model: OPENAI_MODEL,
     max_tokens: 800,
     temperature: 0.75,
     messages: [{ role: "user", content: prompt }],
   });
 
   const text = res.choices[0].message.content;
-  if (!text) throw new Error("Empty response from Groq");
+  if (!text) throw new Error("Empty response from OpenAI");
 
   const clean = text
     .replace(/```json\n?/g, "")

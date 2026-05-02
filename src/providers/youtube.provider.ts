@@ -21,12 +21,28 @@ function makeYouTubeOAuthClient(redirectUri: string) {
 }
 
 function getRedirectUri(): string {
-  return `${process.env.BACKEND_URL || 'http://localhost:3000'}/api/v1/integrations/youtube/callback`;
+  const explicit = process.env.YOUTUBE_REDIRECT_URI?.trim();
+  if (explicit) return explicit;
+
+  const base = (
+    process.env.BACKEND_PUBLIC_URL?.trim() ||
+    process.env.BACKEND_URL?.trim() ||
+    'http://localhost:3000'
+  ).replace(/\/+$/, '');
+
+  return `${base}/api/v1/integrations/youtube/callback`;
 }
 
-export function generateYouTubeAuthUrl(userId: string): string {
+export type YouTubeOAuthClientFlow = 'register' | 'settings' | 'onboarding';
+
+export function generateYouTubeAuthUrl(
+  userId: string,
+  clientFlow: YouTubeOAuthClientFlow = 'settings',
+): string {
   const client = makeYouTubeOAuthClient(getRedirectUri());
-  const state = Buffer.from(JSON.stringify({ userId, ts: Date.now() })).toString('base64');
+  const state = Buffer.from(JSON.stringify({ userId, ts: Date.now(), flow: clientFlow })).toString(
+    'base64',
+  );
   return client.generateAuthUrl({
     access_type: 'offline',
     prompt: 'consent',
