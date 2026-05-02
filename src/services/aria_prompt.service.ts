@@ -142,6 +142,30 @@ CREATOR ANALYTICS:
 - Engagement rate: ${engagementRate}%
 - Health score: ${healthScore}/100
 - Growth stage: ${growthStage}`;
+  
+  const freshAnalysis = (user as any)?.aria_last_analysis;
+  const isNewlyAnalysed = (user as any)?.onboarding_step === 'analysed' && freshAnalysis;
+
+  const freshAnalysisBlock = isNewlyAnalysed ? `
+
+CRITICAL FIRST MESSAGE INSTRUCTION:
+The user just connected their Instagram and ARIA has completed their profile analysis.
+You MUST open with a structured analysis presentation — do NOT wait for them to ask.
+
+Present in this exact order:
+1. A warm 1-line opener referencing their handle and detected niche
+2. Their top reels ranked by performance (use data from their scraped_summary if available)
+3. A comparison table: Reel topic | Plays | Like Rate
+4. What content pattern worked best (be specific about hook/format/topic)
+5. Their niche + archetype + confidence score
+6. End with EXACTLY this question: "Does this feel accurate to you? Anything you'd like me to adjust about your niche or content focus?"
+
+Data available:
+- Archetype: ${(user as any)?.archetype_label || (user as any)?.archetype}
+- Niches: ${Array.isArray((user as any)?.niches) ? (user as any).niches.join(', ') : (user as any)?.niches}
+- Health Score: ${(user as any)?.health_score}
+- Analysis: ${JSON.stringify(freshAnalysis).slice(0, 800)}
+` : '';
 
   // Memory block (persistent learnings)
   const memoryBlock = buildMemoryBlock(memory);
@@ -168,6 +192,7 @@ SCREEN CONTEXT: ${SCREEN_CONTEXT[entryScreen] || SCREEN_CONTEXT.direct}
 ${sessionBlock}
 ${followUpBlock}
 ${memoryBlock}
+${freshAnalysisBlock}
 ${emotionalRegister}
 
 RULES — NEVER BREAK THESE:

@@ -15,6 +15,7 @@ import {
   getDBLiveTrends,
   getDBTrendingSongs,
   getUserContentHistory,
+  confirmNiche,
 } from "./tools";
 import { getMcpTools } from "./mcp_tools";
 
@@ -125,11 +126,21 @@ const createDBInjectedTools = (db: any, user: any) => {
     },
   );
 
+  const confirmNicheWithDB = tool(
+    async () => confirmNiche.invoke({ userId: user.id, db }),
+    {
+      name: "confirm_niche",
+      description: "Confirm the user's detected niche and archetype.",
+      schema: z.object({}),
+    },
+  );
+
   return [
     getUserProfileWithDB,
     getDBTrendsWithDB,
     getDBSongsWithDB,
     getContentHistoryWithDB,
+    confirmNicheWithDB,
   ];
 };
 

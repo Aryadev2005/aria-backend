@@ -68,12 +68,18 @@ function encryptToken(token: string): string {
 
 // Exported so other services can decrypt tokens when posting
 export function decryptToken(encryptedToken: string): string {
+  if (!encryptedToken) return '';
   const [ivHex, encryptedHex] = encryptedToken.split(':');
-  if (!ivHex || !encryptedHex) throw new Error('Invalid encrypted token format');
-  const iv = Buffer.from(ivHex, 'hex');
-  const encrypted = Buffer.from(encryptedHex, 'hex');
-  const decipher = crypto.createDecipheriv('aes-256-cbc', getEncryptionKey(), iv);
-  return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8');
+  if (!ivHex || !encryptedHex) return '';
+  try {
+    const iv = Buffer.from(ivHex, 'hex');
+    const encrypted = Buffer.from(encryptedHex, 'hex');
+    const decipher = crypto.createDecipheriv('aes-256-cbc', getEncryptionKey(), iv);
+    return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8');
+  } catch (err) {
+    logger.warn({ err }, 'Token decryption failed');
+    return '';
+  }
 }
 
 // ── POST /api/v1/integrations/instagram/connect-by-handle ─────────────────
@@ -293,30 +299,55 @@ export const disconnectPlatform = async (
   const user = (req as any).user;
   const { platform } = req.params;
 
-  // Revoke tokens before deleting (best-effort) — YouTube only
-  if (platform === 'youtube') {
+  // Only YouTube needs token revocation — Instagram is scrape-based, no token
+  if (platform === "youtube") {
     try {
       const connection = await (prisma as any).account_connections.findFirst({
-        where: { user_id: user.id, platform: 'youtube' },
+        where: { user_id: user.id, platform: "youtube" },
         select: { encrypted_token: true },
       });
       if (connection?.encrypted_token) {
-        const decrypted = decryptToken(connection.encrypted_token);
-        const payload = JSON.parse(decrypted) as { access_token: string; refresh_token: string };
-        await revokeYouTubeToken(payload.access_token);
+        try {
+          const decrypted = decryptToken(connection.encrypted_token);
+          const payload = JSON.parse(decrypted) as {
+            access_token: string;
+            refresh_token: string;
+          };
+          await revokeYouTubeToken(payload.access_token);
+        } catch (decryptErr) {
+          logger.warn({ err: decryptErr }, "Could not decrypt YouTube token — skipping revocation");
+        }
       }
     } catch (revokeErr) {
-      // Don't fail the disconnect if revoke fails — token will expire on its own
-      logger.warn({ err: revokeErr, platform }, 'YouTube token revocation failed — proceeding with disconnect');
+      logger.warn({ err: revokeErr, platform }, "YouTube token revocation failed — proceeding anyway");
     }
   }
-  // Instagram: no tokens to revoke (username-only connection)
 
+  // Delete the connection row
   await (prisma as any).account_connections.deleteMany({
     where: { user_id: user.id, platform },
   });
 
+  // For Instagram: also clear profile data from users table
+  if (platform === "instagram") {
+    await (prisma as any).users.update({
+      where: { id: user.id },
+      data: {
+        instagram_handle:   null,
+        scraped_summary:    null,
+        scraped_at:         null,
+        engagement_rate:    null,
+        niches:             [],
+        archetype:          null,
+        archetype_label:    null,
+        aria_last_analysis: null,
+        onboarding_step:    null,
+      },
+    });
+  }
+
   await cache.del(CacheKeys.user(user.id));
+  logger.info({ userId: user.id, platform }, "Platform disconnected");
   return success(reply, { disconnected: true, platform });
 };
 
@@ -360,6 +391,25 @@ async function triggerNicheDetection(
   const recentCaptions: string[] = richData?.allCaptions?.slice(0, 12) || [];
   const recentVideos = scrapedData?.recent_videos || [];
 
+  // ── Compute top reels for the prompt ─────────────────────────────────────
+  const posts = richData?.posts || [];
+  const reels = posts.filter((p: any) => p.isVideo)
+    .sort((a: any, b: any) => (b.videoViewCount || 0) - (a.videoViewCount || 0))
+    .slice(0, 10);
+  
+  const topReelsData = reels.slice(0, 5).map((p: any) => ({
+    shortcode: p.shortCode,
+    plays: p.videoViewCount || 0,
+    likes: p.likesCount || 0,
+    likeRate: followers > 0 ? `${((p.likesCount / followers) * 100).toFixed(2)}%` : '0%',
+    topic: p.caption?.slice(0, 60).replace(/\n/g, ' ') || 'No caption'
+  }));
+
+  const allPlays = posts.filter((p: any) => p.isVideo)
+    .map((p: any) => p.videoViewCount || 0)
+    .sort((a: number, b: number) => a - b);
+  const medianPlays = allPlays.length > 0 ? allPlays[Math.floor(allPlays.length / 2)] : 0;
+
   const followerRange =
     followers > 500000 ? '500K+' :
     followers > 100000 ? '100K–500K' :
@@ -385,7 +435,8 @@ ${topMentions.length > 0 ? `Frequently Mentioned Accounts: ${topMentions.slice(0
 ${taggedBrands.length > 0 ? `Verified Accounts Tagged in Posts: ${taggedBrands.join(', ')}` : ''}
 ${topLocations.length > 0 ? `Posting Locations: ${topLocations.join(', ')}` : ''}
 ${recentVideos.length > 0 ? `Recent Videos: ${recentVideos.slice(0, 5).map((v: any) => v.title).join(', ')}` : ''}
-${recentCaptions.length > 0 ? `\nRecent Post Captions:\n${recentCaptions.slice(0, 10).map((c, i) => `  ${i + 1}. "${c.slice(0, 300)}"`).join('\n')}` : ''}
+${topReelsData.length > 0 ? `\nTop Performing Reels:\n${topReelsData.map((r: any, i: number) => `  ${i + 1}. [${r.shortcode}] ${r.plays} plays, ${r.likes} likes (${r.likeRate} like rate) - Topic: ${r.topic}`).join('\n')}` : ''}
+${recentCaptions.length > 0 ? `\nRecent Post Captions:\n${recentCaptions.slice(0, 10).map((c: string, i: number) => `  ${i + 1}. "${c.slice(0, 300)}"`).join('\n')}` : ''}
 
 Respond ONLY with valid JSON:
 {
@@ -411,8 +462,19 @@ Respond ONLY with valid JSON:
   "monetisationReadiness": 65,
   "estimatedMonthlyEarning": "₹15,000–₹45,000",
   "ariaMessage": "Personal message from ARIA to this creator — 2 sentences, warm, specific to their data",
-  "brandCategories": ["Fashion", "Beauty", "Lifestyle"]
-}`;
+  "brandCategories": ["Fashion", "Beauty", "Lifestyle"],
+  "topReels": [
+    { "shortcode": "shortcode", "plays": 1000, "likes": 50, "likeRate": "5.0%", "topic": "Topic summary" }
+  ],
+  "medianPlays": ${medianPlays},
+  "bestReelMultiplier": "1.5x median",
+  "contentPatterns": {
+    "whatWorked": "Specific hook or style that performed well",
+    "whatDidnt": "Style that underperformed",
+    "bestFormat": "Reels|Shorts|Carousel"
+  }
+}
+`;
 
   // ── Call Groq ─────────────────────────────────────────────────────────────
   let ariaAnalysis: any;

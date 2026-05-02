@@ -108,4 +108,14 @@ export default async function userRoutes(app: FastifyInstance) {
     },
     userController.updateSubscription,
   );
+
+  // PUT /api/v1/users/confirm-niche
+  app.put('/confirm-niche', { preHandler: [authenticateFirebase] }, async (req, reply) => {
+    const user = (req as any).user;
+    await (prisma.users as any).update({
+      where: { id: user.id },
+      data: { onboarding_step: 'confirmed' },
+    });
+    return success(reply, { confirmed: true });
+  });
 }

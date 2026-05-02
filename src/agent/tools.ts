@@ -629,6 +629,40 @@ export const analyseYouTubeVideoQuick = tool(
   },
 );
 
+// ── TOOL 13: Confirm niche (onboarding completion) ───────────────────────────
+export const confirmNiche = tool(
+  async ({ userId, db }) => {
+    try {
+      if (isPrismaClient(db)) {
+        await (db.users as any).update({
+          where: { id: userId },
+          data: { aria_confirmed_niche: true, onboarding_step: 'completed' },
+        });
+      } else {
+        await db`
+          UPDATE users SET aria_confirmed_niche = true, onboarding_step = 'completed'
+          WHERE id = ${userId}
+        `;
+      }
+      return JSON.stringify({ success: true, message: "Niche confirmed and onboarding completed." });
+    } catch (err: any) {
+      return JSON.stringify({
+        success: false,
+        error: `Failed to confirm niche: ${err.message}`,
+      });
+    }
+  },
+  {
+    name: "confirm_niche",
+    description:
+      "Mark the user's detected niche and archetype as confirmed. Call this when the user says 'yes', 'looks good', 'correct', or otherwise confirms the analysis ARIA presented to them after connecting Instagram.",
+    schema: z.object({
+      userId: z.string().uuid().describe("User UUID from auth context"),
+      db: z.any().describe("Database connection — injected by agent runtime"),
+    }),
+  },
+);
+
 // ── Export all tools as array ─────────────────────────────────────────────────
 export const ALL_ARIA_TOOLS = [
   getYouTubeVideoStats,
@@ -643,4 +677,5 @@ export const ALL_ARIA_TOOLS = [
   getDBTrendingSongs,
   getUserContentHistory,
   analyseYouTubeVideoQuick,
+  confirmNiche,
 ];
