@@ -33,19 +33,17 @@ function getRedirectUri(): string {
   return `${base}/api/v1/integrations/youtube/callback`;
 }
 
-export type YouTubeOAuthClientFlow = 'register' | 'settings' | 'onboarding';
-
 export function generateYouTubeAuthUrl(
   userId: string,
-  clientFlow: YouTubeOAuthClientFlow = 'settings',
+  flow: "register" | "onboarding" | "dashboard" = "dashboard",
 ): string {
   const client = makeYouTubeOAuthClient(getRedirectUri());
-  const state = Buffer.from(JSON.stringify({ userId, ts: Date.now(), flow: clientFlow })).toString(
-    'base64',
-  );
+  const state = Buffer.from(
+    JSON.stringify({ userId, ts: Date.now(), flow }),
+  ).toString("base64");
   return client.generateAuthUrl({
-    access_type: 'offline',
-    prompt: 'consent',
+    access_type: "offline",
+    prompt: "consent",
     scope: YOUTUBE_SCOPES,
     state,
     redirect_uri: getRedirectUri(),

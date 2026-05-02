@@ -26,6 +26,21 @@ export const connectHandle = async (
   try {
     logger.info({ userId: user.id, handle, platform }, "Onboarding: handle connect started");
 
+    // If user already has an analysis from OAuth, skip and return it
+    const existingUser = await (prisma.users as any).findUnique({
+      where: { id: user.id },
+      select: { onboarding_step: true, aria_profile: true, instagram_handle: true, youtube_handle: true }
+    });
+
+    if (existingUser?.onboarding_step === 'analysed' && existingUser.aria_profile) {
+      logger.info({ userId: user.id }, "Onboarding: Using existing OAuth analysis");
+      return success(reply, {
+        ariaAnalysis: existingUser.aria_profile,
+        handle: platform === 'instagram' ? existingUser.instagram_handle : existingUser.youtube_handle,
+        platform,
+      });
+    }
+
     let scrapedData: any = null;
     let scrapeError: string | null = null;
 
