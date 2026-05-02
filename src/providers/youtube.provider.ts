@@ -24,12 +24,17 @@ function getRedirectUri(): string {
   return `${process.env.BACKEND_URL || 'http://localhost:3000'}/api/v1/integrations/youtube/callback`;
 }
 
-export function generateYouTubeAuthUrl(userId: string): string {
+export function generateYouTubeAuthUrl(
+  userId: string,
+  flow: "register" | "onboarding" | "dashboard" = "dashboard",
+): string {
   const client = makeYouTubeOAuthClient(getRedirectUri());
-  const state = Buffer.from(JSON.stringify({ userId, ts: Date.now() })).toString('base64');
+  const state = Buffer.from(
+    JSON.stringify({ userId, ts: Date.now(), flow }),
+  ).toString("base64");
   return client.generateAuthUrl({
-    access_type: 'offline',
-    prompt: 'consent',
+    access_type: "offline",
+    prompt: "consent",
     scope: YOUTUBE_SCOPES,
     state,
     redirect_uri: getRedirectUri(),

@@ -238,6 +238,13 @@ export const buildApp = async (): Promise<FastifyInstance> => {
 
   // ── Lifecycle / error handlers ─────────────────────────────────────────────
   app.setNotFoundHandler((req, reply) => {
+    // Log details about 404 for debugging
+    app.log.warn({
+      method: req.method,
+      url: req.url,
+      headers: req.headers
+    }, "404 Not Found");
+
     reply.code(404).send({
       success: false,
       error: "NOT_FOUND",
