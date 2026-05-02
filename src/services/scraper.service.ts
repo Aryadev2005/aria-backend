@@ -1,11 +1,6 @@
-import { execFile } from "child_process";
-import { promisify } from "util";
-import path from "path";
 import { prisma } from "../config/database";
-import { cache, CacheKeys } from "../config/redis";
 import { logger } from "../utils/logger";
-
-const execFileAsync = promisify(execFile);
+import { scrapeInstagramWithApify } from './apify.service';
 
 export interface ScrapedPost {
   type: "reel" | "photo" | "video" | string;
@@ -110,10 +105,10 @@ export const buildScrapedSummary = (rawData: ScrapedData): ScrapedSummary => {
 };
 
 /**
- * Scrape Instagram profile and save to database
- * Called by scrape.worker.js
+ * Scrape Instagram profile and save to database.
+ * Uses Apify actors for public profile scraping — no OAuth needed.
  *
- * Returns: { followers, engagement_rate, scraped_summary }
+ * Returns: { followers, engagement_rate, scraped_summary, _richData }
  * Throws: Error if scraping fails (worker will log and continue)
  */
 export const scrapeAndSaveProfile = async (
@@ -121,119 +116,62 @@ export const scrapeAndSaveProfile = async (
   handle: string,
   platform: string,
 ) => {
-  try {
-    // Validate inputs
-    if (!userId || !handle) {
-      throw new Error("userId and handle are required");
-    }
-
-    if (platform !== "instagram" && platform !== "youtube") {
-      throw new Error(
-        `Platform ${platform} not supported yet. Only instagram and youtube.`,
-      );
-    }
-
-    // Only Instagram supported for now
-    if (platform !== "instagram") {
-      throw new Error(`${platform} scraping not implemented yet`);
-    }
-
-    logger.info({ userId, handle, platform }, "Starting profile scrape");
-
-    // Run Python scraper with a strict timeout
-    const scriptPath = path.join(
-      __dirname,
-      "../..",
-      "scripts/scrape_instagram.py",
-    );
-
-    const { stdout, stderr } = await new Promise<{
-      stdout: string;
-      stderr: string;
-    }>((resolve, reject) => {
-      execFile(
-        "python3",
-        [scriptPath, handle],
-        {
-          timeout: 45000, // 45s timeout
-          maxBuffer: 10 * 1024 * 1024,
-          killSignal: "SIGKILL", // Be aggressive with killing hung processes
-        },
-        (err: any, stdout, stderr) => {
-          if (err) {
-            if (err.killed)
-              reject(
-                new Error(`Scraper timed out after 45s for handle: ${handle}`),
-              );
-            else reject(err);
-            return;
-          }
-          resolve({ stdout, stderr });
-        },
-      );
-    });
-
-    if (stderr && !stdout) {
-      throw new Error(stderr);
-    }
-
-    // Parse output
-    let scrapedData: ScrapedData;
-    try {
-      scrapedData = JSON.parse(stdout);
-    } catch (err) {
-      logger.error({ err, stdout, stderr }, "Failed to parse scraper output");
-      throw new Error("Invalid scraper output");
-    }
-
-    // Check for errors in output
-    if (scrapedData.error) {
-      if (scrapedData.isPrivate) {
-        throw new Error(
-          "Could not analyze this profile. Make sure it is public and try again.",
-        );
-      }
-      throw new Error(scrapedData.error);
-    }
-
-    // Compute summary and engagement
-    const scrapedSummary = buildScrapedSummary(scrapedData);
-    const engagementRate = computeEngagementRate(
-      scrapedData.posts,
-      scrapedData.followers,
-    );
-
-    // Save to database
-    await prisma.users.update({
-      where: { id: userId },
-      data: {
-        scraped_summary: scrapedSummary as any,
-        scraped_at: new Date(),
-        engagement_rate: engagementRate,
-        instagram_handle: handle,
-        aria_analyzed_at: new Date(),
-      },
-    });
-
-    // Invalidate user cache
-    await cache.del(CacheKeys.dashboard(userId));
-
-    logger.info(
-      {
-        userId,
-        followers: scrapedData.followers,
-        engagement_rate: engagementRate,
-      },
-      "Profile scraped and saved",
-    );
-
-    return {
-      followers: scrapedData.followers,
-      engagement_rate: engagementRate,
-      scraped_summary: scrapedSummary,
-    };
-  } catch (err: any) {
-    logger.error({ err, userId, handle }, "Profile scrape failed");
-    throw err;
+  if (!userId || !handle) throw new Error('userId and handle are required');
+  if (platform !== 'instagram' && platform !== 'youtube') {
+    throw new Error(`Platform ${platform} not supported`);
   }
+  if (platform !== 'instagram') {
+    throw new Error(`${platform} scraping not implemented in this path`);
+  }
+
+  logger.info({ userId, handle }, 'scraper.service: starting Apify scrape');
+
+  // ── Call Apify scraper ────────────────────────────────────────────────────
+  const scraped = await scrapeInstagramWithApify(handle, 50);
+
+  // ── Build scraped_summary (same shape the rest of the codebase expects) ──
+  const scrapedSummary = {
+    totalPostsAnalyzed: scraped.totalPostsAnalyzed,
+    postTypeMix: `${scraped.reelCount} reels, ${scraped.photoCount} photos`,
+    avgLikes: scraped.avgLikes,
+    avgComments: scraped.avgComments,
+    avgViews: scraped.avgViews,
+    postsPerWeek: scraped.postsPerWeek,
+    topHashtags: scraped.topHashtags,
+    topMentions: scraped.topMentions,
+    topLocations: scraped.topLocations,
+    taggedBrands: scraped.taggedBrands,
+    bestPostType: scraped.reelCount >= scraped.photoCount ? 'reel' : 'photo',
+    worstPostType: scraped.reelCount >= scraped.photoCount ? 'photo' : 'reel',
+    followerCount: scraped.followers,
+    biography: scraped.biography,
+    businessCategory: scraped.businessCategory,
+    isVerified: scraped.isVerified,
+    allCaptions: scraped.allCaptions,
+  };
+
+  // ── Compute engagement rate ───────────────────────────────────────────────
+  const engagementRate = parseFloat(scraped.engagementRate) || 0;
+
+  // ── Save to DB ────────────────────────────────────────────────────────────
+  await (prisma as any).users.update({
+    where: { id: userId },
+    data: {
+      instagram_handle: scraped.handle,
+      follower_count:   scraped.followers,
+      engagement_rate:  engagementRate,
+      scraped_at:       new Date(),
+      scraped_summary:  scrapedSummary,
+    },
+  });
+
+  logger.info({ userId, handle, posts: scraped.totalPostsAnalyzed }, 'scraper.service: saved to DB');
+
+  return {
+    followers: scraped.followers,
+    engagement_rate: engagementRate.toString(),
+    scraped_summary: scrapedSummary,
+    // Pass these through so triggerNicheDetection can use them directly
+    _richData: scraped,
+  };
 };

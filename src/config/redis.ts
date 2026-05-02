@@ -18,18 +18,26 @@ export const connectRedis = async () => {
   try {
     redisClient = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
       lazyConnect: true,
-      maxRetriesPerRequest: null,
-      retryStrategy: (times) => times > 5 ? null : Math.min(times * 100, 2000),
+      maxRetriesPerRequest: 3,              // was null (retried forever) — now fails fast
+      retryStrategy: (times) => {
+        if (times > 3) return null          // stop retrying after 3 attempts
+        return Math.min(times * 200, 1000)
+      },
+      connectTimeout: 4000,                 // give up connecting after 4s
       keepAlive: 30000,
       noDelay: true,
     })
+
     redisClient.on('error', (err) => logger.error({ err }, 'Redis error'))
+
     await redisClient.connect()
     await redisClient.ping()
     logger.info('Redis connected')
     return redisClient
-  } catch (err) {
-    logger.warn('Running without Redis cache')
+  } catch (err: any) {
+    // Non-fatal — app runs without Redis, L1 in-memory cache still works
+    logger.warn({ err: err.message }, 'Redis unavailable — running with in-memory cache only')
+    redisClient = null
   }
 }
 
@@ -56,13 +64,13 @@ export const cache = {
     const packed = pack(value)
     l1Cache.set(key, packed, { ttl: Math.min(ttlSeconds * 1000, 30000) })
     if (redisClient) {
-      redisClient.setex(key, ttlSeconds, packed).catch(() => {})
+      redisClient.setex(key, ttlSeconds, packed).catch(() => { })
     }
   },
 
   async del(key: string) {
     l1Cache.delete(key)
-    if (redisClient) await redisClient.del(key).catch(() => {})
+    if (redisClient) await redisClient.del(key).catch(() => { })
   },
 
   async delPattern(pattern: string) {
@@ -71,7 +79,7 @@ export const cache = {
     }
     if (redisClient) {
       const keys = await redisClient.keys(pattern)
-      if (keys.length > 0) await redisClient.del(...keys).catch(() => {})
+      if (keys.length > 0) await redisClient.del(...keys).catch(() => { })
     }
   },
 
@@ -119,10 +127,10 @@ export const CacheKeys = {
 }
 
 export const TTL = {
-  TREND:     parseInt(process.env.CACHE_TTL_TRENDS   || '300',  10),
-  SONG:      parseInt(process.env.CACHE_TTL_SONGS    || '600',  10),
-  USER:      parseInt(process.env.CACHE_TTL_USER     || '3600', 10),
-  DASHBOARD: parseInt(process.env.CACHE_TTL_DASHBOARD|| '60',  10),
+  TREND:     parseInt(process.env.CACHE_TTL_TRENDS    || '300',  10),
+  SONG:      parseInt(process.env.CACHE_TTL_SONGS     || '600',  10),
+  USER:      parseInt(process.env.CACHE_TTL_USER      || '3600', 10),
+  DASHBOARD: parseInt(process.env.CACHE_TTL_DASHBOARD || '60',   10),
   CONTENT:   1800,
   ANALYTICS: 300,
 }

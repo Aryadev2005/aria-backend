@@ -38,6 +38,7 @@
     "@prisma/adapter-pg": "^7.8.0",
     "@prisma/client": "^7.8.0",
     "@types/pg": "^8.20.0",
+    "apify-client": "^2.23.1",
     "axios": "^1.15.2",
     "bullmq": "^5.76.2",
     "cheerio": "^1.0.0-rc.12",

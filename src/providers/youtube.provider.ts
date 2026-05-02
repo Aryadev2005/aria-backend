@@ -33,9 +33,11 @@ function getRedirectUri(): string {
   return `${base}/api/v1/integrations/youtube/callback`;
 }
 
+export type YouTubeOAuthClientFlow = 'register' | 'onboarding' | 'dashboard' | 'settings';
+
 export function generateYouTubeAuthUrl(
   userId: string,
-  flow: "register" | "onboarding" | "dashboard" = "dashboard",
+  flow: YouTubeOAuthClientFlow = 'dashboard',
 ): string {
   const client = makeYouTubeOAuthClient(getRedirectUri());
   const state = Buffer.from(

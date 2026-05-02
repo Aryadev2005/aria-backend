@@ -34,13 +34,13 @@ export const buildApp = async (): Promise<FastifyInstance> => {
       transport:
         process.env.NODE_ENV !== "production"
           ? {
-              target: "pino-pretty",
-              options: {
-                colorize: true,
-                translateTime: "SYS:HH:MM:ss",
-                ignore: "pid,hostname",
-              },
-            }
+            target: "pino-pretty",
+            options: {
+              colorize: true,
+              translateTime: "SYS:HH:MM:ss",
+              ignore: "pid,hostname",
+            },
+          }
           : undefined,
     },
     genReqId: (req) => {
