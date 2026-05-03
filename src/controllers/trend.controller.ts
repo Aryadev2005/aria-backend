@@ -327,10 +327,44 @@ export const getViralIdeas = async (
   reply: FastifyReply
 ) => {
   const user  = req.user as User;
-  const niche = user.niches?.[0] || "general";
-  const platform = user.primary_platform || "instagram";
   const force = req.query.force === "true";
 
+  // Pull full user context from DB — needed for infinite niche resolution
+  const dbUser = await (prisma.users as any).findUnique({
+    where: { id: user.id },
+    select: {
+      niches:             true,
+      archetype:          true,
+      archetype_label:    true,
+      primary_platform:   true,
+      follower_range:     true,
+      instagram_handle:   true,
+      bio:                true,
+      scraped_summary:    true,
+      aria_last_analysis: true,
+    },
+  });
+
+  const niches: string[]   = (dbUser?.niches as string[]) ?? [];
+  const niche              = niches[0] ?? "general";
+  const platform           = dbUser?.primary_platform ?? "instagram";
+  const scrapedSummary     = (dbUser?.scraped_summary as any) ?? {};
+  const ariaAnalysis       = (dbUser?.aria_last_analysis as any) ?? {};
+
+  // Build full user context for Groq niche resolver
+  const userContext = {
+    niches,
+    archetype:        dbUser?.archetype ?? null,
+    archetypeLabel:   dbUser?.archetype_label ?? null,
+    instagramHandle:  dbUser?.instagram_handle ?? null,
+    bio:              dbUser?.bio ?? null,
+    topHashtags:      scrapedSummary?.topHashtags ?? [],
+    brandCategories:  ariaAnalysis?.brandCategories ?? [],
+    archetypeEmoji:   ariaAnalysis?.archetypeEmoji ?? null,
+    contentPatterns:  ariaAnalysis?.contentPatterns ?? null,
+  };
+
+  // Per-user cache key includes niche so edit → new cache
   const cacheKey = `viral_ideas:${user.id}:${niche}`;
 
   try {
@@ -347,11 +381,11 @@ export const getViralIdeas = async (
     const ideas = await generateViralIdeas({
       niche,
       platform,
-      archetype:     user.archetype     || null,
-      followerRange: user.follower_range || "10K–50K",
+      archetype:     dbUser?.archetype ?? null,
+      followerRange: dbUser?.follower_range ?? "10K–50K",
+      userContext,
     });
 
-    // Cache even if empty — prevents hammering sources on bad niche
     await cache.set(cacheKey, ideas, ideas.length > 0 ? 7200 : 300);
 
     return success(reply, {
@@ -359,10 +393,6 @@ export const getViralIdeas = async (
       cached:      false,
       niche,
       refreshedAt: new Date().toISOString(),
-      sources: {
-        reddit:  ideas.some((i: any) => i.source?.includes("reddit")),
-        youtube: ideas.some((i: any) => i.source?.includes("youtube")),
-      },
     });
 
   } catch (err) {
@@ -370,4 +400,5 @@ export const getViralIdeas = async (
     return errors.serviceDown(reply, "Trend ideas engine");
   }
 };
+
 

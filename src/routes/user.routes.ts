@@ -7,7 +7,9 @@ import type {
 } from "../controllers/user.controller";
 import { authenticateFirebase } from "../middleware/auth.middleware";
 import { prisma } from "../config/database";
+import { cache, CacheKeys } from "../config/redis";
 import { success, errors } from "../utils/response";
+import { logger } from "../utils/logger";
 export default async function userRoutes(app: FastifyInstance) {
   app.get(
     "/profile",
@@ -118,4 +120,41 @@ export default async function userRoutes(app: FastifyInstance) {
     });
     return success(reply, { confirmed: true });
   });
+
+  // PUT /api/v1/users/niche — user manually sets/edits their niche
+  app.put<{ Body: { niche: string } }>(
+    "/niche",
+    {
+      preHandler: [authenticateFirebase],
+      schema: {
+        body: {
+          type: "object",
+          required: ["niche"],
+          properties: {
+            niche: { type: "string", minLength: 1, maxLength: 100 },
+          },
+        },
+      },
+    },
+    async (req, reply) => {
+      const user  = (req as any).user;
+      const { niche } = req.body;
+
+      const cleaned = niche.trim().toLowerCase();
+
+      await (prisma.users as any).update({
+        where: { id: user.id },
+        data:  { niches: [cleaned] },
+      });
+
+      // Bust viral ideas cache so next fetch uses new niche
+      await cache.del(`viral_ideas:${user.id}:${cleaned}`);
+      // Also bust old niche cache
+      await cache.del(CacheKeys.user(user.id));
+
+      logger.info({ userId: user.id, niche: cleaned }, "User niche updated");
+
+      return success(reply, { niche: cleaned, message: "Niche updated. Refreshing trends..." });
+    }
+  );
 }

@@ -506,6 +506,7 @@ Respond ONLY with valid JSON:
   await (prisma as any).users.update({
     where: { id: userId },
     data: {
+      bio:                 biography || null,
       niches:              ariaAnalysis.detectedNiches || ['general'],
       archetype:           ariaAnalysis.archetype || 'EDUCATOR',
       archetype_label:     ariaAnalysis.archetypeLabel,
