@@ -66,10 +66,18 @@ export const buildApp = async (): Promise<FastifyInstance> => {
     crossOriginEmbedderPolicy: false,
   });
 
-  const devWildcardOrigins =
-    process.env.NODE_ENV !== "production"
-      ? ["*.ngrok-free.dev", "*.ngrok.io"]
-      : [];
+  // Dev tunnel origins are always allowed — devtunnels.ms is VS Code's tunnel
+  // service and is used in staging/QA even when NODE_ENV=production
+  const devWildcardOrigins = [
+    "*.ngrok-free.app",
+    "*.ngrok-free.dev",
+    "*.ngrok.io",
+    "*.devtunnels.ms",      // VS Code dev tunnels (all regions)
+    "*.inc1.devtunnels.ms", // India Central region
+    "*.asse.devtunnels.ms", // Asia SE region
+    "*.euw.devtunnels.ms",  // Europe West
+    "*.use.devtunnels.ms",  // US East
+  ];
 
   const allowedOrigins = (process.env.ALLOWED_ORIGINS?.split(",") || [])
     .map((origin) => origin.trim())
@@ -78,6 +86,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
       "http://localhost:5500",
       "http://127.0.0.1:5500",
       "http://localhost:5173",
+      "http://localhost:3000",
       ...devWildcardOrigins,
     ]);
   const allowAllOrigins = allowedOrigins.includes("*");

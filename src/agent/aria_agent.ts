@@ -10,13 +10,8 @@ import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 
-import {
-  getUserProfile,
-  getDBLiveTrends,
-  getDBTrendingSongs,
-  getUserContentHistory,
-  confirmNiche,
-} from "./tools";
+// DB tools are imported inline inside each closure in createDBInjectedTools
+// to avoid passing 'db' through schema-validated .invoke() calls.
 import { getMcpTools } from "./mcp_tools";
 
 import { buildARIASystemPrompt } from "../services/aria_prompt.service";
@@ -38,13 +33,13 @@ const getPostgresSaver = async () => {
 };
 
 // ── LLM setup ─────────────────────────────────────────────────────────────────
-const createLLM = () =>
+const createLLM = (streaming = false) =>
   new ChatOpenAI({
     model: "gpt-5.4-mini",
     apiKey: process.env.OPENAI_API_KEY,
     temperature: 0,
     maxTokens: 2048,
-    streaming: false,
+    streaming, // true for streamARIAAgent, false for invokeARIAAgent
   });
 
 // ── Checkpointer setup — lazy, only runs on first chat request ────────────────
@@ -77,9 +72,15 @@ export const getCheckpointer = async () => {
 };
 
 // ── DB Tool injection ─────────────────────────────────────────────────────────
+// 'db' is NOT in the Zod schemas (so the LLM never sees it as a parameter to fill).
+// Instead we create fresh closures that capture 'db' from the outer scope.
 const createDBInjectedTools = (db: any, user: any) => {
   const getUserProfileWithDB = tool(
-    async () => getUserProfile.invoke({ userId: user.id, db }),
+    async (_args: {}) => {
+      // Import inline to avoid circular dep at module level
+      const { getUserProfile } = await import("./tools");
+      return (getUserProfile as any).func({ userId: user.id, db });
+    },
     {
       name: "get_user_profile",
       description:
@@ -89,48 +90,59 @@ const createDBInjectedTools = (db: any, user: any) => {
   );
 
   const getDBTrendsWithDB = tool(
-    async ({ niche, badge }) => getDBLiveTrends.invoke({ niche, badge, db }),
+    async ({ niche, badge }: { niche?: string; badge?: string }) => {
+      const { getDBLiveTrends } = await import("./tools");
+      return (getDBLiveTrends as any).func({ niche, badge, db });
+    },
     {
       name: "get_db_live_trends",
       description:
         "Fetch live trending topics from ARIA's database. Fastest source for trend data. Use for content advice and trend-based recommendations.",
       schema: z.object({
-        niche: z.string().optional(),
-        badge: z.enum(["HOT", "RISING", "NEW", "ALL"]).optional(),
+        niche: z.string().optional().describe('Niche filter e.g. "fashion", "fitness", or "all"'),
+        badge: z.enum(["HOT", "RISING", "NEW", "ALL"]).optional().describe("Velocity filter"),
       }),
     },
   );
 
   const getDBSongsWithDB = tool(
-    async ({ language }) => getDBTrendingSongs.invoke({ language, db }),
+    async ({ language }: { language?: string }) => {
+      const { getDBTrendingSongs } = await import("./tools");
+      return (getDBTrendingSongs as any).func({ language, db });
+    },
     {
       name: "get_db_trending_songs",
       description:
         "Fetch trending songs from ARIA's live songs database. Use for BGM/audio recommendations.",
       schema: z.object({
-        language: z.string().optional(),
+        language: z.string().optional().describe('Language filter: "Hindi", "English", "Punjabi"'),
       }),
     },
   );
 
   const getContentHistoryWithDB = tool(
-    async ({ limit }) =>
-      getUserContentHistory.invoke({ userId: user.id, limit, db }),
+    async ({ limit }: { limit?: number }) => {
+      const { getUserContentHistory } = await import("./tools");
+      return (getUserContentHistory as any).func({ userId: user.id, limit, db });
+    },
     {
       name: "get_user_content_history",
       description:
         "Fetch what content the user has created recently. Use to avoid repetitive suggestions.",
       schema: z.object({
-        limit: z.number().optional(),
+        limit: z.number().optional().describe("Max records to return, default 10"),
       }),
     },
   );
 
   const confirmNicheWithDB = tool(
-    async () => confirmNiche.invoke({ userId: user.id, db }),
+    async (_args: {}) => {
+      const { confirmNiche } = await import("./tools");
+      return (confirmNiche as any).func({ userId: user.id, db });
+    },
     {
       name: "confirm_niche",
-      description: "Confirm the user's detected niche and archetype.",
+      description: "Confirm the user's detected niche and archetype when user says yes/correct.",
       schema: z.object({}),
     },
   );
@@ -145,8 +157,12 @@ const createDBInjectedTools = (db: any, user: any) => {
 };
 
 // ── Build the ARIA agent ──────────────────────────────────────────────────────
-export const buildARIAAgent = async (db: any, user: any) => {
-  const llm = createLLM();
+export const buildARIAAgent = async (
+  db: any,
+  user: any,
+  streaming = false,   // pass true for streamARIAAgent so tokens flow
+) => {
+  const llm = createLLM(streaming);
   const checkpointer = await getCheckpointer(); // null-safe — may be null if DB slow
 
   const mcpTools = await getMcpTools();
@@ -261,7 +277,8 @@ export async function* streamARIAAgent({
   db: any;
 }) {
   try {
-    const agent = await buildARIAAgent(db, user);
+    // streaming:true so the LLM emits on_chat_model_stream token events
+    const agent = await buildARIAAgent(db, user, true);
     const config = {
       configurable: { thread_id: sessionId },
       recursionLimit: 15,

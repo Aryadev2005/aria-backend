@@ -91,9 +91,28 @@ class InstagramMCPSettings(BaseSettings):
     @field_validator("allowed_image_formats", "allowed_video_formats", mode="before")
     @classmethod
     def parse_list_from_string(cls, v):
-        """Parse comma-separated string into list."""
+        """Parse list values from .env regardless of pydantic-settings version.
+
+        Handles:
+          - Already a list  (pydantic-settings v2 parsed a JSON array)
+          - JSON string      e.g. '["jpg","png"]'
+          - Comma-separated  e.g. 'jpg,jpeg'  (legacy / pydantic-settings v1)
+        """
+        import json
+
+        if isinstance(v, list):
+            return v
         if isinstance(v, str):
-            return [item.strip() for item in v.split(",")]
+            stripped = v.strip()
+            if stripped.startswith("["):
+                try:
+                    parsed = json.loads(stripped)
+                    if isinstance(parsed, list):
+                        return parsed
+                except json.JSONDecodeError:
+                    pass
+            # Fall back to comma-split for bare strings like "jpg,jpeg"
+            return [item.strip() for item in stripped.split(",") if item.strip()]
         return v
 
     @field_validator("log_level")

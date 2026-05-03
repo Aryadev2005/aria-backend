@@ -22,6 +22,23 @@ model analytics {
   @@index([user_id], map: "idx_analytics_user_id")
 }
 
+/// Stores metadata for each ARIA chat session (title, preview, timestamps).
+/// Individual messages live in aria_chat_sessions, keyed by session_id.
+model aria_sessions {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id      String    @db.Uuid
+  session_id   String    @unique          // matches thread_id used by LangGraph checkpointer
+  title        String    @default("New Chat")
+  preview      String?                    // first ~80 chars of last assistant message
+  message_count Int      @default(0)
+  created_at   DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at   DateTime  @default(now()) @db.Timestamptz(6)
+  users        users     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id, updated_at(sort: Desc)], map: "idx_aria_sessions_user")
+  @@index([session_id], map: "idx_aria_sessions_sid")
+}
+
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 model aria_chat_sessions {
   id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
@@ -39,6 +56,7 @@ model aria_chat_sessions {
   @@index([created_at(sort: Desc)], map: "idx_chat_sessions_created")
   @@index([user_id, session_id], map: "idx_chat_sessions_user")
 }
+
 
 model aria_feedback {
   id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
@@ -297,6 +315,7 @@ model users {
   deletion_source         String?
   deleted_at              DateTime?            @db.Timestamptz(6)
   analytics               analytics[]
+  aria_sessions           aria_sessions[]
   aria_chat_sessions      aria_chat_sessions[]
   aria_feedback           aria_feedback[]
   aria_memory             aria_memory[]
