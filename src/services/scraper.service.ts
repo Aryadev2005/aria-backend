@@ -162,6 +162,7 @@ export const scrapeAndSaveProfile = async (
       engagement_rate:  engagementRate,
       scraped_at:       new Date(),
       scraped_summary:  scrapedSummary,
+      bio:              scraped.biography || null,
     },
   });
 

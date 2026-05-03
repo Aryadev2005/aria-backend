@@ -329,7 +329,7 @@ export const getViralIdeas = async (
   const user  = req.user as User;
   const force = req.query.force === "true";
 
-  // Pull full user context from DB — needed for infinite niche resolution
+  // Pull full user context from DB — not from auth middleware object
   const dbUser = await (prisma.users as any).findUnique({
     where: { id: user.id },
     select: {
@@ -345,26 +345,23 @@ export const getViralIdeas = async (
     },
   });
 
-  const niches: string[]   = (dbUser?.niches as string[]) ?? [];
-  const niche              = niches[0] ?? "general";
-  const platform           = dbUser?.primary_platform ?? "instagram";
-  const scrapedSummary     = (dbUser?.scraped_summary as any) ?? {};
-  const ariaAnalysis       = (dbUser?.aria_last_analysis as any) ?? {};
+  const niches: string[]  = (dbUser?.niches as string[]) ?? [];
+  const niche             = niches[0] ?? "general";
+  const platform          = dbUser?.primary_platform ?? "instagram";
+  const scrapedSummary    = (dbUser?.scraped_summary as any) ?? {};
+  const ariaAnalysis      = (dbUser?.aria_last_analysis as any) ?? {};
 
-  // Build full user context for Groq niche resolver
   const userContext = {
     niches,
-    archetype:        dbUser?.archetype ?? null,
-    archetypeLabel:   dbUser?.archetype_label ?? null,
-    instagramHandle:  dbUser?.instagram_handle ?? null,
-    bio:              dbUser?.bio ?? null,
-    topHashtags:      scrapedSummary?.topHashtags ?? [],
-    brandCategories:  ariaAnalysis?.brandCategories ?? [],
-    archetypeEmoji:   ariaAnalysis?.archetypeEmoji ?? null,
-    contentPatterns:  ariaAnalysis?.contentPatterns ?? null,
+    archetype:       dbUser?.archetype         ?? null,
+    archetypeLabel:  dbUser?.archetype_label   ?? null,
+    instagramHandle: dbUser?.instagram_handle  ?? null,
+    bio:             dbUser?.bio               ?? null,
+    topHashtags:     scrapedSummary?.topHashtags   ?? [],
+    brandCategories: ariaAnalysis?.brandCategories ?? [],
+    contentPatterns: ariaAnalysis?.contentPatterns ?? null,
   };
 
-  // Per-user cache key includes niche so edit → new cache
   const cacheKey = `viral_ideas:${user.id}:${niche}`;
 
   try {
@@ -379,9 +376,7 @@ export const getViralIdeas = async (
     const { generateViralIdeas } = await import("../services/viralIdeas.service");
 
     const ideas = await generateViralIdeas({
-      niche,
       platform,
-      archetype:     dbUser?.archetype ?? null,
       followerRange: dbUser?.follower_range ?? "10K–50K",
       userContext,
     });
