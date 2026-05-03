@@ -116,22 +116,23 @@ export const greet = async (
     const firstName = (fullUser?.name || "yaar").split(" ")[0];
     const hasContext = sessionContext.idea || sessionContext.script;
 
-    // Build a targeted greeting prompt for the agent
-    const greetMessage = [
-      `Generate a SHORT warm greeting (2-3 sentences max) for ${firstName}.`,
-      entryScreen !== "direct"
-        ? `They just came from the ${entryScreen} screen.`
-        : "",
-      hasContext
-        ? `They were working on: "${sessionContext.idea || sessionContext.trendTitle}"`
-        : "",
-      pendingSuggestions.length > 0
-        ? `You have ${pendingSuggestions.length} pending follow-up to close.`
-        : "",
-      `End with one specific question or offer to help. Use Hinglish naturally. DO NOT say "How can I help you today?".`,
-    ]
-      .filter(Boolean)
-      .join(" ");
+    const isFreshAnalysis = entryScreen === 'fresh_analysis';
+
+    const greetMessage = isFreshAnalysis
+      ? [
+          `The user just connected their Instagram account and ARIA has completed their profile analysis.`,
+          `Generate a SHORT excited opener (2 sentences max) for ${firstName}.`,
+          `Tell them their analysis is ready and ARIA is about to walk them through it.`,
+          `Example tone: "Your profile analysis just came in, ${firstName}! Let me show you what ARIA found 🔥"`,
+          `Do NOT list any data yet — just the opener.`,
+        ].join(' ')
+      : [
+          `Generate a SHORT warm greeting (2-3 sentences max) for ${firstName}.`,
+          entryScreen !== "direct" ? `They just came from the ${entryScreen} screen.` : "",
+          hasContext ? `They were working on: "${sessionContext.idea || sessionContext.trendTitle}"` : "",
+          pendingSuggestions.length > 0 ? `You have ${pendingSuggestions.length} pending follow-up to close.` : "",
+          `End with one specific question or offer to help. Use Hinglish naturally. DO NOT say "How can I help you today?".`,
+        ].filter(Boolean).join(" ");
 
     const llm = new ChatOpenAI({
       model: "gpt-5.4-mini",
