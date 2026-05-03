@@ -1,172 +1,229 @@
-import { execFile } from "child_process";
-import { promisify } from "util";
-import path from "path";
 import axios from "axios";
 import { logger } from "../utils/logger";
 import { _callGroq } from "./ai/groq.service";
 
-const execFileAsync = promisify(execFile);
-
 export interface ViralIdea {
   id: string;
   title: string;
-  contentAngle: string;       // "How to make a 'Quiet Luxury on ₹500' Reel"
-  whyNow: string;             // Why this is about to blow up
-  formatSuggestion: string;   // "Reel", "Carousel", "Short"
-  velocityScore: number;      // 0-100
+  contentAngle: string;
+  whyNow: string;
+  formatSuggestion: string;
+  velocityScore: number;
   badge: "HOT" | "RISING" | "NEW";
-  growthSignal: string;       // "+2400%" or "Breakout"
-  geo: string;                // "GLOBAL" or specific region
+  growthSignal: string;
+  geo: string;
   source: string;
   niche: string;
 }
 
-// ── Step 1: Pull rising signals from pytrends (global) ──────────────────────
-async function fetchRisingSignals(niche: string): Promise<any[]> {
-  const scriptPath = path.join(
-    __dirname,
-    "../../scripts/fetch_viral_ideas.py"
-  );
+// ── Niche → subreddits ────────────────────────────────────────────────────────
+const NICHE_SUBREDDITS: Record<string, string[]> = {
+  "mens fashion":   ["malefashionadvice", "streetwear", "mensfashion", "frugalmalefashion"],
+  "womens fashion": ["femalefashionadvice", "streetwear", "fashionadvice"],
+  "fashion":        ["malefashionadvice", "femalefashionadvice", "streetwear"],
+  "beauty":         ["SkincareAddiction", "MakeupAddiction", "IndianSkincareAddicts"],
+  "fitness":        ["fitness", "bodyweightfitness", "GYM"],
+  "food":           ["IndianFood", "food", "Cooking", "EatCheapAndHealthy"],
+  "tech":           ["technology", "gadgets", "artificial", "ChatGPT"],
+  "finance":        ["IndiaInvestments", "personalfinance", "StockMarket"],
+  "travel":         ["travel", "solotravel", "india"],
+  "gaming":         ["gaming", "pcgaming", "mobilegaming", "IndianGaming"],
+  "education":      ["GetStudying", "learnprogramming", "india"],
+  "comedy":         ["funny", "memes", "india"],
+  "cricket":        ["cricket", "IPL", "IndianCricket"],
+  "wellness":       ["mentalhealth", "meditation", "selfimprovement"],
+  "hustle":         ["Entrepreneur", "startups", "india", "digitalnomad"],
+  "general":        ["india", "worldnews", "InternetIsBeautiful"],
+};
 
-  try {
-    const { stdout, stderr } = await execFileAsync(
-      "python3",
-      [scriptPath],
-      {
-        timeout: 90000,
-        maxBuffer: 5 * 1024 * 1024,
-        env: {
-          ...process.env,
-          ARIA_NICHE: niche,
-        },
+// ── YouTube category IDs ──────────────────────────────────────────────────────
+const YT_CATEGORY: Record<string, string> = {
+  "fashion": "26", "mens fashion": "26", "womens fashion": "26",
+  "beauty": "26",  "fitness": "17",      "food": "26",
+  "tech": "28",    "gaming": "20",       "comedy": "23",
+  "music": "10",   "education": "27",    "travel": "19",
+  "cricket": "17", "bollywood": "24",    "hustle": "22",
+  "wellness": "22","general": "22",
+};
+
+const HTTP = axios.create({
+  timeout: 12000,
+  headers: { "User-Agent": "AriaBot/1.0 (content intelligence)" },
+});
+
+// ── Source 1: Reddit Rising + Hot ─────────────────────────────────────────────
+async function fetchRedditSignals(niche: string): Promise<any[]> {
+  const subs = NICHE_SUBREDDITS[niche] ?? NICHE_SUBREDDITS["general"];
+  const ideas: any[] = [];
+  const seen = new Set<string>();
+  const nowSec = Date.now() / 1000;
+
+  for (const sub of subs.slice(0, 3)) {
+    // Hit both rising and hot — rising first (fresher signals)
+    for (const feed of ["rising", "hot"]) {
+      try {
+        const { data } = await HTTP.get(
+          `https://www.reddit.com/r/${sub}/${feed}.json?limit=15&raw_json=1`
+        );
+
+        const posts: any[] = data?.data?.children ?? [];
+
+        for (const { data: p } of posts) {
+          const title: string = (p.title ?? "").trim();
+          if (!title) continue;
+
+          const score: number    = p.score ?? 0;
+          const comments: number = p.num_comments ?? 0;
+          const ratio: number    = p.upvote_ratio ?? 0.5;
+          const ageHours: number = (nowSec - (p.created_utc ?? 0)) / 3600;
+
+          // Only filter out very old posts — no score filter
+          // Rising feed already means Reddit's algorithm flagged it
+          if (ageHours > 72) continue;
+
+          const key = title.toLowerCase().slice(0, 60);
+          if (seen.has(key)) continue;
+          seen.add(key);
+
+          // Velocity formula — weighted by recency + engagement quality
+          const recencyBoost = ageHours < 6 ? 15 : ageHours < 24 ? 8 : 0;
+          const velocity = Math.min(95, Math.round(
+            ratio * 35 +
+            Math.min(score, 500) / 500 * 25 +
+            Math.min(comments, 200) / 200 * 25 +
+            recencyBoost
+          ));
+
+          ideas.push({
+            title,
+            source:      `reddit_r/${sub}_${feed}`,
+            niche,
+            velocity:    Math.max(55, velocity),
+            growthSignal: score > 0
+              ? `${score} upvotes · ${comments} comments`
+              : `${comments} comments · ${ageHours.toFixed(1)}h ago`,
+            isBreakout:  score > 200 && ageHours < 6,
+            ageHours:    Math.round(ageHours * 10) / 10,
+            geo:         "GLOBAL",
+          });
+        }
+      } catch (err: any) {
+        logger.warn({ sub, feed, err: err.message }, "Reddit fetch failed");
       }
-    );
-
-    // Log stderr so silent Python errors become visible
-    if (stderr && stderr.trim()) {
-      logger.warn({ stderr: stderr.slice(0, 500), niche }, "fetch_viral_ideas.py stderr");
     }
-
-    const data = JSON.parse(stdout);
-    if (data.error) {
-      logger.warn({ error: data.error, niche }, "pytrends rising signals failed");
-      return [];
-    }
-
-    logger.info({ count: data.ideas?.length, niche }, "Rising signals fetched");
-    return data.ideas || [];
-  } catch (err: any) {
-    logger.warn({ err: err.message, niche }, "fetch_viral_ideas.py failed");
-    return [];
   }
+
+  // Sort by velocity desc, take top 12
+  ideas.sort((a, b) => b.velocity - a.velocity);
+  logger.info({ count: ideas.length, niche }, "Reddit signals collected");
+  return ideas.slice(0, 12);
 }
 
-// ── Step 2: Pull YouTube global trending for niche ───────────────────────────
-async function fetchYouTubeGlobalSignals(niche: string): Promise<any[]> {
+// ── Source 2: YouTube mostPopular India ───────────────────────────────────────
+async function fetchYouTubeTrending(niche: string): Promise<any[]> {
   const apiKey = process.env.YOUTUBE_API_KEY;
-  if (!apiKey) return [];
+  if (!apiKey) {
+    logger.warn("YOUTUBE_API_KEY not set — skipping YouTube source");
+    return [];
+  }
 
-  const CATEGORY_MAP: Record<string, string> = {
-    "fashion": "26", "mens fashion": "26", "womens fashion": "26",
-    "beauty": "26", "fitness": "17", "food": "26", "tech": "28",
-    "gaming": "20", "comedy": "23", "music": "10",
-    "education": "27", "travel": "19", "general": "22",
-    "cricket": "17", "bollywood": "24", "hustle": "22", "wellness": "22",
-  };
+  const categoryId = YT_CATEGORY[niche] ?? "22";
 
-  const categoryId = CATEGORY_MAP[niche] || "22";
+  // Attempt 1: with niche category
+  // Attempt 2: without category (broader, always works if key is valid)
+  const attempts = [
+    { videoCategoryId: categoryId, regionCode: "IN" },
+    { regionCode: "IN" },
+  ];
 
-  try {
-    // videos.list mostPopular works on ALL API keys — no restriction
-    const response = await axios.get(
-      "https://www.googleapis.com/youtube/v3/videos",
-      {
-        params: {
-          part: "snippet,statistics",
-          chart: "mostPopular",
-          regionCode: "IN",        // India trending
-          videoCategoryId: categoryId,
-          maxResults: 15,
-          key: apiKey,
-        },
-        timeout: 10000,
-      }
-    );
+  for (const params of attempts) {
+    try {
+      const { data } = await HTTP.get(
+        "https://www.googleapis.com/youtube/v3/videos",
+        {
+          params: {
+            part:      "snippet,statistics",
+            chart:     "mostPopular",
+            maxResults: 15,
+            key:       apiKey,
+            ...params,
+          },
+        }
+      );
 
-    return (response.data?.items || []).map((v: any) => ({
-      title:       v.snippet?.title || "",
-      channel:     v.snippet?.channelTitle || "",
-      views:       parseInt(v.statistics?.viewCount || "0"),
-      source:      "youtube_trending_IN",
-      niche,
-    }));
-  } catch (err: any) {
-    // If India trending fails, try without category (broader)
-    if (err.response?.status === 400) {
-      try {
-        const fallback = await axios.get(
-          "https://www.googleapis.com/youtube/v3/videos",
-          {
-            params: {
-              part: "snippet,statistics",
-              chart: "mostPopular",
-              regionCode: "IN",
-              maxResults: 15,
-              key: apiKey,
-            },
-            timeout: 10000,
-          }
+      const items: any[] = data?.items ?? [];
+      if (items.length === 0) continue;
+
+      logger.info({ count: items.length, niche, params }, "YouTube signals collected");
+
+      return items.map((v: any) => ({
+        title:   (v.snippet?.title ?? "").trim(),
+        channel: v.snippet?.channelTitle ?? "",
+        views:   parseInt(v.statistics?.viewCount ?? "0"),
+        likes:   parseInt(v.statistics?.likeCount ?? "0"),
+        source:  "youtube_trending_IN",
+        niche,
+      }));
+
+    } catch (err: any) {
+      const status = err.response?.status;
+
+      if (status === 403) {
+        // Key is restricted — no point retrying, log and exit
+        logger.warn(
+          "YouTube API key does not have YouTube Data API v3 access. " +
+          "Enable it at console.cloud.google.com → APIs & Services → Enable APIs."
         );
-        return (fallback.data?.items || []).map((v: any) => ({
-          title:   v.snippet?.title || "",
-          channel: v.snippet?.channelTitle || "",
-          views:   parseInt(v.statistics?.viewCount || "0"),
-          source:  "youtube_trending_IN_general",
-          niche,
-        }));
-      } catch {
         return [];
       }
+
+      if (status === 400 && params.videoCategoryId) {
+        // Category not valid for this region — try next attempt without category
+        logger.warn({ categoryId, niche }, "YouTube category invalid — retrying without category");
+        continue;
+      }
+
+      logger.warn({ err: err.message, status, niche }, "YouTube attempt failed");
     }
-    logger.warn({ err: err.message, niche, status: err.response?.status }, "YouTube trending failed");
-    return [];
   }
+
+  return [];
 }
 
-// ── Step 3: Use Groq to synthesize real signals → 10 actionable ideas ────────
+// ── Groq synthesis ────────────────────────────────────────────────────────────
 async function synthesizeIdeas(
-  risingSignals: any[],
-  ytSignals: any[],
-  niche: string,
-  platform: string,
-  archetype: string | null,
-  followerRange: string
+  redditSignals: any[],
+  ytSignals:     any[],
+  niche:         string,
+  platform:      string,
+  archetype:     string | null,
+  followerRange: string,
 ): Promise<ViralIdea[]> {
-  const signalContext = [
-    risingSignals.length > 0
-      ? `REAL-TIME TREND SIGNALS (Reddit + Google RSS):\n${risingSignals
-          .slice(0, 12)
-          .map(
-            (s) =>
-              `- "${s.title}" | velocity: ${s.velocity} | source: ${s.source} | signal: ${s.growth_value}`
-          )
-          .join("\n")}`
-      : "Trend signals unavailable",
 
-    ytSignals.length > 0
-      ? `\nYOUTUBE GLOBAL TRENDING (${niche}):\n${ytSignals
-          .slice(0, 8)
-          .map((v) => `- "${v.title}" by ${v.channel} | ${v.views.toLocaleString()} views`)
-          .join("\n")}`
-      : "",
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const redditCtx = redditSignals.length > 0
+    ? `REDDIT SIGNALS (real posts trending right now):\n` +
+      redditSignals.slice(0, 10).map(
+        (s) => `- "${s.title}" | ${s.growthSignal} | ${s.ageHours}h ago | source: ${s.source}`
+      ).join("\n")
+    : "";
 
-  const prompt = `You are ARIA — India's creator intelligence engine. 
+  const ytCtx = ytSignals.length > 0
+    ? `\nYOUTUBE TRENDING INDIA RIGHT NOW:\n` +
+      ytSignals.slice(0, 8).map(
+        (v) => `- "${v.title}" by ${v.channel} | ${v.views.toLocaleString("en-IN")} views`
+      ).join("\n")
+    : "";
 
-You have REAL data from Google Trends and YouTube about what's rising GLOBALLY right now.
-Your job: Turn these raw signals into 10 specific, actionable content IDEAS for this creator.
+  const hasSignals = redditCtx || ytCtx;
+
+  const signalContext = hasSignals
+    ? [redditCtx, ytCtx].filter(Boolean).join("\n")
+    : `No live signals available right now. Use your knowledge of what's currently trending in ${niche} globally.`;
+
+  const prompt = `You are ARIA — India's creator intelligence engine.
+
+You have REAL live data showing what people are actively talking about RIGHT NOW.
+Turn these into 10 specific, actionable content IDEAS for this Indian creator.
 
 CREATOR PROFILE:
 - Niche: ${niche}
@@ -174,30 +231,30 @@ CREATOR PROFILE:
 - Followers: ${followerRange}
 - Archetype: ${archetype || "Creator"}
 
-REAL LIVE SIGNALS (use ONLY these — do not invent):
+LIVE SIGNALS:
 ${signalContext}
 
 RULES:
-1. Each idea must be DIRECTLY inspired by one of the signals above
-2. Give a specific content angle — not just the trend topic but HOW to make the video
-3. Explain WHY this is about to go viral in the next 48-72 hours
-4. Be specific to Indian creators and Indian context where relevant
-5. If a signal has "Breakout" growth, mark it HOT. >500% = RISING. Rest = NEW
-6. Do NOT invent trends not in the signals
+1. Each idea must be directly inspired by a signal above
+2. Content angle must be SPECIFIC — exact video concept, not a vague topic
+3. Use Indian context — ₹ prices, Indian brands (Myntra, Meesho, Nykaa, Zerodha), Indian culture
+4. WhyNow must explain the 48-72h urgency — reference the actual signal
+5. HOT = breakout/top signal or <6h old. RISING = strong growth. NEW = emerging
+6. Format: Reel for quick trends, Carousel for educational, Short for challenges
 
-Respond ONLY with valid JSON:
+Respond ONLY with valid JSON — no markdown, no explanation:
 {
   "ideas": [
     {
-      "title": "The trend topic name (short, max 8 words)",
-      "contentAngle": "Specific video concept e.g. 'POV: I tried the viral XYZ trend on ₹200 budget'",
-      "whyNow": "1 sentence: why this is about to blow up in 48-72 hours",
+      "title": "Trend name max 8 words",
+      "contentAngle": "Exact video concept e.g. 'POV: Styling 3 fits under ₹999 from Meesho — people thought it was Zara'",
+      "whyNow": "One sentence urgency tied to the actual signal",
       "formatSuggestion": "Reel|Carousel|Short|Video",
-      "velocityScore": 92,
+      "velocityScore": 88,
       "badge": "HOT|RISING|NEW",
-      "growthSignal": "+2400% this week",
+      "growthSignal": "2.4K upvotes in 3h on r/malefashionadvice",
       "geo": "GLOBAL",
-      "source": "google_rising + youtube_trending",
+      "source": "reddit_rising",
       "niche": "${niche}"
     }
   ]
@@ -206,45 +263,43 @@ Respond ONLY with valid JSON:
   const result = await _callGroq(prompt, { useLlama: true, maxTokens: 2000 });
 
   if (!result?.ideas || !Array.isArray(result.ideas)) {
-    logger.warn("Groq returned invalid ideas structure");
+    logger.warn({ result }, "Groq returned invalid ideas structure");
     return [];
   }
 
-  // Add stable IDs
   return result.ideas.slice(0, 10).map((idea: any, idx: number) => ({
     ...idea,
-    id: `idea_${niche}_${Date.now()}_${idx}`,
+    id: `idea_${niche.replace(/\s+/g, "_")}_${Date.now()}_${idx}`,
   }));
 }
 
 // ── Main export ───────────────────────────────────────────────────────────────
 export async function generateViralIdeas(params: {
-  niche: string;
-  platform: string;
-  archetype: string | null;
+  niche:         string;
+  platform:      string;
+  archetype:     string | null;
   followerRange: string;
 }): Promise<ViralIdea[]> {
   const { niche, platform, archetype, followerRange } = params;
 
-  logger.info({ niche }, "Generating viral ideas");
+  logger.info({ niche }, "Fetching viral idea signals");
 
-  // Run both fetches in parallel
-  const [risingSignals, ytSignals] = await Promise.allSettled([
-    fetchRisingSignals(niche),
-    fetchYouTubeGlobalSignals(niche),
+  // Run both sources in parallel
+  const [redditResult, ytResult] = await Promise.allSettled([
+    fetchRedditSignals(niche),
+    fetchYouTubeTrending(niche),
   ]);
 
-  const signals = risingSignals.status === "fulfilled" ? risingSignals.value : [];
-  const yt = ytSignals.status === "fulfilled" ? ytSignals.value : [];
+  const reddit  = redditResult.status === "fulfilled" ? redditResult.value : [];
+  const youtube = ytResult.status     === "fulfilled" ? ytResult.value     : [];
 
-  const totalSignals = signals.length + yt.length;
-  if (totalSignals === 0) {
-    logger.warn({ niche }, "No signals from any source — returning empty");
-    return [];
-  }
+  logger.info({
+    reddit:  reddit.length,
+    youtube: youtube.length,
+    total:   reddit.length + youtube.length,
+    niche,
+  }, "Signals collected — sending to Groq");
 
-  // Log what we got
-  logger.info({ pytrendsSignals: signals.length, ytSignals: yt.length, niche }, "Signals collected");
-
-  return synthesizeIdeas(signals, yt, niche, platform, archetype, followerRange);
+  // Always proceed to Groq — even with 0 signals it uses its own knowledge
+  return synthesizeIdeas(reddit, youtube, niche, platform, archetype, followerRange);
 }

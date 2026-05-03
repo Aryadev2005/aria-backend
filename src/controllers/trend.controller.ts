@@ -326,18 +326,18 @@ export const getViralIdeas = async (
   req: FastifyRequest<{ Querystring: { force?: string } }>,
   reply: FastifyReply
 ) => {
-  const user = req.user as User;
+  const user  = req.user as User;
   const niche = user.niches?.[0] || "general";
   const platform = user.primary_platform || "instagram";
-  const force = req.query.force === "true"; // force refresh bypasses cache
+  const force = req.query.force === "true";
 
-  // Per-user cache — 2 hours default, bypassed on force refresh
   const cacheKey = `viral_ideas:${user.id}:${niche}`;
 
   try {
     if (!force) {
       const cached = await cache.get(cacheKey);
       if (cached) {
+        logger.info({ niche, userId: user.id }, "Viral ideas cache hit");
         return success(reply, { ideas: cached, cached: true, niche });
       }
     }
@@ -347,25 +347,27 @@ export const getViralIdeas = async (
     const ideas = await generateViralIdeas({
       niche,
       platform,
-      archetype: user.archetype || null,
+      archetype:     user.archetype     || null,
       followerRange: user.follower_range || "10K–50K",
     });
 
-    if (ideas.length === 0) {
-      return success(reply, {
-        ideas: [],
-        cached: false,
-        niche,
-        message: "Signal sources temporarily unavailable. Try refreshing in a few minutes.",
-      });
-    }
+    // Cache even if empty — prevents hammering sources on bad niche
+    await cache.set(cacheKey, ideas, ideas.length > 0 ? 7200 : 300);
 
-    // Cache for 2 hours — trends don't change that fast
-    await cache.set(cacheKey, ideas, 7200);
+    return success(reply, {
+      ideas,
+      cached:      false,
+      niche,
+      refreshedAt: new Date().toISOString(),
+      sources: {
+        reddit:  ideas.some((i: any) => i.source?.includes("reddit")),
+        youtube: ideas.some((i: any) => i.source?.includes("youtube")),
+      },
+    });
 
-    return success(reply, { ideas, cached: false, niche, refreshedAt: new Date().toISOString() });
   } catch (err) {
     logger.error({ err }, "Viral ideas failed");
     return errors.serviceDown(reply, "Trend ideas engine");
   }
 };
+
