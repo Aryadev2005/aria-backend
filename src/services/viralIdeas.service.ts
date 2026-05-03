@@ -185,8 +185,9 @@ async function resolveAndSynthesize(
   const prompt = `You are ARIA — India's creator intelligence engine.
 
 CREATOR PROFILE:
+- CONFIRMED NICHE (use this — do not override): ${ctx.niches[0] || "general"}
 - Instagram handle: ${ctx.instagramHandle || "unknown"}
-- Detected niches: ${ctx.niches.join(", ") || "unknown"}
+- Additional context: ${ctx.niches.slice(1).join(", ") || "none"}
 - Archetype: ${ctx.archetypeLabel || ctx.archetype || "Creator"}
 - Bio: ${ctx.bio || "not available"}
 - Top hashtags: ${ctx.topHashtags.length > 0 ? ctx.topHashtags.join(", ") : "not available"}
@@ -194,12 +195,14 @@ CREATOR PROFILE:
 - Platform: ${platform}
 - Followers: ${followerRange}
 
+IMPORTANT: The CONFIRMED NICHE above is what the user selected. Always generate ideas for that niche.
+The handle and bio are context only — do NOT use them to override the confirmed niche.
+
 LIVE SIGNALS:
 ${redditCtx}${ytCtx}
 
 YOUR TASK:
-First understand what this creator ACTUALLY makes from their handle, bio, and hashtags.
-Then generate 10 specific, actionable content IDEAS for them using the live signals above.
+Generate 10 specific, actionable content IDEAS for this creator using the live signals above and their CONFIRMED NICHE.
 
 RULES:
 1. Each idea must be inspired by the live signals (or current niche trends if signals unavailable)
@@ -212,7 +215,7 @@ RULES:
 
 Respond ONLY with valid JSON:
 {
-  "resolvedNiche": "what this creator actually makes in 5 words",
+  "resolvedNiche": "${ctx.niches[0] || "general"}", // Always use the confirmed niche
   "ideas": [
     {
       "title": "Trend name max 8 words",
