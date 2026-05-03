@@ -97,7 +97,7 @@ export default async function trendRoutes(app: FastifyInstance) {
   );
 
   // GET /api/v1/trends/viral-ideas
-  app.get<{ Querystring: { force?: string } }>(
+  app.get<{ Querystring: { force?: string; browseNiche?: string } }>(
     "/viral-ideas",
     {
       preHandler: [authenticateFirebase],
@@ -105,7 +105,8 @@ export default async function trendRoutes(app: FastifyInstance) {
         querystring: {
           type: "object",
           properties: {
-            force: { type: "string", enum: ["true", "false"] },
+            force:       { type: "string", enum: ["true", "false"] },
+            browseNiche: { type: "string", maxLength: 100 },
           },
         },
       },

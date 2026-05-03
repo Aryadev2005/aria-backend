@@ -121,7 +121,7 @@ export default async function userRoutes(app: FastifyInstance) {
     return success(reply, { confirmed: true });
   });
 
-  // PUT /api/v1/users/niche — user manually sets/edits their niche
+  // PUT /api/v1/users/niche
   app.put<{ Body: { niche: string } }>(
     "/niche",
     {
@@ -139,7 +139,6 @@ export default async function userRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const user  = (req as any).user;
       const { niche } = req.body;
-
       const cleaned = niche.trim().toLowerCase();
 
       await (prisma.users as any).update({
@@ -147,14 +146,17 @@ export default async function userRoutes(app: FastifyInstance) {
         data:  { niches: [cleaned] },
       });
 
-      // Bust viral ideas cache so next fetch uses new niche
-      await cache.del(`viral_ideas:${user.id}:${cleaned}`);
-      // Also bust old niche cache
+      // Bust ALL viral_ideas cache keys for this user — not just the new niche
+      // This prevents stale ideas from a previous niche being served
+      await cache.delPattern(`viral_ideas:${user.id}:*`);
       await cache.del(CacheKeys.user(user.id));
 
-      logger.info({ userId: user.id, niche: cleaned }, "User niche updated");
+      logger.info({ userId: user.id, niche: cleaned }, "User niche updated — all idea caches cleared");
 
-      return success(reply, { niche: cleaned, message: "Niche updated. Refreshing trends..." });
+      return success(reply, {
+        niche: cleaned,
+        message: "Niche updated. Refreshing trends...",
+      });
     }
   );
 }

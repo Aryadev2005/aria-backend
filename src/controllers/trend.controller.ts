@@ -323,13 +323,13 @@ export const submitFeedback = async (
 
 // ── VIRAL IDEAS — top 10 niche-matched global trends (48-72h prediction) ─────
 export const getViralIdeas = async (
-  req: FastifyRequest<{ Querystring: { force?: string } }>,
+  req: FastifyRequest<{ Querystring: { force?: string; browseNiche?: string } }>,
   reply: FastifyReply
 ) => {
-  const user  = req.user as User;
-  const force = req.query.force === "true";
+  const user        = req.user as User;
+  const force       = req.query.force === "true";
+  const browseNiche = req.query.browseNiche?.trim().toLowerCase();
 
-  // Pull full user context from DB — not from auth middleware object
   const dbUser = await (prisma.users as any).findUnique({
     where: { id: user.id },
     select: {
@@ -345,31 +345,37 @@ export const getViralIdeas = async (
     },
   });
 
-  const niches: string[]  = (dbUser?.niches as string[]) ?? [];
-  const niche             = niches[0] ?? "general";
-  const platform          = dbUser?.primary_platform ?? "instagram";
-  const scrapedSummary    = (dbUser?.scraped_summary as any) ?? {};
-  const ariaAnalysis      = (dbUser?.aria_last_analysis as any) ?? {};
+  const niches: string[] = (dbUser?.niches as string[]) ?? [];
+
+  // browseNiche = temporary exploration (not saved to DB)
+  // If provided, use it as the active niche but keep permanent niche in context
+  const activeNiche  = browseNiche || niches[0] || "general";
+  const platform     = dbUser?.primary_platform ?? "instagram";
+  const scrapedSummary = (dbUser?.scraped_summary as any) ?? {};
+  const ariaAnalysis   = (dbUser?.aria_last_analysis as any) ?? {};
 
   const userContext = {
-    niches,
-    archetype:       dbUser?.archetype         ?? null,
-    archetypeLabel:  dbUser?.archetype_label   ?? null,
-    instagramHandle: dbUser?.instagram_handle  ?? null,
-    bio:             dbUser?.bio               ?? null,
+    niches:          browseNiche ? [browseNiche, ...niches] : niches,
+    archetype:       dbUser?.archetype        ?? null,
+    archetypeLabel:  dbUser?.archetype_label  ?? null,
+    instagramHandle: dbUser?.instagram_handle ?? null,
+    bio:             dbUser?.bio              ?? null,
     topHashtags:     scrapedSummary?.topHashtags   ?? [],
     brandCategories: ariaAnalysis?.brandCategories ?? [],
     contentPatterns: ariaAnalysis?.contentPatterns ?? null,
   };
 
-  const cacheKey = `viral_ideas:${user.id}:${niche}`;
+  // Browse cache is separate — doesn't pollute permanent niche cache
+  const cacheKey = browseNiche
+    ? `viral_ideas:${user.id}:browse:${browseNiche}`
+    : `viral_ideas:${user.id}:${activeNiche}`;
 
   try {
     if (!force) {
       const cached = await cache.get(cacheKey);
       if (cached) {
-        logger.info({ niche, userId: user.id }, "Viral ideas cache hit");
-        return success(reply, { ideas: cached, cached: true, niche });
+        logger.info({ activeNiche, browseNiche, userId: user.id }, "Viral ideas cache hit");
+        return success(reply, { ideas: cached, cached: true, niche: activeNiche, isBrowsing: !!browseNiche });
       }
     }
 
@@ -381,12 +387,15 @@ export const getViralIdeas = async (
       userContext,
     });
 
-    await cache.set(cacheKey, ideas, ideas.length > 0 ? 7200 : 300);
+    // Browse cache: shorter TTL (30 min) — exploration is temporary
+    // Permanent niche cache: 2 hours
+    await cache.set(cacheKey, ideas, browseNiche ? 1800 : 7200);
 
     return success(reply, {
       ideas,
       cached:      false,
-      niche,
+      niche:       activeNiche,
+      isBrowsing:  !!browseNiche,
       refreshedAt: new Date().toISOString(),
     });
 
