@@ -317,7 +317,55 @@ export const submitFeedback = async (
       createdAt: feedback.created_at,
     });
   } catch (err) {
-    logger.error({ err }, "Submit feedback failed");
     return errors.internal(reply);
+  }
+};
+
+// ── VIRAL IDEAS — top 10 niche-matched global trends (48-72h prediction) ─────
+export const getViralIdeas = async (
+  req: FastifyRequest<{ Querystring: { force?: string } }>,
+  reply: FastifyReply
+) => {
+  const user = req.user as User;
+  const niche = user.niches?.[0] || "general";
+  const platform = user.primary_platform || "instagram";
+  const force = req.query.force === "true"; // force refresh bypasses cache
+
+  // Per-user cache — 2 hours default, bypassed on force refresh
+  const cacheKey = `viral_ideas:${user.id}:${niche}`;
+
+  try {
+    if (!force) {
+      const cached = await cache.get(cacheKey);
+      if (cached) {
+        return success(reply, { ideas: cached, cached: true, niche });
+      }
+    }
+
+    const { generateViralIdeas } = await import("../services/viralIdeas.service");
+
+    const ideas = await generateViralIdeas({
+      niche,
+      platform,
+      archetype: user.archetype || null,
+      followerRange: user.follower_range || "10K–50K",
+    });
+
+    if (ideas.length === 0) {
+      return success(reply, {
+        ideas: [],
+        cached: false,
+        niche,
+        message: "Signal sources temporarily unavailable. Try refreshing in a few minutes.",
+      });
+    }
+
+    // Cache for 2 hours — trends don't change that fast
+    await cache.set(cacheKey, ideas, 7200);
+
+    return success(reply, { ideas, cached: false, niche, refreshedAt: new Date().toISOString() });
+  } catch (err) {
+    logger.error({ err }, "Viral ideas failed");
+    return errors.serviceDown(reply, "Trend ideas engine");
   }
 };

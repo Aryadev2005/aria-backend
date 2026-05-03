@@ -95,4 +95,21 @@ export default async function trendRoutes(app: FastifyInstance) {
     },
     trendController.submitFeedback,
   );
+
+  // GET /api/v1/trends/viral-ideas
+  app.get<{ Querystring: { force?: string } }>(
+    "/viral-ideas",
+    {
+      preHandler: [authenticateFirebase],
+      schema: {
+        querystring: {
+          type: "object",
+          properties: {
+            force: { type: "string", enum: ["true", "false"] },
+          },
+        },
+      },
+    },
+    trendController.getViralIdeas
+  );
 }
