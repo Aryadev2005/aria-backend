@@ -29,18 +29,23 @@ async function fetchRisingSignals(niche: string): Promise<any[]> {
   );
 
   try {
-    const { stdout } = await execFileAsync(
+    const { stdout, stderr } = await execFileAsync(
       "python3",
-      [scriptPath],           // no argv for niche
+      [scriptPath],
       {
         timeout: 90000,
         maxBuffer: 5 * 1024 * 1024,
         env: {
           ...process.env,
-          ARIA_NICHE: niche,  // pass via env var instead
+          ARIA_NICHE: niche,
         },
       }
     );
+
+    // Log stderr so silent Python errors become visible
+    if (stderr && stderr.trim()) {
+      logger.warn({ stderr: stderr.slice(0, 500), niche }, "fetch_viral_ideas.py stderr");
+    }
 
     const data = JSON.parse(stdout);
     if (data.error) {
@@ -61,39 +66,26 @@ async function fetchYouTubeGlobalSignals(niche: string): Promise<any[]> {
   const apiKey = process.env.YOUTUBE_API_KEY;
   if (!apiKey) return [];
 
-  // Map multi-word niches to good search queries
-  const NICHE_QUERY_MAP: Record<string, string> = {
-    "fashion":        "fashion trends 2025",
-    "mens fashion":   "men fashion outfit ideas 2025",
-    "womens fashion": "women fashion style 2025",
-    "beauty":         "beauty skincare routine 2025",
-    "fitness":        "workout routine gym 2025",
-    "food":           "viral food recipe 2025",
-    "tech":           "best tech gadgets 2025",
-    "finance":        "money investing tips 2025",
-    "travel":         "travel vlog destinations 2025",
-    "gaming":         "gaming highlights 2025",
-    "education":      "learn skill online 2025",
-    "comedy":         "comedy skit funny 2025",
-    "cricket":        "cricket highlights 2025",
-    "wellness":       "mental health self care 2025",
-    "hustle":         "startup business ideas 2025",
-    "general":        "viral trending content 2025",
+  const CATEGORY_MAP: Record<string, string> = {
+    "fashion": "26", "mens fashion": "26", "womens fashion": "26",
+    "beauty": "26", "fitness": "17", "food": "26", "tech": "28",
+    "gaming": "20", "comedy": "23", "music": "10",
+    "education": "27", "travel": "19", "general": "22",
+    "cricket": "17", "bollywood": "24", "hustle": "22", "wellness": "22",
   };
 
-  const query = NICHE_QUERY_MAP[niche] || `${niche} trending 2025`;
+  const categoryId = CATEGORY_MAP[niche] || "22";
 
   try {
-    // Use search endpoint — works on all API keys, no 403
+    // videos.list mostPopular works on ALL API keys — no restriction
     const response = await axios.get(
-      "https://www.googleapis.com/youtube/v3/search",
+      "https://www.googleapis.com/youtube/v3/videos",
       {
         params: {
-          part: "snippet",
-          q: query,
-          type: "video",
-          order: "viewCount",          // highest views = proven demand
-          publishedAfter: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
+          part: "snippet,statistics",
+          chart: "mostPopular",
+          regionCode: "IN",        // India trending
+          videoCategoryId: categoryId,
           maxResults: 15,
           key: apiKey,
         },
@@ -101,19 +93,43 @@ async function fetchYouTubeGlobalSignals(niche: string): Promise<any[]> {
       }
     );
 
-    const items = response.data?.items || [];
-
-    return items.map((item: any) => ({
-      title:       item.snippet?.title || "",
-      channel:     item.snippet?.channelTitle || "",
-      videoId:     item.id?.videoId || "",
-      publishedAt: item.snippet?.publishedAt || "",
-      source:      "youtube_search_global",
+    return (response.data?.items || []).map((v: any) => ({
+      title:       v.snippet?.title || "",
+      channel:     v.snippet?.channelTitle || "",
+      views:       parseInt(v.statistics?.viewCount || "0"),
+      source:      "youtube_trending_IN",
       niche,
     }));
   } catch (err: any) {
-    logger.warn({ err: err.message, niche }, "YouTube global search failed");
-    return [];  // Non-fatal — pytrends signals still work alone
+    // If India trending fails, try without category (broader)
+    if (err.response?.status === 400) {
+      try {
+        const fallback = await axios.get(
+          "https://www.googleapis.com/youtube/v3/videos",
+          {
+            params: {
+              part: "snippet,statistics",
+              chart: "mostPopular",
+              regionCode: "IN",
+              maxResults: 15,
+              key: apiKey,
+            },
+            timeout: 10000,
+          }
+        );
+        return (fallback.data?.items || []).map((v: any) => ({
+          title:   v.snippet?.title || "",
+          channel: v.snippet?.channelTitle || "",
+          views:   parseInt(v.statistics?.viewCount || "0"),
+          source:  "youtube_trending_IN_general",
+          niche,
+        }));
+      } catch {
+        return [];
+      }
+    }
+    logger.warn({ err: err.message, niche, status: err.response?.status }, "YouTube trending failed");
+    return [];
   }
 }
 
@@ -128,14 +144,14 @@ async function synthesizeIdeas(
 ): Promise<ViralIdea[]> {
   const signalContext = [
     risingSignals.length > 0
-      ? `GOOGLE GLOBAL RISING QUERIES (last 7 days, breakout signals):\n${risingSignals
-          .slice(0, 10)
+      ? `REAL-TIME TREND SIGNALS (Reddit + Google RSS):\n${risingSignals
+          .slice(0, 12)
           .map(
             (s) =>
-              `- "${s.title}" | growth: ${s.growth_value} | seed: ${s.seed_keyword}`
+              `- "${s.title}" | velocity: ${s.velocity} | source: ${s.source} | signal: ${s.growth_value}`
           )
           .join("\n")}`
-      : "Google signals unavailable",
+      : "Trend signals unavailable",
 
     ytSignals.length > 0
       ? `\nYOUTUBE GLOBAL TRENDING (${niche}):\n${ytSignals
@@ -221,10 +237,14 @@ export async function generateViralIdeas(params: {
   const signals = risingSignals.status === "fulfilled" ? risingSignals.value : [];
   const yt = ytSignals.status === "fulfilled" ? ytSignals.value : [];
 
-  if (signals.length === 0 && yt.length === 0) {
+  const totalSignals = signals.length + yt.length;
+  if (totalSignals === 0) {
     logger.warn({ niche }, "No signals from any source — returning empty");
     return [];
   }
+
+  // Log what we got
+  logger.info({ pytrendsSignals: signals.length, ytSignals: yt.length, niche }, "Signals collected");
 
   return synthesizeIdeas(signals, yt, niche, platform, archetype, followerRange);
 }
