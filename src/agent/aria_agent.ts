@@ -13,6 +13,7 @@ import { z } from "zod";
 // DB tools are imported inline inside each closure in createDBInjectedTools
 // to avoid passing 'db' through schema-validated .invoke() calls.
 import { getMcpTools } from "./mcp_tools";
+import { hybridTools } from "./tools.hybrid";
 
 import { buildARIASystemPrompt } from "../services/aria_prompt.service";
 import {
@@ -166,7 +167,8 @@ export const buildARIAAgent = async (
   const checkpointer = await getCheckpointer(); // null-safe — may be null if DB slow
 
   const mcpTools = await getMcpTools();
-  const tools = [...createDBInjectedTools(db, user), ...mcpTools];
+  // hybridTools BEFORE mcpTools — ARIA prefers the faster hybrid retrieval
+  const tools = [...createDBInjectedTools(db, user), ...hybridTools, ...mcpTools];
 
   const memory = await getMemory(user.id).catch(() => ({}));
   const systemPrompt = buildARIASystemPrompt({
