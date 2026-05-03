@@ -31,8 +31,15 @@ async function fetchRisingSignals(niche: string): Promise<any[]> {
   try {
     const { stdout } = await execFileAsync(
       "python3",
-      [scriptPath, niche],
-      { timeout: 90000, maxBuffer: 5 * 1024 * 1024 }
+      [scriptPath],           // no argv for niche
+      {
+        timeout: 90000,
+        maxBuffer: 5 * 1024 * 1024,
+        env: {
+          ...process.env,
+          ARIA_NICHE: niche,  // pass via env var instead
+        },
+      }
     );
 
     const data = JSON.parse(stdout);
@@ -54,53 +61,59 @@ async function fetchYouTubeGlobalSignals(niche: string): Promise<any[]> {
   const apiKey = process.env.YOUTUBE_API_KEY;
   if (!apiKey) return [];
 
-  // Map niche to YouTube category IDs
-  const CATEGORY_MAP: Record<string, string> = {
-    fashion: "26",      // How-to & Style
-    beauty: "26",
-    fitness: "17",      // Sports
-    food: "26",
-    tech: "28",         // Science & Technology
-    gaming: "20",
-    comedy: "23",
-    music: "10",
-    education: "27",
-    travel: "19",
-    general: "22",      // People & Blogs
+  // Map multi-word niches to good search queries
+  const NICHE_QUERY_MAP: Record<string, string> = {
+    "fashion":        "fashion trends 2025",
+    "mens fashion":   "men fashion outfit ideas 2025",
+    "womens fashion": "women fashion style 2025",
+    "beauty":         "beauty skincare routine 2025",
+    "fitness":        "workout routine gym 2025",
+    "food":           "viral food recipe 2025",
+    "tech":           "best tech gadgets 2025",
+    "finance":        "money investing tips 2025",
+    "travel":         "travel vlog destinations 2025",
+    "gaming":         "gaming highlights 2025",
+    "education":      "learn skill online 2025",
+    "comedy":         "comedy skit funny 2025",
+    "cricket":        "cricket highlights 2025",
+    "wellness":       "mental health self care 2025",
+    "hustle":         "startup business ideas 2025",
+    "general":        "viral trending content 2025",
   };
 
-  const categoryId = CATEGORY_MAP[niche] || "22";
+  const query = NICHE_QUERY_MAP[niche] || `${niche} trending 2025`;
 
   try {
-    // Fetch globally trending (no regionCode = worldwide)
+    // Use search endpoint — works on all API keys, no 403
     const response = await axios.get(
-      "https://www.googleapis.com/youtube/v3/videos",
+      "https://www.googleapis.com/youtube/v3/search",
       {
         params: {
-          part: "snippet,statistics",
-          chart: "mostPopular",
-          videoCategoryId: categoryId,
-          maxResults: 20,
+          part: "snippet",
+          q: query,
+          type: "video",
+          order: "viewCount",          // highest views = proven demand
+          publishedAfter: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
+          maxResults: 15,
           key: apiKey,
         },
         timeout: 10000,
       }
     );
 
-    const videos = response.data?.items || [];
+    const items = response.data?.items || [];
 
-    return videos.map((v: any) => ({
-      title: v.snippet?.title || "",
-      channel: v.snippet?.channelTitle || "",
-      views: parseInt(v.statistics?.viewCount || "0"),
-      likes: parseInt(v.statistics?.likeCount || "0"),
-      publishedAt: v.snippet?.publishedAt,
-      source: "youtube_global_trending",
+    return items.map((item: any) => ({
+      title:       item.snippet?.title || "",
+      channel:     item.snippet?.channelTitle || "",
+      videoId:     item.id?.videoId || "",
+      publishedAt: item.snippet?.publishedAt || "",
+      source:      "youtube_search_global",
       niche,
     }));
   } catch (err: any) {
-    logger.warn({ err: err.message }, "YouTube global fetch failed");
-    return [];
+    logger.warn({ err: err.message, niche }, "YouTube global search failed");
+    return [];  // Non-fatal — pytrends signals still work alone
   }
 }
 

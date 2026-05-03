@@ -10,6 +10,7 @@ Called by: viralIdeas.service.ts
 import json
 import sys
 import time
+import os
 
 try:
     from pytrends.request import TrendReq
@@ -34,6 +35,10 @@ NICHE_SEEDS = {
     "bollywood":   ["bollywood songs", "movie review", "celebrity news", "web series", "ott releases"],
     "hustle":      ["entrepreneurship", "startup ideas", "business tips", "passive income", "freelancing"],
     "wellness":    ["mental health", "meditation", "yoga", "self care", "mindfulness"],
+    "mens fashion":   ["men's fashion", "mens outfit", "menswear", "male fashion", "men style"],
+    "mens grooming":  ["men grooming", "beard care", "mens skincare", "male grooming"],
+    "womens fashion": ["womens fashion", "women outfit", "ladies fashion", "girl outfit ideas"],
+    "street fashion": ["streetwear", "street style", "urban fashion", "sneaker culture"],
     "general":     ["viral content", "trending now", "social media tips", "content ideas", "viral video"],
 }
 
@@ -89,8 +94,8 @@ def fetch_for_niche(pytrends, niche: str, seeds: list) -> list:
 
 
 def main():
-    # Accept niche as CLI arg, default to "general"
-    niche = sys.argv[1] if len(sys.argv) > 1 else "general"
+    # Accept niche via environment variable for better stability
+    niche = os.environ.get("ARIA_NICHE", "general").strip().lower()
     seeds = NICHE_SEEDS.get(niche, NICHE_SEEDS["general"])
 
     try:
