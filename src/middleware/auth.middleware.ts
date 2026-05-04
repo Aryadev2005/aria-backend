@@ -27,9 +27,24 @@ export const authenticateFirebase = async (req: FastifyRequest, reply: FastifyRe
     let user = await prisma.users.findUnique({
       where: { firebase_uid: firebaseUser.uid },
       select: {
+        // ── Identity ──────────────────────────────────────────────────────
         id: true, firebase_uid: true, email: true, name: true, photo_url: true,
-        follower_range: true, primary_platform: true, niches: true,
-        is_pro: true, subscription_tier: true, created_at: true
+        instagram_handle: true, youtube_handle: true,
+        // ── Subscription / permissions ────────────────────────────────────
+        is_pro: true, subscription_tier: true,
+        subscription_product_id: true, subscription_expires_at: true,
+        subscription_store: true,
+        // ── Creator profile (needed by ARIA prompt + tools) ───────────────
+        primary_platform: true, platform: true, niches: true,
+        follower_range: true, engagement_rate: true, health_score: true,
+        archetype: true, archetype_label: true, archetype_confidence: true,
+        growth_stage: true, tone_profile: true, creator_intent: true,
+        aria_confirmed_niche: true, onboarding_step: true,
+        // ── Deep analysis data (critical for profile analysis responses) ──
+        scraped_summary: true, scraped_at: true,
+        aria_last_analysis: true, aria_analyzed_at: true,
+        // ── Timestamps ────────────────────────────────────────────────────
+        created_at: true, updated_at: true,
       }
     }) as User | null
 
@@ -47,15 +62,27 @@ export const authenticateFirebase = async (req: FastifyRequest, reply: FastifyRe
         },
         select: {
           id: true, firebase_uid: true, email: true, name: true, photo_url: true,
-          follower_range: true, primary_platform: true, niches: true,
-          is_pro: true, subscription_tier: true, created_at: true
+          instagram_handle: true, youtube_handle: true,
+          is_pro: true, subscription_tier: true,
+          subscription_product_id: true, subscription_expires_at: true,
+          subscription_store: true,
+          primary_platform: true, platform: true, niches: true,
+          follower_range: true, engagement_rate: true, health_score: true,
+          archetype: true, archetype_label: true, archetype_confidence: true,
+          growth_stage: true, tone_profile: true, creator_intent: true,
+          aria_confirmed_niche: true, onboarding_step: true,
+          scraped_summary: true, scraped_at: true,
+          aria_last_analysis: true, aria_analyzed_at: true,
+          created_at: true, updated_at: true,
         }
       }) as User
       logger.info({ userId: user.id }, 'New user created')
     }
 
     req.user = user
-    await cache.set(cacheKey, user, 300)
+    // 60s TTL — short enough that profile analysis updates appear quickly,
+    // long enough to avoid hammering the DB on every streaming token request.
+    await cache.set(cacheKey, user, 60)
 
   } catch (err: any) {
     logger.error({ 

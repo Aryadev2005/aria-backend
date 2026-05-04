@@ -50,7 +50,20 @@ interface McpServerRuntime {
 
 // ─── State ──────────────────────────────────────────────────────────────────
 
-let cachedTools: any[] | null = null;
+interface ToolCache {
+  tools: any[];
+  loadedAt: number;
+  /** true when at least one server connected successfully */
+  hasRealTools: boolean;
+}
+
+let _cache: ToolCache | null = null;
+
+/** How long a successful cache is valid (ms) */
+const CACHE_TTL_OK_MS  = 5 * 60 * 1000; // 5 min
+/** How long a failed/empty cache is valid before we retry (ms) */
+const CACHE_TTL_FAIL_MS = 30 * 1000;    // 30 s
+
 let runtimes: McpServerRuntime[] = [];
 
 // ─── Config Loading ──────────────────────────────────────────────────────────
@@ -260,17 +273,29 @@ const registerCleanup = () => {
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 export const getMcpTools = async () => {
-  if (cachedTools) return cachedTools;
+  const now = Date.now();
+
+  if (_cache) {
+    const ttl = _cache.hasRealTools ? CACHE_TTL_OK_MS : CACHE_TTL_FAIL_MS;
+    if (now - _cache.loadedAt < ttl) {
+      return _cache.tools;
+    }
+    // Cache expired — fall through and reload
+    logger.info('MCP tool cache expired — reloading');
+    _cache = null;
+  }
 
   const config = await loadConfig();
   const enabled = (config.servers || []).filter((s) => s.enabled !== false);
 
   if (enabled.length === 0) {
-    cachedTools = [];
-    return cachedTools;
+    // No servers configured — cache permanently (config won't change at runtime)
+    _cache = { tools: [], loadedAt: now, hasRealTools: false };
+    return _cache.tools;
   }
 
   const tools: any[] = [];
+  let successCount = 0;
 
   for (const server of enabled) {
     try {
@@ -285,6 +310,7 @@ export const getMcpTools = async () => {
       runtimes.push(runtime);
       const serverTools = await buildToolsForServer(runtime);
       tools.push(...serverTools);
+      successCount++;
       logger.info(
         { server: server.id, toolCount: serverTools.length },
         "MCP tools loaded",
@@ -298,12 +324,22 @@ export const getMcpTools = async () => {
   }
 
   registerCleanup();
-  cachedTools = tools;
+
+  const hasRealTools = successCount > 0;
+  if (!hasRealTools) {
+    // All servers failed — use short TTL so we retry soon
+    logger.warn(
+      { attempted: enabled.length },
+      'All MCP servers failed — will retry in 30s'
+    );
+  }
+
+  _cache = { tools, loadedAt: now, hasRealTools };
   return tools;
 };
 
-/** Force-clear the tool cache (useful after config changes) */
+/** Force-clear the tool cache (useful after config changes or to force a retry) */
 export const resetMcpToolCache = () => {
-  cachedTools = null;
+  _cache = null;
   runtimes = [];
 };

@@ -16,10 +16,27 @@ import {
   autogenerateTitle,
 } from "../services/aria_sessions.service";
 
+/** Normalize OpenAI content-block arrays → plain string */
+const extractText = (content: any): string => {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content))
+    return content
+      .filter((b: any) => b?.type === "text")
+      .map((b: any) => b.text ?? "")
+      .join("");
+  if (content && typeof content === "object" && typeof content.text === "string")
+    return content.text;
+  return "";
+};
+
 export interface SendMessageBody {
   message: string;
   sessionId?: string;
   history?: any[];
+  /** e.g. 'profile' | 'studio' | 'discover' | 'launch' | 'direct' */
+  entryScreen?: string;
+  /** Any extra session context the frontend wants to pass (idea, trendTitle, etc.) */
+  context?: Record<string, any>;
 }
 
 // ── POST /api/v1/agent/message ─────────────────────────────────────────────────
@@ -48,6 +65,8 @@ export const sendMessage = async (
       sessionId,
       user,
       db: prisma,
+      entryScreen: req.body.entryScreen,
+      sessionContext: req.body.context,
     });
 
     // Save assistant reply
@@ -122,16 +141,18 @@ export const streamMessage = async (
       sessionId,
       user,
       db: prisma,
+      entryScreen: req.body.entryScreen,
+      sessionContext: req.body.context,
     });
 
     for await (const event of gen) {
       send(event);
 
       // Collect data for persistence
-      if ((event as any).type === "token") fullReply += (event as any).content ?? "";
+      if ((event as any).type === "token") fullReply += extractText((event as any).content);
       if ((event as any).type === "tool_start") toolsUsed.push((event as any).tool);
       if ((event as any).type === "done") {
-        fullReply = (event as any).message || fullReply;
+        fullReply = extractText((event as any).message) || fullReply;
         break;
       }
       if ((event as any).type === "error") break;

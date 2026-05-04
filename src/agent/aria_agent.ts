@@ -5,7 +5,7 @@
 // Tools get DB connection injected at runtime so they can query live data.
 
 import { createAgent } from "langchain";
-import { ChatOpenAI } from "@langchain/openai";
+import { ChatOpenAI, tools as openaiTools } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
@@ -160,20 +160,26 @@ const createDBInjectedTools = (db: any, user: any) => {
 export const buildARIAAgent = async (
   db: any,
   user: any,
-  streaming = false,   // pass true for streamARIAAgent so tokens flow
+  streaming = false,
+  entryScreen = 'direct',
+  sessionContext: Record<string, any> = {},
 ) => {
   const llm = createLLM(streaming);
   const checkpointer = await getCheckpointer(); // null-safe — may be null if DB slow
 
   const mcpTools = await getMcpTools();
-  const tools = [...createDBInjectedTools(db, user), ...mcpTools];
+  
+  // Initialize OpenAI native web search tool
+  const webSearchTool = openaiTools.webSearch();
+
+  const tools = [...createDBInjectedTools(db, user), ...mcpTools, webSearchTool];
 
   const memory = await getMemory(user.id).catch(() => ({}));
   const systemPrompt = buildARIASystemPrompt({
     user,
     memory,
-    sessionContext: {},
-    entryScreen: "brain",
+    sessionContext,
+    entryScreen,
     pendingSuggestions: [],
   });
 
@@ -220,7 +226,7 @@ export const invokeARIAAgent = async ({
   try {
     logger.info({ userId: user.id, sessionId }, "ARIA agent invoked");
 
-    const agent = await buildARIAAgent(db, user);
+    const agent = await buildARIAAgent(db, user, false, entryScreen ?? 'direct', sessionContext ?? {});
     const config = {
       configurable: { thread_id: sessionId },
       recursionLimit: 15,
@@ -270,15 +276,19 @@ export async function* streamARIAAgent({
   sessionId,
   user,
   db,
+  entryScreen,
+  sessionContext,
 }: {
   message: string;
   sessionId: string;
   user: any;
   db: any;
+  entryScreen?: string;
+  sessionContext?: Record<string, any>;
 }) {
   try {
     // streaming:true so the LLM emits on_chat_model_stream token events
-    const agent = await buildARIAAgent(db, user, true);
+    const agent = await buildARIAAgent(db, user, true, entryScreen ?? 'direct', sessionContext ?? {});
     const config = {
       configurable: { thread_id: sessionId },
       recursionLimit: 15,
