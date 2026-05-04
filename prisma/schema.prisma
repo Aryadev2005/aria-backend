@@ -253,6 +253,7 @@ model live_trends {
   @@index([expires_at], map: "idx_live_trends_expires")
   @@index([niche_tags], map: "idx_live_trends_niche", type: Gin)
   @@index([platform_tags], map: "idx_live_trends_platform", type: Gin)
+  @@unique([title, source], name: "title_source")
 }
 
 model radar_snapshots {
@@ -520,4 +521,81 @@ model song_trajectories {
   @@unique([song_title, language], name: "uq_song_traj_title_lang")
   @@index([language, lifecycle], map: "idx_song_traj_lang_lifecycle")
   @@index([updated_at(sort: Desc)], map: "idx_song_traj_updated")
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Discovery Raw Tables — Global scrape storage for TikTok, Pinterest, Google Trends
+// ══════════════════════════════════════════════════════════════════════════════
+
+model discovery_tiktok_raw {
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tiktok_id         String   @unique
+  description       String?
+  creator_handle    String?
+  creator_name      String?
+  creator_followers BigInt   @default(0)
+  views             BigInt   @default(0)
+  likes             BigInt   @default(0)
+  comments          BigInt   @default(0)
+  shares            BigInt   @default(0)
+  saves             BigInt   @default(0)
+  engagement_rate   Decimal  @default(0) @db.Decimal(8, 6)
+  sound_name        String?
+  sound_artist      String?
+  hashtags          String[] @default([])
+  video_url         String?
+  thumbnail_url     String?
+  duration          Int      @default(0)
+  scraped_at        DateTime @default(now()) @db.Timestamptz(6)
+  expires_at        DateTime @db.Timestamptz(6)
+  raw_data          Json     @default("{}")
+
+  @@index([views(sort: Desc)])
+  @@index([engagement_rate(sort: Desc)])
+  @@index([scraped_at(sort: Desc)])
+  @@index([expires_at])
+}
+
+model discovery_pinterest_raw {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  pinterest_id    String   @unique
+  title           String?
+  description     String?
+  image_url       String?
+  pin_url         String?
+  board_name      String?
+  board_owner     String?
+  saves           BigInt   @default(0)
+  clicks          BigInt   @default(0)
+  engagement_rate Decimal  @default(0) @db.Decimal(8, 6)
+  hashtags        String[] @default([])
+  pin_type        String   @default("standard")
+  scraped_at      DateTime @default(now()) @db.Timestamptz(6)
+  expires_at      DateTime @db.Timestamptz(6)
+  raw_data        Json     @default("{}")
+
+  @@index([saves(sort: Desc)])
+  @@index([engagement_rate(sort: Desc)])
+  @@index([scraped_at(sort: Desc)])
+  @@index([expires_at])
+}
+
+model discovery_google_trends_raw {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  keyword         String
+  geo             String   @default("GLOBAL")
+  interest_score  Int      @default(0)
+  related_queries String[] @default([])
+  related_topics  String[] @default([])
+  breakout        Boolean  @default(false)
+  trend_date      DateTime @default(dbgenerated("CURRENT_DATE")) @db.Date
+  scraped_at      DateTime @default(now()) @db.Timestamptz(6)
+  expires_at      DateTime @db.Timestamptz(6)
+  raw_data        Json     @default("{}")
+
+  @@unique([keyword, geo, trend_date])
+  @@index([interest_score(sort: Desc)])
+  @@index([breakout])
+  @@index([scraped_at(sort: Desc)])
+  @@index([expires_at])
 }

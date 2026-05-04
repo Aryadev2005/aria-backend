@@ -8,7 +8,8 @@ import { logger } from "../utils/logger";
 import { startEmbeddingWorker,  stopEmbeddingWorker  } from "./embedding.worker";
 import { startTrajectoryWorker, stopTrajectoryWorker } from "./trajectory.worker";
 import { startSongWorker,       stopSongWorker       } from "./song.worker";
-import { scheduleEmbedJobs, scheduleSongJobs }         from "../config/queue.additions";
+import { startDiscoveryWorker,  stopDiscoveryWorker  } from "./discovery.worker";
+import { scheduleEmbedJobs, scheduleSongJobs, scheduleDiscoveryJobs } from "../config/queue.additions";
 
 const workers: any[] = [];
 
@@ -36,9 +37,17 @@ export const startAllWorkers = async () => {
     logger.warn({ err: err.message }, "Song worker failed to start");
   }
 
+  try {
+    const discoveryWorker = await startDiscoveryWorker();
+    if (discoveryWorker) workers.push(discoveryWorker);
+  } catch (err: any) {
+    logger.warn({ err: err.message }, "Discovery worker failed to start");
+  }
+
   // Schedule recurring jobs
   await scheduleEmbedJobs();
   await scheduleSongJobs();
+  await scheduleDiscoveryJobs();
 
   logger.info({ workerCount: workers.length }, "All workers started");
 };
@@ -49,6 +58,7 @@ export const stopAllWorkers = async () => {
     stopEmbeddingWorker(),
     stopTrajectoryWorker(),
     stopSongWorker(),
+    stopDiscoveryWorker(),
   ]);
   logger.info("All workers stopped");
 };

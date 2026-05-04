@@ -1,6 +1,7 @@
 import axios from "axios";
 import { logger } from "../utils/logger";
 import { _callGroq } from "./ai/groq.service";
+import { prisma } from "../config/database";
 
 export interface ViralIdea {
   id: string;
@@ -158,14 +159,121 @@ async function fetchYouTubeSignals(niche: string): Promise<any[]> {
   return [];
 }
 
+// ── Source 3: Read TikTok signals from raw store ───────────────────────────────
+async function readTikTokSignals(limit = 30): Promise<any[]> {
+  try {
+    const rows = await (prisma as any).discovery_tiktok_raw.findMany({
+      where:   { 
+        expires_at: { gt: new Date() },
+        views: { gt: BigInt(10000) },
+      },
+      orderBy: { engagement_rate: "desc" },
+      take:    limit,
+      select: {
+        description:     true,
+        creator_name:    true,
+        views:           true,
+        likes:           true,
+        comments:        true,
+        engagement_rate: true,
+        sound_name:      true,
+        sound_artist:    true,
+        hashtags:        true,
+      },
+    });
+
+    return rows.map((r: any) => ({
+      title:       (r.description || "").substring(0, 100),
+      creator:     r.creator_name || "",
+      views:       Number(r.views),
+      engagement:  Number(r.engagement_rate),
+      sound:       r.sound_name ? `${r.sound_name} — ${r.sound_artist || ""}` : "",
+      hashtags:    (r.hashtags || []).slice(0, 5).join(", "),
+      source:      "tiktok_global",
+    }));
+  } catch (err: any) {
+    logger.warn({ err: err.message }, "TikTok DB read failed");
+    return [];
+  }
+}
+
+// ── Source 4: Read Pinterest signals from raw store ────────────────────────────
+async function readPinterestSignals(limit = 20): Promise<any[]> {
+  try {
+    const rows = await (prisma as any).discovery_pinterest_raw.findMany({
+      where:   { 
+        expires_at: { gt: new Date() },
+        saves: { gt: BigInt(100) },
+      },
+      orderBy: { saves: "desc" },
+      take:    limit,
+      select: {
+        title:           true,
+        description:     true,
+        saves:           true,
+        clicks:          true,
+        engagement_rate: true,
+        board_name:      true,
+        hashtags:        true,
+      },
+    });
+
+    return rows.map((r: any) => ({
+      title:      (r.title || r.description || "").substring(0, 100),
+      saves:      Number(r.saves),
+      board:      r.board_name || "",
+      hashtags:   (r.hashtags || []).slice(0, 5).join(", "),
+      source:     "pinterest_global",
+    }));
+  } catch (err: any) {
+    logger.warn({ err: err.message }, "Pinterest DB read failed");
+    return [];
+  }
+}
+
+// ── Source 5: Read Google Trends from raw store ────────────────────────────────
+async function readGoogleTrendsSignals(limit = 20): Promise<any[]> {
+  try {
+    const rows = await (prisma as any).discovery_google_trends_raw.findMany({
+      where:   { 
+        expires_at: { gt: new Date() },
+        interest_score: { gte: 50 },
+      },
+      orderBy: { interest_score: "desc" },
+      take:    limit,
+      select: {
+        keyword:         true,
+        interest_score:  true,
+        related_queries: true,
+        related_topics:  true,
+        breakout:        true,
+      },
+    });
+
+    return rows.map((r: any) => ({
+      title:    r.keyword,
+      score:    r.interest_score,
+      breakout: r.breakout,
+      related:  [...(r.related_queries || []), ...(r.related_topics || [])].slice(0, 5).join(", "),
+      source:   "google_trends_global",
+    }));
+  } catch (err: any) {
+    logger.warn({ err: err.message }, "Google Trends DB read failed");
+    return [];
+  }
+}
+
 // ── Single Groq call: resolves subreddits + synthesizes 10 ideas ─────────────
 // Merging niche resolution + idea synthesis into ONE call to avoid rate limits
 async function resolveAndSynthesize(
-  redditSignals: any[],
-  ytSignals:     any[],
-  ctx:           UserNicheContext,
-  platform:      string,
-  followerRange: string,
+  redditSignals:    any[],
+  ytSignals:        any[],
+  tiktokSignals:    any[],
+  pinterestSignals: any[],
+  googleSignals:    any[],
+  ctx:              UserNicheContext,
+  platform:         string,
+  followerRange:    string,
 ): Promise<ViralIdea[]> {
 
   const redditCtx = redditSignals.length > 0
@@ -179,6 +287,27 @@ async function resolveAndSynthesize(
     ? `\nYOUTUBE TRENDING INDIA:\n` +
       ytSignals.slice(0, 8).map(
         v => `- "${v.title}" by ${v.channel} | ${v.views.toLocaleString("en-IN")} views`
+      ).join("\n")
+    : "";
+
+  const tiktokCtx = tiktokSignals.length > 0
+    ? `\nTIKTOK GLOBAL TRENDING (raw worldwide data):\n` +
+      tiktokSignals.slice(0, 8).map(
+        v => `- "${v.title}" | ${v.views.toLocaleString("en-IN")} views | ${(v.engagement * 100).toFixed(1)}% engagement${v.sound ? ` | Sound: ${v.sound}` : ""}`
+      ).join("\n")
+    : "";
+
+  const pinterestCtx = pinterestSignals.length > 0
+    ? `\nPINTEREST GLOBAL TRENDING (raw worldwide data):\n` +
+      pinterestSignals.slice(0, 6).map(
+        p => `- "${p.title}" | ${p.saves.toLocaleString("en-IN")} saves | Board: ${p.board}`
+      ).join("\n")
+    : "";
+
+  const googleCtx = googleSignals.length > 0
+    ? `\nGOOGLE TRENDS GLOBAL BREAKOUTS:\n` +
+      googleSignals.slice(0, 6).map(
+        g => `- "${g.title}" | Score: ${g.score}/100${g.breakout ? " ⚡ BREAKOUT" : ""} | Related: ${g.related}`
       ).join("\n")
     : "";
 
@@ -197,9 +326,10 @@ CREATOR PROFILE:
 
 IMPORTANT: The CONFIRMED NICHE above is what the user selected. Always generate ideas for that niche.
 The handle and bio are context only — do NOT use them to override the confirmed niche.
+Data from Reddit, YouTube, TikTok (${tiktokSignals.length} videos), Pinterest (${pinterestSignals.length} pins), Google Trends (${googleSignals.length} topics) — all global, unfiltered. Match to creator's confirmed niche.
 
 LIVE SIGNALS:
-${redditCtx}${ytCtx}
+${redditCtx}${ytCtx}${tiktokCtx}${pinterestCtx}${googleCtx}
 
 YOUR TASK:
 Generate 10 specific, actionable content IDEAS for this creator using the live signals above and their CONFIRMED NICHE.
@@ -266,19 +396,24 @@ export async function generateViralIdeas(params: {
   ];
 
   // Fetch signals in parallel — single Groq call handles everything after
-  const [redditResult, ytResult] = await Promise.allSettled([
+  const [redditResult, ytResult, tiktokResult, pinterestResult, googleResult] = await Promise.allSettled([
     fetchRedditSignals(DEFAULT_SUBREDDITS),
     fetchYouTubeSignals(userContext.niches[0] ?? "general"),
+    readTikTokSignals(30),
+    readPinterestSignals(20),
+    readGoogleTrendsSignals(20),
   ]);
 
-  const reddit  = redditResult.status === "fulfilled" ? redditResult.value : [];
-  const youtube = ytResult.status     === "fulfilled" ? ytResult.value     : [];
+  const reddit    = redditResult.status    === "fulfilled" ? redditResult.value    : [];
+  const youtube   = ytResult.status        === "fulfilled" ? ytResult.value        : [];
+  const tiktok    = tiktokResult.status    === "fulfilled" ? tiktokResult.value    : [];
+  const pinterest = pinterestResult.status === "fulfilled" ? pinterestResult.value : [];
+  const gtrends   = googleResult.status    === "fulfilled" ? googleResult.value    : [];
 
   logger.info({
-    reddit:  reddit.length,
-    youtube: youtube.length,
-    total:   reddit.length + youtube.length,
-  }, "Signals collected — single Groq synthesis");
+    reddit: reddit.length, youtube: youtube.length,
+    tiktok: tiktok.length, pinterest: pinterest.length, gtrends: gtrends.length,
+  }, "All signals collected");
 
-  return resolveAndSynthesize(reddit, youtube, userContext, platform, followerRange);
+  return resolveAndSynthesize(reddit, youtube, tiktok, pinterest, gtrends, userContext, platform, followerRange);
 }

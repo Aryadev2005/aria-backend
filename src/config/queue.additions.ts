@@ -58,3 +58,23 @@ export async function scheduleSongJobs(): Promise<void> {
     logger.warn({ err: err.message }, "Failed to schedule song jobs");
   }
 }
+
+// ── Discovery scrape schedule ─────────────────────────────────────────────────
+// Global TikTok + Pinterest + Google Trends scrape every 6 hours
+
+export async function scheduleDiscoveryJobs(): Promise<void> {
+  try {
+    const discoveryQueue = new Queue("discovery-queue", { connection: getConnection() });
+
+    await discoveryQueue.upsertJobScheduler(
+      "discovery-global-scheduled",
+      { every: 6 * 60 * 60 * 1000 },  // every 6 hours
+      { name: "discovery-global", data: {} },
+    );
+
+    logger.info("Discovery jobs scheduled (every 6h)");
+    await discoveryQueue.close();
+  } catch (err: any) {
+    logger.warn({ err: err.message }, "Failed to schedule discovery jobs");
+  }
+}
