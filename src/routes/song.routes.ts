@@ -1,44 +1,90 @@
-import { FastifyInstance } from 'fastify'
-import * as songController from '../controllers/song.controller'
-import { authenticateFirebase, requirePro } from '../middleware/auth.middleware'
+// src/routes/song.routes.ts
+// ══════════════════════════════════════════════════════════════════════════════
+// Song Routes — all endpoints served from 3-tier architecture
+// ══════════════════════════════════════════════════════════════════════════════
+
+import { FastifyInstance } from "fastify";
+import * as songController from "../controllers/song.controller";
+import { authenticateFirebase, requirePro } from "../middleware/auth.middleware";
 
 export default async function songRoutes(app: FastifyInstance) {
-  app.get('/', {
+  // ── GET /songs ─────────────────────────────────────────────────────────────
+  app.get("/", {
     schema: {
       querystring: {
-        type: 'object',
+        type: "object",
         properties: {
-          niche:     { type: 'string', default: 'fashion' },
-          lifecycle: { type: 'string', enum: ['early', 'peak', 'dying', 'all'], default: 'all' },
-          signal:    { type: 'string', enum: ['postNow', 'wait', 'tooLate', 'all'], default: 'all' },
-          limit:     { type: 'integer', minimum: 1, maximum: 20, default: 10 },
+          niche:     { type: "string", default: "general" },
+          language:  { type: "string", default: "Hindi" },
+          lifecycle: { type: "string", enum: ["RISING", "PEAKING", "DECLINING", "CYCLICAL", "DEAD", "all"], default: "all" },
+          signal:    { type: "string", enum: ["postNow", "wait", "tooLate", "all"], default: "all" },
+          limit:     { type: "integer", minimum: 1, maximum: 30, default: 15 },
         },
       },
     },
-  }, songController.getSongs);
+  }, songController.getSongs as any);
 
-  app.get('/top10', {
+  // ── GET /songs/top10 ───────────────────────────────────────────────────────
+  app.get("/top10", {
     schema: {
       querystring: {
-        type: 'object',
+        type: "object",
         properties: {
-          niche: { type: 'string', default: 'fashion' },
+          niche:    { type: "string", default: "general" },
+          language: { type: "string", default: "Hindi" },
         },
       },
     },
-  }, songController.getTop10);
+  }, songController.getTop10 as any);
 
-  app.get('/predict', {
+  // ── GET /songs/predict — PRO only ─────────────────────────────────────────
+  app.get("/predict", {
     preHandler: [authenticateFirebase, requirePro],
-  }, songController.predictTrendingSongs);
+  }, songController.predictTrendingSongs as any);
 
-  app.get('/:id', {
+  // ── GET /songs/by-mood — semantic search via embeddings ───────────────────
+  app.get("/by-mood", {
+    preHandler: [authenticateFirebase],
+    schema: {
+      querystring: {
+        type: "object",
+        required: ["mood"],
+        properties: {
+          mood:     { type: "string", minLength: 2 },
+          niche:    { type: "string", default: "general" },
+          language: { type: "string", default: "Hindi" },
+        },
+      },
+    },
+  }, songController.getSongsByMood as any);
+
+  // ── GET /songs/languages ───────────────────────────────────────────────────
+  app.get("/languages", songController.getAvailableLanguages as any);
+
+  // ── GET /songs/trajectory/:title ──────────────────────────────────────────
+  app.get("/trajectory/:title", {
+    preHandler: [authenticateFirebase],
     schema: {
       params: {
-        type: 'object',
-        required: ['id'],
-        properties: { id: { type: 'string' } },
+        type: "object",
+        required: ["title"],
+        properties: { title: { type: "string" } },
+      },
+      querystring: {
+        type: "object",
+        properties: { language: { type: "string" } },
       },
     },
-  }, songController.getSongById);
+  }, songController.getSongTrajectory as any);
+
+  // ── GET /songs/:id ─────────────────────────────────────────────────────────
+  app.get("/:id", {
+    schema: {
+      params: {
+        type: "object",
+        required: ["id"],
+        properties: { id: { type: "string" } },
+      },
+    },
+  }, songController.getSongById as any);
 }

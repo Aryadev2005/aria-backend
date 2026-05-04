@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import { prisma } from "../config/database";
 import { logger } from "../utils/logger";
+import { getSongsForBGM } from "./songs/song.rag.service";
 
 let _openai: OpenAI | null = null;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
@@ -194,12 +195,13 @@ Respond ONLY with valid JSON:
 };
 
 export interface BGMParams {
-  idea: string;
-  mood?: string;
-  niche: string;
-  platform: string;
+  idea:      string;
+  mood?:     string;
+  niche:     string;
+  platform:  string;
   archetype: string;
   duration?: string;
+  language?: string;
 }
 
 export const matchBGM = async ({
@@ -209,42 +211,26 @@ export const matchBGM = async ({
   platform,
   archetype,
   duration,
+  language = "Hindi",
 }: BGMParams) => {
-  // Try live songs from DB first
-  let liveSongs: any[] = [];
-  try {
-    const recentCutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    liveSongs = await prisma.live_songs.findMany({
-      select: {
-        title: true,
-        artist: true,
-        chart_position: true,
-        chart_change: true,
-        streams_today: true,
-      },
-      where: { fetched_at: { gte: recentCutoff } },
-      orderBy: { chart_position: "asc" },
-      take: 20,
-    });
-  } catch (err) {
-    logger.warn({ err }, "live_songs not available");
-  }
+  // ── Pull live songs from Tier 1 hot window ────────────────────────────────
+  const liveSongs = await getSongsForBGM({ niche, language, limit: 15 });
 
   const liveContext =
     liveSongs.length > 0
-      ? `CURRENTLY TRENDING SONGS IN INDIA:\n` +
+      ? `\nCURRENTLY TRENDING SONGS (live data):\n` +
         liveSongs
-          .slice(0, 8)
+          .slice(0, 10)
           .map((s) => {
-            const position = s.chart_position ?? "N/A";
-            const change =
-              typeof s.chart_change === "number"
-                ? ` (Δ ${s.chart_change >= 0 ? "+" : ""}${s.chart_change})`
-                : "";
-            const streams = s.streams_today
+            const position = s.chart_position > 0 ? `#${s.chart_position}` : "N/A";
+            const change   = s.chart_change
+              ? ` (Δ ${s.chart_change >= 0 ? "+" : ""}${s.chart_change})`
+              : "";
+            const streams  = s.streams_today
               ? `, ${Number(s.streams_today).toLocaleString("en-IN")} streams`
               : "";
-            return `• "${s.title}" by ${s.artist} — position #${position}${change}${streams}`;
+            const signal   = s.signal === "postNow" ? " ⚡ POST NOW" : s.signal === "tooLate" ? " 💀 TOO LATE" : "";
+            return `• "${s.title}" by ${s.artist} — position ${position}${change}${streams}${signal}`;
           })
           .join("\n")
       : "";
@@ -257,6 +243,7 @@ Match BGM for this content:
 - Niche: ${niche} | Platform: ${platform}
 - Archetype: ${archetype}
 - Duration: ${duration || "30s"}
+- Language preference: ${language}
 
 ${liveContext}
 
@@ -282,7 +269,9 @@ Respond ONLY with valid JSON:
       "source": "spotify|jiosaavn|royalty-free|trending-audio",
       "viralPotential": 88,
       "isFromLiveData": true,
-      "warning": "null or 'This audio is peaking — post within 48hrs'"
+      "lifecycle": "RISING",
+      "signal": "postNow",
+      "warning": null
     }
   ],
   "audioStrategy": "One sentence on the overall audio strategy for this archetype",

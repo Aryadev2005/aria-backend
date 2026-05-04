@@ -442,3 +442,69 @@ model hot_window_cache {
   @@index([expires_at], map: "idx_hot_window_cache_expires")
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// Songs 3-Tier Architecture — Prisma Schema Additions
+//
+// ADD THESE MODELS to your main prisma/schema.prisma file.
+// Then run: npx prisma generate
+//
+// Tier 1 — song_hot_window     : Pre-assembled narrative in Redis + Postgres
+// Tier 2 — song_embeddings     : pgvector semantic search (via raw SQL)
+// Tier 3 — song_trajectories   : Rank/velocity history + lifecycle state
+//
+// Also: live_songs gets new columns — run the companion SQL migration first.
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ── Tier 1: Song Hot Window Cache ─────────────────────────────────────────────
+// Mirrors hot_window_cache but scoped to songs per language+niche combination.
+// Prisma upserts via $queryRawUnsafe; the cache_key is "songhot:{language}:{niche}"
+model song_hot_window {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  cache_key  String   @unique                        // "songhot:hindi:fashion"
+  narrative  String                                  // pre-assembled markdown narrative
+  metadata   Json?    @default("{}")                 // signal counts, sources used, etc.
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  expires_at DateTime @db.Timestamptz(6)
+
+  @@index([cache_key], map: "idx_song_hot_window_key")
+  @@index([expires_at], map: "idx_song_hot_window_expires")
+}
+
+// ── Tier 2: Song Embeddings ───────────────────────────────────────────────────
+// embedding vector(768) is managed via raw SQL — Prisma can't model pgvector.
+// The column exists in the DB but is invisible to Prisma's type system.
+model song_embeddings {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  song_id     String   @unique @db.Uuid              // FK → live_songs.id
+  embed_text  String                                 // text that was embedded
+  language    String?                                // denormalised for filtering
+  niche_tags  String[]                               // denormalised for filtering
+  created_at  DateTime @default(now()) @db.Timestamptz(6)
+  updated_at  DateTime @default(now()) @db.Timestamptz(6)
+
+  @@index([language], map: "idx_song_embeddings_lang")
+  @@index([updated_at(sort: Desc)], map: "idx_song_embeddings_updated")
+}
+
+// ── Tier 3: Song Trajectories ─────────────────────────────────────────────────
+// One row per (song_title + language). Updated every fetch cycle.
+// lifecycle: RISING | PEAKING | DECLINING | DEAD | CYCLICAL
+model song_trajectories {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  song_title    String
+  artist        String
+  language      String   @default("unknown")
+  lifecycle     String   @default("RISING")          // computed from rank_history
+  rank_history  Json     @default("[]")              // [{date, rank, streams}]
+  peak_rank     Int?
+  peak_at       DateTime? @db.Timestamptz(6)
+  first_seen    DateTime  @default(now()) @db.Timestamptz(6)
+  confidence    Decimal   @default(0.5) @db.Decimal(4, 2)
+  niche_tags    String[]  @default([])               // which niches this song appears in
+  source        String?                              // spotify | jiosaavn | youtube
+  updated_at    DateTime  @default(now()) @db.Timestamptz(6)
+
+  @@unique([song_title, language], name: "uq_song_traj_title_lang")
+  @@index([language, lifecycle], map: "idx_song_traj_lang_lifecycle")
+  @@index([updated_at(sort: Desc)], map: "idx_song_traj_updated")
+}

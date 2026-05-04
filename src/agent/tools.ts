@@ -6,6 +6,7 @@
 import axios from "axios";
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
+import { logger } from "../utils/logger";
 
 import {
   normalizeYouTubeVideo,
@@ -472,61 +473,56 @@ export const getDBLiveTrends = tool(
 
 // ── TOOL 10: ARIA DB trending songs ──────────────────────────────────────────
 export const getDBTrendingSongs = tool(
-  async ({ language, db }: any) => {
+  async ({ language, niche, db }: { language?: string; niche?: string; db?: any }) => {
     try {
-      let songs: any[] = [];
+      const { retrieveSongs } = await import("../services/songs/song.rag.service");
 
-      if (isPrismaClient(db)) {
-        // Only query columns that actually exist in the live_songs schema
-        songs = await (db.live_songs as any).findMany({
-          where: language ? { language } : undefined,
-          orderBy: { chart_position: "asc" },
-          take: 20,
-          select: {
-            title: true,
-            artist: true,
-            chart_position: true,
-            chart_change: true,
-            language: true,
-            streams_today: true,
-            source: true,
-          },
-        });
-      } else {
-        if (language) {
-          songs = await db`
-            SELECT title, artist, chart_position, chart_change, language, streams_today, source
-            FROM live_songs WHERE language = ${language} ORDER BY chart_position ASC LIMIT 20
-          `;
-        } else {
-          songs = await db`
-            SELECT title, artist, chart_position, chart_change, language, streams_today, source
-            FROM live_songs ORDER BY chart_position ASC LIMIT 20
-          `;
-        }
-      }
-
-      if (!songs.length) {
-        return JSON.stringify({ message: "No songs in DB yet. Try get_spotify_trending or get_jiosaavn_trending for live data.", songs: [] });
-      }
-
-      return JSON.stringify(normalizeDBSongs(songs));
-    } catch (err: any) {
-      return JSON.stringify({
-        error: `Failed to fetch trending songs: ${err.message}`,
+      const result = await retrieveSongs({
+        language: language || "Hindi",
+        niche:    niche    || "general",
+        limit:    15,
       });
+
+      if (!result.songs.length) {
+        return JSON.stringify({
+          message: "No songs in DB yet. Worker runs every 6h — check back soon.",
+          songs:   [],
+        });
+      }
+
+      // Build a rich summary for ARIA to use in responses
+      const postNow  = result.songs.filter((s) => s.signal === "postNow").slice(0, 5);
+      const peaking  = result.songs.filter((s) => s.lifecycle === "PEAKING").slice(0, 3);
+      const rising   = result.songs.filter((s) => s.lifecycle === "RISING" && s.signal === "postNow").slice(0, 5);
+
+      return JSON.stringify({
+        fromCache:   result.fromCache,
+        language:    result.metadata.language,
+        niche:       result.metadata.niche,
+        totalSongs:  result.metadata.songCount,
+        postNow:     postNow.map((s)  => ({ title: s.title, artist: s.artist, rank: s.chart_position, lifecycle: s.lifecycle })),
+        peaking:     peaking.map((s)  => ({ title: s.title, artist: s.artist, rank: s.chart_position })),
+        rising:      rising.map((s)   => ({ title: s.title, artist: s.artist, rank: s.chart_position, change: s.chart_change })),
+        narrative:   result.hotWindowNarrative,
+      });
+    } catch (err: any) {
+      logger.warn({ err: err.message }, "getDBTrendingSongs tool failed");
+      return JSON.stringify({ error: `Failed to fetch trending songs: ${err.message}`, songs: [] });
     }
   },
   {
     name: "get_db_trending_songs",
     description:
-      "Fetch currently trending songs/audio from ARIA's live song database. Updated every few hours from Spotify + JioSaavn. Use for BGM/audio recommendations for Reels and Shorts.",
-    // NOTE: 'db' is injected by aria_agent.ts wrapper — NOT exposed to the LLM.
+      "Fetch currently trending songs/audio from ARIA's 3-tier song intelligence system. Data is scraped from Spotify, JioSaavn, and YouTube every 6 hours and enriched with lifecycle signals (RISING/PEAKING/DECLINING). Use for BGM/audio recommendations for Reels and Shorts. Includes postNow/wait/tooLate signals.",
     schema: z.object({
       language: z
         .string()
         .optional()
-        .describe('Language filter: "Hindi", "English", "Punjabi", etc.'),
+        .describe('Language filter: "Hindi", "English", "Punjabi", "Telugu", etc. Default: Hindi'),
+      niche: z
+        .string()
+        .optional()
+        .describe('Niche filter: "fashion", "fitness", "general", etc. Default: general'),
     }),
   },
 );
