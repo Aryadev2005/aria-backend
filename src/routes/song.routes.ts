@@ -38,9 +38,13 @@ export default async function songRoutes(app: FastifyInstance) {
   }, songController.getTop10 as any);
 
   // ── GET /songs/predict — PRO only ─────────────────────────────────────────
+  // app.get("/predict", {
+  //   preHandler: [authenticateFirebase, requirePro],
+  // }, songController.predictTrendingSongs as any);
+
   app.get("/predict", {
-    preHandler: [authenticateFirebase, requirePro],
-  }, songController.predictTrendingSongs as any);
+  preHandler: [authenticateFirebase],
+}, songController.predictTrendingSongs as any);
 
   // ── GET /songs/by-mood — semantic search via embeddings ───────────────────
   app.get("/by-mood", {
