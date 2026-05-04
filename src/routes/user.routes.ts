@@ -7,7 +7,9 @@ import type {
 } from "../controllers/user.controller";
 import { authenticateFirebase } from "../middleware/auth.middleware";
 import { prisma } from "../config/database";
+import { cache, CacheKeys } from "../config/redis";
 import { success, errors } from "../utils/response";
+import { logger } from "../utils/logger";
 export default async function userRoutes(app: FastifyInstance) {
   app.get(
     "/profile",
@@ -27,7 +29,7 @@ export default async function userRoutes(app: FastifyInstance) {
           follower_range: true, primary_platform: true, niches: true,
           instagram_handle: true, youtube_handle: true,
           is_pro: true, subscription_tier: true,
-          archetype: true, archetype_label: true, aria_profile: true,
+          archetype: true, archetype_label: true, aria_last_analysis: true,
           onboarding_step: true, growth_stage: true, health_score: true,
           engagement_rate: true, aria_analyzed_at: true,
         }
@@ -107,5 +109,54 @@ export default async function userRoutes(app: FastifyInstance) {
       },
     },
     userController.updateSubscription,
+  );
+
+  // PUT /api/v1/users/confirm-niche
+  app.put('/confirm-niche', { preHandler: [authenticateFirebase] }, async (req, reply) => {
+    const user = (req as any).user;
+    await (prisma.users as any).update({
+      where: { id: user.id },
+      data: { onboarding_step: 'confirmed' },
+    });
+    return success(reply, { confirmed: true });
+  });
+
+  // PUT /api/v1/users/niche
+  app.put<{ Body: { niche: string } }>(
+    "/niche",
+    {
+      preHandler: [authenticateFirebase],
+      schema: {
+        body: {
+          type: "object",
+          required: ["niche"],
+          properties: {
+            niche: { type: "string", minLength: 1, maxLength: 100 },
+          },
+        },
+      },
+    },
+    async (req, reply) => {
+      const user  = (req as any).user;
+      const { niche } = req.body;
+      const cleaned = niche.trim().toLowerCase();
+
+      await (prisma.users as any).update({
+        where: { id: user.id },
+        data:  { niches: [cleaned] },
+      });
+
+      // Bust ALL viral_ideas cache keys for this user — not just the new niche
+      // This prevents stale ideas from a previous niche being served
+      await cache.delPattern(`viral_ideas:${user.id}:*`);
+      await cache.del(CacheKeys.user(user.id));
+
+      logger.info({ userId: user.id, niche: cleaned }, "User niche updated — all idea caches cleared");
+
+      return success(reply, {
+        niche: cleaned,
+        message: "Niche updated. Refreshing trends...",
+      });
+    }
   );
 }

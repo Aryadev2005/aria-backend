@@ -4,6 +4,20 @@ import { cache } from "../config/redis";
 import { logger } from "../utils/logger";
 import { User } from "../types";
 
+// Hybrid RAG — replaces direct API calls with 3-tier cached retrieval
+let _hybridBuildLiveContext: ((user: User, memory: any) => Promise<string>) | null = null;
+try {
+  // Late-bind to avoid hard crash if hybrid module has issues
+  import("./ariaBrain.hybrid.patch").then((mod) => {
+    _hybridBuildLiveContext = mod.hybridBuildLiveContext;
+    logger.info("Hybrid RAG context enabled for ARIA Brain");
+  }).catch(() => {
+    logger.info("Hybrid RAG not available — using direct API context");
+  });
+} catch {
+  // Expected if hybrid module isn't ready yet
+}
+
 // ─── Safe imports — these services may not exist yet ─────────────────────────
 let getLiveTrendsForNiche: (niche: string) => Promise<any[]> = async () => [];
 let searchYouTubeByNiche: (
@@ -468,6 +482,16 @@ export const learnFromConversation = async (
 // Hard 3s timeout — if APIs are slow, ARIA responds with partial context
 // ─────────────────────────────────────────────────────────────────────────────
 export const buildLiveContext = async (user: User, memory: AgentMemoryMap) => {
+  // ── Try Hybrid RAG path first (Tier 1 hot window — typically < 5ms) ──
+  if (_hybridBuildLiveContext) {
+    try {
+      return await _hybridBuildLiveContext(user, memory);
+    } catch (err: any) {
+      logger.warn({ err: err.message }, "Hybrid context failed — falling back to direct APIs");
+    }
+  }
+
+  // ── Fallback: Direct API calls with 3s timeout ──
   const ctx = getPlatformContext(user);
   const niche = memory["current_niche"]?.value || ctx.niche;
 

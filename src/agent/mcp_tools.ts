@@ -1,21 +1,42 @@
 import { readFile } from "fs/promises";
 import path from "path";
+import { fileURLToPath } from "url";
+import { execFile } from "child_process";
+import { promisify } from "util";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { tool as lcTool } from "@langchain/core/tools";
 import { z } from "zod";
 
 import { logger } from "../utils/logger";
 
-export interface McpServerConfig {
+const execFileAsync = promisify(execFile);
+
+// ─── Config Types ───────────────────────────────────────────────────────────
+
+/** stdio-based local MCP server */
+export interface McpStdioServerConfig {
   id: string;
+  type?: "stdio";
   command: string;
   args?: string[];
   cwd?: string;
   enabled?: boolean;
   env?: Record<string, string>;
 }
+
+/** HTTP/SSE-based remote MCP server (e.g. Apify, hosted services) */
+export interface McpHttpServerConfig {
+  id: string;
+  type: "http";
+  url: string;
+  headers?: Record<string, string>;
+  enabled?: boolean;
+}
+
+export type McpServerConfig = McpStdioServerConfig | McpHttpServerConfig;
 
 interface McpConfigFile {
   servers: McpServerConfig[];
@@ -24,18 +45,68 @@ interface McpConfigFile {
 interface McpServerRuntime {
   id: string;
   client: Client;
-  transport: StdioClientTransport;
+  transport: StdioClientTransport | StreamableHTTPClientTransport;
 }
+
+// ─── State ──────────────────────────────────────────────────────────────────
 
 let cachedTools: any[] | null = null;
 let runtimes: McpServerRuntime[] = [];
 
-const configPath = path.resolve(process.cwd(), "config", "mcp.servers.json");
+// ─── Config Loading ──────────────────────────────────────────────────────────
+
+/**
+ * Resolve the config path relative to the project root (two levels up from
+ * src/agent/), so it works regardless of where the process was started from.
+ */
+const resolveConfigPath = (): string => {
+  // __filename works in both CJS (via tsx) and ESM
+  const __filename = fileURLToPath(import.meta.url);
+  const projectRoot = path.resolve(path.dirname(__filename), "..", "..");
+  return path.join(projectRoot, "config", "mcp.servers.json");
+};
 
 const loadConfig = async (): Promise<McpConfigFile> => {
+  const configPath = resolveConfigPath();
   const raw = await readFile(configPath, "utf-8");
   return JSON.parse(raw) as McpConfigFile;
 };
+
+// ─── Command Resolution ──────────────────────────────────────────────────────
+
+/**
+ * Resolve a bare command name (e.g. "node", "python") to its full absolute
+ * path so that child processes can find it on any machine, even when PATH
+ * is not fully inherited by the spawned subprocess.
+ *
+ * If the command already looks like an absolute path it is returned as-is.
+ */
+const resolveCommand = async (command: string): Promise<string> => {
+  // Already an absolute path – normalise separators and return
+  if (path.isAbsolute(command)) {
+    return path.normalize(command);
+  }
+
+  // Special-case: the running Node binary is always accessible
+  if (command === "node") {
+    return process.execPath;
+  }
+
+  // Try `where` (Windows) / `which` (Unix) to locate the binary
+  const which = process.platform === "win32" ? "where" : "which";
+  try {
+    const { stdout } = await execFileAsync(which, [command]);
+    // `where` may return multiple lines; take the first
+    const resolved = stdout.trim().split(/\r?\n/)[0].trim();
+    if (resolved) return resolved;
+  } catch {
+    // fall through – return original command and let spawn fail with a useful message
+  }
+
+  return command;
+};
+
+// ─── Schema Builder ──────────────────────────────────────────────────────────
 
 const buildSchema = (inputSchema: any) => {
   if (inputSchema?.type === "object" && inputSchema?.properties) {
@@ -53,19 +124,30 @@ const buildSchema = (inputSchema: any) => {
   return z.any();
 };
 
-const startServer = async (server: McpServerConfig) => {
+// ─── Server Start ────────────────────────────────────────────────────────────
+
+const startStdioServer = async (
+  server: McpStdioServerConfig,
+): Promise<McpServerRuntime> => {
+  // Merge parent env so child can find system tools (git, curl, etc.)
   const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (typeof value === "string") env[key] = value;
+  for (const [k, v] of Object.entries(process.env)) {
+    if (typeof v === "string") env[k] = v;
   }
-  for (const [key, value] of Object.entries(server.env || {})) {
-    if (typeof value === "string") env[key] = value;
+  for (const [k, v] of Object.entries(server.env || {})) {
+    if (typeof v === "string") env[k] = v;
   }
 
+  const resolvedCommand = await resolveCommand(server.command);
+
+  // Resolve cwd: if the config stores an absolute path that belongs to a
+  // different machine layout, fall back to process.cwd() gracefully.
+  let cwd = server.cwd ? path.normalize(server.cwd) : process.cwd();
+
   const transport = new StdioClientTransport({
-    command: server.command,
+    command: resolvedCommand,
     args: server.args || [],
-    cwd: server.cwd || process.cwd(),
+    cwd,
     env,
   });
 
@@ -76,8 +158,31 @@ const startServer = async (server: McpServerConfig) => {
 
   await client.connect(transport);
 
-  return { id: server.id, client, transport } as McpServerRuntime;
+  return { id: server.id, client, transport };
 };
+
+const startHttpServer = async (
+  server: McpHttpServerConfig,
+): Promise<McpServerRuntime> => {
+  const url = new URL(server.url);
+
+  const transport = new StreamableHTTPClientTransport(url, {
+    requestInit: {
+      headers: server.headers || {},
+    },
+  });
+
+  const client = new Client({
+    name: `trendai-${server.id}`,
+    version: "1.0.0",
+  });
+
+  await client.connect(transport);
+
+  return { id: server.id, client, transport };
+};
+
+// ─── Tool Calling ────────────────────────────────────────────────────────────
 
 const safeCallTool = async (
   client: Client,
@@ -110,18 +215,26 @@ const buildToolsForServer = async (runtime: McpServerRuntime) => {
 
   return tools.map((toolDef: any) => {
     const schema = buildSchema(toolDef.inputSchema);
-    const name = `${runtime.id}.${toolDef.name}`;
+
+    // OpenAI requires tool names to match ^[a-zA-Z0-9_-]+$
+    // Replace dots (our server.tool separator) and any other illegal chars with _
+    const rawName = `${runtime.id}_${toolDef.name}`;
+    const name = rawName.replace(/[^a-zA-Z0-9_-]/g, "_");
+
     const description = toolDef.description
-      ? `${runtime.id}: ${toolDef.description}`
+      ? `[${runtime.id}] ${toolDef.description}`
       : `${runtime.id} tool: ${toolDef.name}`;
 
     return lcTool(
       async (args: any) =>
+        // Always call the MCP server with the ORIGINAL tool name, not the sanitized one
         safeCallTool(runtime.client, toolDef.name, args || {}),
       { name, description, schema },
     );
   });
 };
+
+// ─── Cleanup ─────────────────────────────────────────────────────────────────
 
 const registerCleanup = () => {
   const cleanup = () => {
@@ -130,8 +243,8 @@ const registerCleanup = () => {
         if (typeof runtime.client.close === "function") {
           runtime.client.close();
         }
-        if (typeof runtime.transport.close === "function") {
-          runtime.transport.close();
+        if (typeof (runtime.transport as any).close === "function") {
+          (runtime.transport as any).close();
         }
       } catch {
         // best effort
@@ -143,6 +256,8 @@ const registerCleanup = () => {
   process.once("SIGINT", cleanup);
   process.once("SIGTERM", cleanup);
 };
+
+// ─── Public API ───────────────────────────────────────────────────────────────
 
 export const getMcpTools = async () => {
   if (cachedTools) return cachedTools;
@@ -159,7 +274,14 @@ export const getMcpTools = async () => {
 
   for (const server of enabled) {
     try {
-      const runtime = await startServer(server);
+      let runtime: McpServerRuntime;
+
+      if (server.type === "http") {
+        runtime = await startHttpServer(server as McpHttpServerConfig);
+      } else {
+        runtime = await startStdioServer(server as McpStdioServerConfig);
+      }
+
       runtimes.push(runtime);
       const serverTools = await buildToolsForServer(runtime);
       tools.push(...serverTools);
@@ -178,4 +300,10 @@ export const getMcpTools = async () => {
   registerCleanup();
   cachedTools = tools;
   return tools;
+};
+
+/** Force-clear the tool cache (useful after config changes) */
+export const resetMcpToolCache = () => {
+  cachedTools = null;
+  runtimes = [];
 };

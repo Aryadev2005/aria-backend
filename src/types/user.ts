@@ -28,6 +28,8 @@ export interface User {
   creator_intent?: string | null;
   aria_last_analysis?: any;
   aria_analyzed_at?: Date | null;
+  aria_confirmed_niche?: boolean | null;
+  onboarding_step?: string | null;
   subscription_product_id?: string | null;
   subscription_expires_at?: Date | null;
   subscription_store?: string | null;

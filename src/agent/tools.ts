@@ -311,46 +311,65 @@ export const getInstagramPersonalStats = tool(
 
 // ── TOOL 8: User personal profile from ARIA DB ────────────────────────────────
 export const getUserProfile = tool(
-  async ({ userId, db }) => {
+  async ({ userId, db }: any) => {
     try {
       let user: any = null;
       let memoryRows: any[] = [];
+      let igConnection: any = null;
 
       if (isPrismaClient(db)) {
         user = await (db.users as any).findUnique({
           where: { id: userId },
           select: {
             id: true,
+            name: true,
             archetype: true,
             archetype_label: true,
             niches: true,
             primary_platform: true,
             follower_range: true,
+            follower_count: true,
             engagement_rate: true,
             health_score: true,
             growth_stage: true,
             tone_profile: true,
-            instagram_user_id: true,
-            instagram_access_token: true,
+            creator_intent: true,
+            aria_confirmed_niche: true,
           },
         });
 
         memoryRows = await (db.aria_memory as any).findMany({
           where: { user_id: userId },
+          orderBy: { confidence: 'desc' },
+          take: 30,
           select: { category: true, key: true, value: true },
         });
+
+        // Fetch Instagram token from account_connections (not users table)
+        igConnection = await (db.account_connections as any).findFirst({
+          where: { user_id: userId, platform: 'instagram' },
+          select: { platform_user_id: true, encrypted_token: true, handle: true },
+        }).catch(() => null);
       } else {
         const rows = await db`
-          SELECT id, archetype, archetype_label, niches, primary_platform,
-                 follower_range, engagement_rate, health_score, growth_stage, tone_profile,
-                 instagram_user_id, instagram_access_token
+          SELECT id, name, archetype, archetype_label, niches, primary_platform,
+                 follower_range, follower_count, engagement_rate, health_score,
+                 growth_stage, tone_profile, creator_intent, aria_confirmed_niche
           FROM users WHERE id = ${userId}
         `;
         user = rows[0];
 
         memoryRows = await db`
-          SELECT category, key, value FROM aria_memory WHERE user_id = ${userId}
+          SELECT category, key, value FROM aria_memory
+          WHERE user_id = ${userId}
+          ORDER BY confidence DESC LIMIT 30
         `;
+
+        const igRows = await db`
+          SELECT platform_user_id, encrypted_token, handle FROM account_connections
+          WHERE user_id = ${userId} AND platform = 'instagram' LIMIT 1
+        `.catch(() => []);
+        igConnection = igRows[0] || null;
       }
 
       if (!user) return JSON.stringify({ error: "user_not_found" });
@@ -360,6 +379,11 @@ export const getUserProfile = tool(
         acc[m.category][m.key] = m.value;
         return acc;
       }, {});
+
+      if (igConnection) {
+        user.instagram_handle = igConnection.handle;
+        user.has_instagram_connected = true;
+      }
 
       return JSON.stringify(normalizeUserProfile(user));
     } catch (err: any) {
@@ -372,20 +396,17 @@ export const getUserProfile = tool(
     name: "get_user_profile",
     description:
       "Fetch the current user's full creator profile: archetype, niche, follower range, engagement rate, health score, platform, and all persistent ARIA memory learnings. Always call this first when answering personal questions about the user's performance or strategy.",
+    // NOTE: 'db' is intentionally NOT in this schema — it is injected by the agent
+    // runtime wrapper in aria_agent.ts and must never be exposed to the LLM.
     schema: z.object({
       userId: z.string().uuid().describe("User UUID from auth context"),
-      db: z
-        .any()
-        .describe(
-          "Database connection — injected by agent runtime, do not pass manually",
-        ),
     }),
   },
 );
 
 // ── TOOL 9: ARIA DB live trends ───────────────────────────────────────────────
 export const getDBLiveTrends = tool(
-  async ({ niche, badge, db }) => {
+  async ({ niche, badge, db }: any) => {
     try {
       let trends: any[] = [];
 
@@ -396,6 +417,8 @@ export const getDBLiveTrends = tool(
             ...(niche && niche !== "all" ? { niche_tags: { has: niche } } : {}),
             ...(badge && badge !== "ALL" ? { badge } : {}),
           },
+          orderBy: { velocity: 'desc' },
+          take: 20,
           select: {
             title: true,
             badge: true,
@@ -403,35 +426,21 @@ export const getDBLiveTrends = tool(
             search_volume: true,
             niche_tags: true,
             recommendation: true,
-            expires_at: true,
           },
         });
       } else {
-        let query;
-        if (niche && niche !== "all") {
-          if (badge && badge !== "ALL") {
-            query = db`
-              SELECT title, badge, velocity, search_volume, niche_tags, recommendation, expires_at
-              FROM live_trends WHERE expires_at > NOW() AND ${niche} = ANY(niche_tags) AND badge = ${badge}
-            `;
-          } else {
-            query = db`
-              SELECT title, badge, velocity, search_volume, niche_tags, recommendation, expires_at
-              FROM live_trends WHERE expires_at > NOW() AND ${niche} = ANY(niche_tags)
-            `;
-          }
-        } else if (badge && badge !== "ALL") {
-          query = db`
-            SELECT title, badge, velocity, search_volume, niche_tags, recommendation, expires_at
-            FROM live_trends WHERE expires_at > NOW() AND badge = ${badge}
-          `;
-        } else {
-          query = db`
-            SELECT title, badge, velocity, search_volume, niche_tags, recommendation, expires_at
-            FROM live_trends WHERE expires_at > NOW()
-          `;
-        }
-        trends = await query;
+        const nicheClause = niche && niche !== "all" ? `AND '${niche}' = ANY(niche_tags)` : '';
+        const badgeClause = badge && badge !== "ALL" ? `AND badge = '${badge}'` : '';
+        trends = await db`
+          SELECT title, badge, velocity, search_volume, niche_tags, recommendation
+          FROM live_trends
+          WHERE expires_at > NOW() ${db.unsafe(nicheClause)} ${db.unsafe(badgeClause)}
+          ORDER BY velocity DESC LIMIT 20
+        `;
+      }
+
+      if (!trends.length) {
+        return JSON.stringify({ message: "No live trends found in DB right now. Try get_google_trends for fresh data.", trends: [] });
       }
 
       return JSON.stringify(normalizeDBTrends(trends));
@@ -445,6 +454,7 @@ export const getDBLiveTrends = tool(
     name: "get_db_live_trends",
     description:
       "Fetch live trending topics from ARIA's real-time trends database (populated by BullMQ workers from pytrends + Reddit). Faster than Google Trends API. Use for trend-based content advice.",
+    // NOTE: 'db' is injected by aria_agent.ts wrapper — NOT exposed to the LLM.
     schema: z.object({
       niche: z
         .string()
@@ -456,18 +466,18 @@ export const getDBLiveTrends = tool(
         .enum(["HOT", "RISING", "NEW", "ALL"])
         .optional()
         .describe("Trend velocity filter"),
-      db: z.any().describe("Database connection — injected by agent runtime"),
     }),
   },
 );
 
 // ── TOOL 10: ARIA DB trending songs ──────────────────────────────────────────
 export const getDBTrendingSongs = tool(
-  async ({ platform, language, db }) => {
+  async ({ language, db }: any) => {
     try {
       let songs: any[] = [];
 
       if (isPrismaClient(db)) {
+        // Only query columns that actually exist in the live_songs schema
         songs = await (db.live_songs as any).findMany({
           where: language ? { language } : undefined,
           orderBy: { chart_position: "asc" },
@@ -476,23 +486,28 @@ export const getDBTrendingSongs = tool(
             title: true,
             artist: true,
             chart_position: true,
+            chart_change: true,
             language: true,
             streams_today: true,
-            posting_signal: true,
-            lifecycle: true,
+            source: true,
           },
         });
       } else {
-        let query;
         if (language) {
-          query = db`
-            SELECT title, artist, chart_position, language, streams_today, posting_signal, lifecycle
+          songs = await db`
+            SELECT title, artist, chart_position, chart_change, language, streams_today, source
             FROM live_songs WHERE language = ${language} ORDER BY chart_position ASC LIMIT 20
           `;
         } else {
-          query = db`SELECT title, artist, chart_position, language, streams_today, posting_signal, lifecycle FROM live_songs ORDER BY chart_position ASC LIMIT 20`;
+          songs = await db`
+            SELECT title, artist, chart_position, chart_change, language, streams_today, source
+            FROM live_songs ORDER BY chart_position ASC LIMIT 20
+          `;
         }
-        songs = await query;
+      }
+
+      if (!songs.length) {
+        return JSON.stringify({ message: "No songs in DB yet. Try get_spotify_trending or get_jiosaavn_trending for live data.", songs: [] });
       }
 
       return JSON.stringify(normalizeDBSongs(songs));
@@ -506,23 +521,19 @@ export const getDBTrendingSongs = tool(
     name: "get_db_trending_songs",
     description:
       "Fetch currently trending songs/audio from ARIA's live song database. Updated every few hours from Spotify + JioSaavn. Use for BGM/audio recommendations for Reels and Shorts.",
+    // NOTE: 'db' is injected by aria_agent.ts wrapper — NOT exposed to the LLM.
     schema: z.object({
-      platform: z
-        .string()
-        .optional()
-        .describe('Target platform: "instagram" or "youtube"'),
       language: z
         .string()
         .optional()
         .describe('Language filter: "Hindi", "English", "Punjabi", etc.'),
-      db: z.any().describe("Database connection — injected by agent runtime"),
     }),
   },
 );
 
 // ── TOOL 11: User's past content performance ──────────────────────────────────
 export const getUserContentHistory = tool(
-  async ({ userId, limit = 10, db }) => {
+  async ({ userId, limit, db }: any) => {
     try {
       let content: any[] = [];
 
@@ -533,27 +544,33 @@ export const getUserContentHistory = tool(
           take: limit,
           select: {
             trend_title: true,
+            hook: true,
             content_format: true,
             platform: true,
+            niche: true,
             created_at: true,
           },
         });
       } else {
         content = await db`
-          SELECT title, format, platform, posted_at, engagement_score, views
-          FROM user_content WHERE user_id = ${userId}
-          ORDER BY posted_at DESC LIMIT ${limit}
+          SELECT trend_title, hook, content_format, platform, niche, created_at
+          FROM content_history WHERE user_id = ${userId}
+          ORDER BY created_at DESC LIMIT ${limit}
         `;
+      }
+
+      if (!content.length) {
+        return JSON.stringify({ message: "No content history yet for this user.", content: [] });
       }
 
       return JSON.stringify({
         content: (content as any[]).map((c) => ({
-          title: c.title || c.trend_title,
-          format: c.format || c.content_format,
+          title: c.trend_title,
+          hook: c.hook || null,
+          format: c.content_format,
           platform: c.platform,
-          postedAt: c.posted_at || c.created_at,
-          engagementScore: c.engagement_score || null,
-          views: c.views || null,
+          niche: c.niche,
+          createdAt: c.created_at,
         })),
       });
     } catch (err: any) {
@@ -566,10 +583,10 @@ export const getUserContentHistory = tool(
     name: "get_user_content_history",
     description:
       "Fetch the user's recent content creation history from ARIA — what they've created, which formats, which platforms. Use to avoid repeating suggestions and to identify content gaps.",
+    // NOTE: 'db' is injected by aria_agent.ts wrapper — NOT exposed to the LLM.
     schema: z.object({
       userId: z.string().uuid(),
       limit: z.number().optional().describe("Number of records, default 10"),
-      db: z.any().describe("Database connection — injected by agent runtime"),
     }),
   },
 );
@@ -629,6 +646,39 @@ export const analyseYouTubeVideoQuick = tool(
   },
 );
 
+// ── TOOL 13: Confirm niche (onboarding completion) ───────────────────────────
+export const confirmNiche = tool(
+  async ({ userId, db }: any) => {
+    try {
+      if (isPrismaClient(db)) {
+        await (db.users as any).update({
+          where: { id: userId },
+          data: { aria_confirmed_niche: true },
+        });
+      } else {
+        await db`
+          UPDATE users SET aria_confirmed_niche = true WHERE id = ${userId}
+        `;
+      }
+      return JSON.stringify({ success: true, message: "Niche confirmed." });
+    } catch (err: any) {
+      return JSON.stringify({
+        success: false,
+        error: `Failed to confirm niche: ${err.message}`,
+      });
+    }
+  },
+  {
+    name: "confirm_niche",
+    description:
+      "Mark the user's detected niche and archetype as confirmed. Call this when the user says 'yes', 'looks good', 'correct', or otherwise confirms the analysis ARIA presented to them after connecting Instagram.",
+    // NOTE: 'db' is injected by aria_agent.ts wrapper — NOT exposed to the LLM.
+    schema: z.object({
+      userId: z.string().uuid().describe("User UUID from auth context"),
+    }),
+  },
+);
+
 // ── Export all tools as array ─────────────────────────────────────────────────
 export const ALL_ARIA_TOOLS = [
   getYouTubeVideoStats,
@@ -643,4 +693,5 @@ export const ALL_ARIA_TOOLS = [
   getDBTrendingSongs,
   getUserContentHistory,
   analyseYouTubeVideoQuick,
+  confirmNiche,
 ];

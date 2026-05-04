@@ -202,9 +202,6 @@ export const normalizeDBTrends = (rows: any[]) => {
       searchVolume: r.search_volume,
       niche:       r.niche_tags,
       recommendation: r.recommendation,
-      expiresIn:   r.expires_at
-        ? Math.round((new Date(r.expires_at).getTime() - Date.now()) / 3600000) + 'h'
-        : null,
     })),
   }
 }
@@ -223,6 +220,8 @@ export const normalizeUserProfile = (user: any) => {
     healthScore:    user.health_score,
     growthStage:    user.growth_stage,
     toneProfile:    user.tone_profile,
+    hasInstagram:   !!user.has_instagram_connected,
+    instagramHandle: user.instagram_handle || null,
     // Memory learnings (from aria_memory table)
     memory:         user.memory || {},
   }
@@ -237,9 +236,8 @@ export const normalizeDBSongs = (rows: any[]) => {
       artist:     r.artist,
       rank:       r.chart_position,
       language:   r.language,
-      streams:    r.streams_today,
-      signal:     r.posting_signal,
-      lifecycle:  r.lifecycle,
+      streams:    r.streams_today?.toString(), // BigInt to string
+      source:     r.source,
     })),
   }
 }
