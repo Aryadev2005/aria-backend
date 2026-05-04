@@ -95,7 +95,7 @@ async function fetchRedditSignals(subreddits: string[]): Promise<any[]> {
 
   ideas.sort((a, b) => b.velocity - a.velocity);
   logger.info({ count: ideas.length, subreddits }, "Reddit signals collected");
-  return ideas.slice(0, 12);
+  return ideas.slice(0, 1000);
 }
 
 // ── Source 2: YouTube mostPopular India ──────────────────────────────────────
@@ -129,7 +129,7 @@ async function fetchYouTubeSignals(niche: string): Promise<any[]> {
           params: {
             part:       "snippet,statistics",
             chart:      "mostPopular",
-            maxResults: 15,
+            maxResults: 1000,
             key:        apiKey,
             ...params,
           },

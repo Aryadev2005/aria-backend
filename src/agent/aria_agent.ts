@@ -13,6 +13,7 @@ import { z } from "zod";
 // DB tools are imported inline inside each closure in createDBInjectedTools
 // to avoid passing 'db' through schema-validated .invoke() calls.
 import { getMcpTools } from "./mcp_tools";
+import { hybridTools } from "./tools.hybrid";
 
 import { buildARIASystemPrompt } from "../services/aria_prompt.service";
 import {
@@ -99,8 +100,14 @@ const createDBInjectedTools = (db: any, user: any) => {
       description:
         "Fetch live trending topics from ARIA's database. Fastest source for trend data. Use for content advice and trend-based recommendations.",
       schema: z.object({
-        niche: z.string().optional().describe('Niche filter e.g. "fashion", "fitness", or "all"'),
-        badge: z.enum(["HOT", "RISING", "NEW", "ALL"]).optional().describe("Velocity filter"),
+        niche: z
+          .string()
+          .optional()
+          .describe('Niche filter e.g. "fashion", "fitness", or "all"'),
+        badge: z
+          .enum(["HOT", "RISING", "NEW", "ALL"])
+          .optional()
+          .describe("Velocity filter"),
       }),
     },
   );
@@ -115,7 +122,10 @@ const createDBInjectedTools = (db: any, user: any) => {
       description:
         "Fetch trending songs from ARIA's live songs database. Use for BGM/audio recommendations.",
       schema: z.object({
-        language: z.string().optional().describe('Language filter: "Hindi", "English", "Punjabi"'),
+        language: z
+          .string()
+          .optional()
+          .describe('Language filter: "Hindi", "English", "Punjabi"'),
       }),
     },
   );
@@ -123,14 +133,21 @@ const createDBInjectedTools = (db: any, user: any) => {
   const getContentHistoryWithDB = tool(
     async ({ limit }: { limit?: number }) => {
       const { getUserContentHistory } = await import("./tools");
-      return (getUserContentHistory as any).func({ userId: user.id, limit, db });
+      return (getUserContentHistory as any).func({
+        userId: user.id,
+        limit,
+        db,
+      });
     },
     {
       name: "get_user_content_history",
       description:
         "Fetch what content the user has created recently. Use to avoid repetitive suggestions.",
       schema: z.object({
-        limit: z.number().optional().describe("Max records to return, default 10"),
+        limit: z
+          .number()
+          .optional()
+          .describe("Max records to return, default 10"),
       }),
     },
   );
@@ -142,7 +159,8 @@ const createDBInjectedTools = (db: any, user: any) => {
     },
     {
       name: "confirm_niche",
-      description: "Confirm the user's detected niche and archetype when user says yes/correct.",
+      description:
+        "Confirm the user's detected niche and archetype when user says yes/correct.",
       schema: z.object({}),
     },
   );
@@ -161,18 +179,22 @@ export const buildARIAAgent = async (
   db: any,
   user: any,
   streaming = false,
-  entryScreen = 'direct',
+  entryScreen = "direct",
   sessionContext: Record<string, any> = {},
 ) => {
   const llm = createLLM(streaming);
   const checkpointer = await getCheckpointer(); // null-safe — may be null if DB slow
 
   const mcpTools = await getMcpTools();
-  
+
   // Initialize OpenAI native web search tool
   const webSearchTool = openaiTools.webSearch();
 
-  const tools = [...createDBInjectedTools(db, user), ...mcpTools, webSearchTool];
+  const tools = [
+    ...createDBInjectedTools(db, user),
+    ...mcpTools,
+    webSearchTool,
+  ];
 
   const memory = await getMemory(user.id).catch(() => ({}));
   const systemPrompt = buildARIASystemPrompt({
@@ -226,7 +248,13 @@ export const invokeARIAAgent = async ({
   try {
     logger.info({ userId: user.id, sessionId }, "ARIA agent invoked");
 
-    const agent = await buildARIAAgent(db, user, false, entryScreen ?? 'direct', sessionContext ?? {});
+    const agent = await buildARIAAgent(
+      db,
+      user,
+      false,
+      entryScreen ?? "direct",
+      sessionContext ?? {},
+    );
     const config = {
       configurable: { thread_id: sessionId },
       recursionLimit: 15,
@@ -288,7 +316,13 @@ export async function* streamARIAAgent({
 }) {
   try {
     // streaming:true so the LLM emits on_chat_model_stream token events
-    const agent = await buildARIAAgent(db, user, true, entryScreen ?? 'direct', sessionContext ?? {});
+    const agent = await buildARIAAgent(
+      db,
+      user,
+      true,
+      entryScreen ?? "direct",
+      sessionContext ?? {},
+    );
     const config = {
       configurable: { thread_id: sessionId },
       recursionLimit: 15,
