@@ -1,31 +1,41 @@
 "use strict";
 
-require("dotenv").config();
-
-const { QueueEvents } = require("bullmq");
-const { connectDB, getDB, disconnectDB } = require("../src/config/database");
-const {
+import "dotenv/config";
+import { Queue, QueueEvents } from "bullmq";
+import { connectDB, prisma as db, disconnectDB } from "../src/config/database.ts";
+import {
   connectRedis,
   getRedisClient,
   getWorkerRedisClient,
-} = require("../src/config/redis");
-const { songQueue, cleanupQueues } = require("../src/config/queue");
-const { startSongWorker } = require("../src/workers/song.worker");
-const { stopAllWorkers } = require("../src/workers");
-const { logger } = require("../src/utils/logger");
+} from "../src/config/redis.ts";
+import { startSongWorker } from "../src/workers/song.worker.ts";
+import { stopAllWorkers } from "../src/workers/index.ts";
+import { logger } from "../src/utils/logger.ts";
+
+function getRedisConn() {
+  const url = process.env.REDIS_URL || "redis://localhost:6379";
+  const parsed = new URL(url);
+  return {
+    host: parsed.hostname,
+    port: parseInt(parsed.port || "6379"),
+    maxRetriesPerRequest: null,
+  };
+}
+
+const songQueue = new Queue("song-refresh", { connection: getRedisConn() });
 
 const waitForJob = async (
-  queueName,
-  queueConnection,
-  job,
-  timeoutMs = 120000,
+  queueName: string,
+  queueConnection: any,
+  job: any,
+  timeoutMs: number = 120000,
 ) => {
   const events = new QueueEvents(queueName, { connection: queueConnection });
   await events.waitUntilReady();
   try {
     const result = await job.waitUntilFinished(events, timeoutMs);
     return { ok: true, result };
-  } catch (err) {
+  } catch (err: any) {
     return { ok: false, error: err?.message || String(err) };
   } finally {
     await events.close().catch(() => {});
@@ -33,10 +43,9 @@ const waitForJob = async (
 };
 
 const getSongCounts = async () => {
-  const sql = getDB();
-  const r = await sql.unsafe(
+  const r = await db.$queryRawUnsafe(
     "SELECT COUNT(*)::int AS c FROM live_songs WHERE fetched_at > NOW() - INTERVAL '20 minutes'",
-  );
+  ) as any[];
   return r[0]?.c || 0;
 };
 
@@ -100,10 +109,9 @@ const main = async () => {
 
     // Query to see what sources were inserted
     if (songCount > 0) {
-      const sql = getDB();
-      const sources = await sql.unsafe(
+      const sources = await db.$queryRawUnsafe(
         "SELECT source, COUNT(*)::int as count FROM live_songs WHERE fetched_at > NOW() - INTERVAL '20 minutes' GROUP BY source ORDER BY count DESC",
-      );
+      ) as any[];
       console.log("\nSongs by source:");
       sources.forEach((row) => {
         console.log(`  ${row.source}: ${row.count}`);
@@ -111,12 +119,12 @@ const main = async () => {
     }
 
     process.exitCode = result.ok ? 0 : 1;
-  } catch (err) {
+  } catch (err: any) {
     console.error("Test failed:", err.message);
     process.exitCode = 1;
   } finally {
     await stopAllWorkers().catch(() => {});
-    await cleanupQueues().catch(() => {});
+    await songQueue.close().catch(() => {});
     await disconnectDB().catch(() => {});
     const redis = getRedisClient();
     const workerRedis = getWorkerRedisClient();

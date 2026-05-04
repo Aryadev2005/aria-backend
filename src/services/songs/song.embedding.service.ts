@@ -62,7 +62,7 @@ async function generateEmbedding(text: string): Promise<number[]> {
     input: text,
   });
 
-  const embedding = response.data[0].embedding;
+  const embedding = response.data[0].embedding as number[];
   await cache.set(cacheKey, embedding, 3600);
   return embedding;
 }
@@ -77,7 +77,7 @@ async function generateEmbeddingsBatch(texts: string[]): Promise<number[][]> {
       input: batch,
     });
     const sorted = response.data.sort((a, b) => a.index - b.index);
-    results.push(...sorted.map((d) => d.embedding));
+    results.push(...sorted.map((d) => d.embedding as number[]));
   }
 
   return results;

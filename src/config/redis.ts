@@ -18,9 +18,8 @@ export const connectRedis = async () => {
   try {
     redisClient = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
       lazyConnect: true,
-      maxRetriesPerRequest: 3,              // was null (retried forever) — now fails fast
+      maxRetriesPerRequest: null,            // MUST be null for BullMQ
       retryStrategy: (times) => {
-        if (times > 3) return null          // stop retrying after 3 attempts
         return Math.min(times * 200, 1000)
       },
       connectTimeout: 4000,                 // give up connecting after 4s
