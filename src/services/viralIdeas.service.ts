@@ -1,4 +1,3 @@
-import axios from "axios";
 import { logger } from "../utils/logger";
 import { _callGroq } from "./ai/groq.service";
 import { prisma } from "../config/database";
@@ -28,135 +27,78 @@ export interface UserNicheContext {
   contentPatterns: any;
 }
 
-// Browser User-Agent — Reddit blocks server User-Agents like "axios/1.x"
-const HTTP = axios.create({
-  timeout: 12000,
-  headers: {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "en-US,en;q=0.9",
-  },
-});
+// ── Source 1: Read Reddit signals from DB (stored by discovery worker) ────────
+async function readRedditSignals(limit = 40): Promise<any[]> {
+  try {
+    const cutoff = new Date(Date.now() - 72 * 60 * 60 * 1000); // last 72h
+    const rows = await (prisma as any).discovery_reddit_raw.findMany({
+      where: {
+        expires_at: { gt: new Date() },
+        scraped_at: { gt: cutoff },
+        velocity:   { gte: 55 },
+      },
+      orderBy: [
+        { is_breakout: "desc" },
+        { velocity: "desc" },
+      ],
+      take: limit,
+      select: {
+        title:        true,
+        score:        true,
+        num_comments: true,
+        subreddit:    true,
+        velocity:     true,
+        is_breakout:  true,
+        age_hours:    true,
+        feed:         true,
+        flair:        true,
+      },
+    });
 
-// ── Source 1: Reddit Rising + Hot ────────────────────────────────────────────
-async function fetchRedditSignals(subreddits: string[]): Promise<any[]> {
-  const ideas: any[] = [];
-  const seen = new Set<string>();
-  const nowSec = Date.now() / 1000;
-
-  for (const sub of subreddits.slice(0, 5)) {
-    for (const feed of ["rising", "hot"]) {
-      try {
-        const { data } = await HTTP.get(
-          `https://www.reddit.com/r/${sub}/${feed}.json?limit=15&raw_json=1`
-        );
-
-        const posts: any[] = data?.data?.children ?? [];
-
-        for (const { data: p } of posts) {
-          const title: string = (p.title ?? "").trim();
-          if (!title) continue;
-
-          const score: number    = p.score ?? 0;
-          const comments: number = p.num_comments ?? 0;
-          const ratio: number    = p.upvote_ratio ?? 0.5;
-          const ageHours: number = (nowSec - (p.created_utc ?? 0)) / 3600;
-
-          if (ageHours > 72) continue;
-
-          const key = title.toLowerCase().slice(0, 60);
-          if (seen.has(key)) continue;
-          seen.add(key);
-
-          const recencyBoost = ageHours < 6 ? 15 : ageHours < 24 ? 8 : 0;
-          const velocity = Math.min(95, Math.round(
-            ratio * 35 +
-            Math.min(score, 500) / 500 * 25 +
-            Math.min(comments, 200) / 200 * 25 +
-            recencyBoost
-          ));
-
-          ideas.push({
-            title,
-            source:       `reddit_r/${sub}_${feed}`,
-            velocity:     Math.max(55, velocity),
-            growthSignal: score > 0
-              ? `${score} upvotes · ${comments} comments`
-              : `${comments} comments · ${ageHours.toFixed(1)}h ago`,
-            isBreakout:   score > 200 && ageHours < 6,
-            ageHours:     Math.round(ageHours * 10) / 10,
-            geo:          "GLOBAL",
-          });
-        }
-      } catch (err: any) {
-        logger.warn({ sub, feed, err: err.message }, "Reddit fetch failed");
-      }
-    }
+    return rows.map((r: any) => ({
+      title:       r.title,
+      source:      `reddit_r/${r.subreddit}_${r.feed}`,
+      velocity:    r.velocity,
+      growthSignal: `${r.score} upvotes · ${r.num_comments} comments`,
+      isBreakout:  r.is_breakout,
+      ageHours:    Number(r.age_hours),
+      geo:         "GLOBAL",
+    }));
+  } catch (err: any) {
+    logger.warn({ err: err.message }, "Reddit DB read failed");
+    return [];
   }
-
-  ideas.sort((a, b) => b.velocity - a.velocity);
-  logger.info({ count: ideas.length, subreddits }, "Reddit signals collected");
-  return ideas.slice(0, 1000);
 }
 
-// ── Source 2: YouTube mostPopular India ──────────────────────────────────────
-async function fetchYouTubeSignals(niche: string): Promise<any[]> {
-  const apiKey = process.env.YOUTUBE_API_KEY;
-  if (!apiKey) return [];
+// ── Source 2: Read YouTube signals from DB (stored by discovery worker) ────────
+async function readYouTubeSignals(limit = 30): Promise<any[]> {
+  try {
+    const rows = await (prisma as any).live_trends.findMany({
+      where: {
+        source:     "youtube",
+        expires_at: { gt: new Date() },
+      },
+      orderBy: { velocity: "desc" },
+      take:    limit,
+      select: {
+        title:          true,
+        velocity:       true,
+        search_volume:  true,
+        recommendation: true,
+        raw_data:       true,
+      },
+    });
 
-  const YT_CATEGORY: Record<string, string> = {
-    "fashion": "26", "mens fashion": "26", "womens fashion": "26",
-    "beauty": "26",  "fitness": "17",      "food": "26",
-    "tech": "28",    "gaming": "20",       "comedy": "23",
-    "music": "10",   "education": "27",    "travel": "19",
-    "cricket": "17", "bollywood": "24",    "hustle": "22",
-    "wellness": "22","general": "22",      "books": "26",
-    "edits": "24",   "dance": "17",        "lifestyle": "22",
-    "startup": "22", "motivation": "22",   "finance": "22",
-  };
-
-  const categoryId = YT_CATEGORY[niche.toLowerCase()] ?? "22";
-
-  const attempts = [
-    { videoCategoryId: categoryId, regionCode: "IN" },
-    { regionCode: "IN" },
-  ];
-
-  for (const params of attempts) {
-    try {
-      const { data } = await HTTP.get(
-        "https://www.googleapis.com/youtube/v3/videos",
-        {
-          params: {
-            part:       "snippet,statistics",
-            chart:      "mostPopular",
-            maxResults: 1000,
-            key:        apiKey,
-            ...params,
-          },
-        }
-      );
-
-      const items: any[] = data?.items ?? [];
-      if (items.length === 0) continue;
-
-      logger.info({ count: items.length, niche }, "YouTube signals collected");
-      return items.map((v: any) => ({
-        title:   (v.snippet?.title ?? "").trim(),
-        channel: v.snippet?.channelTitle ?? "",
-        views:   parseInt(v.statistics?.viewCount ?? "0"),
-        source:  "youtube_trending_IN",
-      }));
-
-    } catch (err: any) {
-      if (err.response?.status === 403) {
-        logger.warn("YouTube API 403 — key restricted, skipping");
-        return [];
-      }
-      logger.warn({ err: err.message, params }, "YouTube attempt failed");
-    }
+    return rows.map((r: any) => ({
+      title:   r.title,
+      channel: (r.raw_data as any)?.channelTitle || "",
+      views:   r.search_volume || 0,
+      source:  "youtube_trending_IN",
+    }));
+  } catch (err: any) {
+    logger.warn({ err: err.message }, "YouTube DB read failed");
+    return [];
   }
-  return [];
 }
 
 // ── Source 3: Read TikTok signals from raw store ───────────────────────────────
@@ -387,18 +329,10 @@ export async function generateViralIdeas(params: {
 
   logger.info({ niches: userContext.niches, handle: userContext.instagramHandle }, "Generating viral ideas");
 
-  // Default subreddits — Groq will contextualize signals for the actual niche
-  // No hardcoded niche→subreddit map — Groq does the interpretation
-  const DEFAULT_SUBREDDITS = [
-    "india", "Entrepreneur", "startups", "malefashionadvice",
-    "SkincareAddiction", "fitness", "food", "technology",
-    "bollywood", "cricket", "AskIndia", "IndiaInvestments",
-  ];
-
   // Fetch signals in parallel — single Groq call handles everything after
   const [redditResult, ytResult, tiktokResult, pinterestResult, googleResult] = await Promise.allSettled([
-    fetchRedditSignals(DEFAULT_SUBREDDITS),
-    fetchYouTubeSignals(userContext.niches[0] ?? "general"),
+    readRedditSignals(40),
+    readYouTubeSignals(30),
     readTikTokSignals(30),
     readPinterestSignals(20),
     readGoogleTrendsSignals(20),
