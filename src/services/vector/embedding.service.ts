@@ -37,7 +37,7 @@ export async function generateEmbedding(text: string): Promise<number[]> {
     input: text,
   });
 
-  const embedding = response.data[0].embedding;
+  const embedding = response.data[0].embedding as number[];
   await cache.set(cacheKey, embedding, 3600); // 1h cache
   return embedding;
 }
@@ -57,7 +57,7 @@ export async function generateEmbeddingsBatch(
 
     // Sort by index to maintain order
     const sorted = response.data.sort((a, b) => a.index - b.index);
-    results.push(...sorted.map((d) => d.embedding));
+    results.push(...sorted.map((d) => d.embedding as number[]));
   }
 
   return results;
@@ -233,7 +233,7 @@ export async function getEmbeddingStats(): Promise<{
   nicheBreakdown: Record<string, number>;
 }> {
   const total = await prisma.trend_embeddings.count();
-  const byNiche = (await prisma.trend_embeddings.groupBy({
+  const byNiche = (await (prisma.trend_embeddings as any).groupBy({
     by: ["niche"],
     _count: { _all: true },
   })) as any[];

@@ -3,6 +3,7 @@
 // Worker orchestrator — starts and stops all BullMQ workers
 // ══════════════════════════════════════════════════════════════════════════════
 
+import "dotenv/config";
 import { logger } from "../utils/logger";
 import { startEmbeddingWorker,  stopEmbeddingWorker  } from "./embedding.worker";
 import { startTrajectoryWorker, stopTrajectoryWorker } from "./trajectory.worker";

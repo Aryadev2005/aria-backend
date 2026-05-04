@@ -218,6 +218,19 @@ model live_songs {
   language       String?
   raw_data       Json?
   fetched_at     DateTime? @default(now()) @db.Timestamptz(6)
+
+  // ── 3-Tier Intelligence Fields ──
+  expires_at     DateTime? @db.Timestamptz(6)
+  rank_history   Json?     @default("[]")
+  peak_rank      Int?
+  lifecycle      String?   @default("RISING")
+  signal         String?   @default("postNow")
+  growth         String?   @default("stable")
+  niche_tags     String[]  @default([])
+  mood_tags      String[]  @default([])
+
+  @@index([language, lifecycle], map: "idx_live_songs_lang_lifecycle")
+  @@index([expires_at], map: "idx_live_songs_expires")
 }
 
 model live_trends {
