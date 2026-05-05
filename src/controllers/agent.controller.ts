@@ -79,10 +79,11 @@ export const sendMessage = async (
     );
 
     return success(reply, {
-      reply: result.message,
+      message: result.message,
       toolsUsed: (result as any).toolsUsed ?? [],
       sessionId,
       duration: (result as any).duration ?? 0,
+      followUpSuggestions: (result as any).followUpSuggestions ?? [],
     });
   } catch (err) {
     logger.error({ err, userId: user.id }, "Agent message failed");
@@ -171,6 +172,38 @@ export const streamMessage = async (
         toolsUsed.map((t) => ({ name: t })),
       ).catch((err) => logger.warn({ err }, "Failed to save assistant message"));
     }
+
+    // Fetch follow-up suggestions that were just created
+    try {
+      const followUpSuggestions = await prisma.aria_suggestions.findMany({
+        where: {
+          user_id: user.id,
+          status: "pending",
+          session_id: sessionId,
+        },
+        select: {
+          id: true,
+          suggestion_type: true,
+          suggestion_data: true,
+        },
+        orderBy: { created_at: "desc" },
+        take: 3,
+      });
+
+      if (followUpSuggestions.length > 0) {
+        send({
+          type: "suggestions",
+          data: followUpSuggestions.map((s) => ({
+            id: s.id,
+            type: s.suggestion_type,
+            content: (s.suggestion_data as any)?.content,
+          })),
+        });
+      }
+    } catch (err: any) {
+      logger.warn({ err }, "Failed to fetch follow-up suggestions");
+    }
+
     reply.raw.write("data: [DONE]\n\n");
     reply.raw.end();
   }

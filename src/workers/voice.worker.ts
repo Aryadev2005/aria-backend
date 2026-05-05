@@ -33,14 +33,19 @@ async function processJob(job: Job): Promise<{ built: number; skipped: number; f
 
   // ── Find users who have accumulated 8+ new memories since last voice build ────
   // These users get a rebuild even if their schedule hasn't hit yet
-  const earlyRebuildCandidates = await prisma.$queryRawUnsafe<{ user_id: string }[]>(`
-    SELECT DISTINCT am.user_id
-    FROM aria_memory am
-    JOIN creator_voice_profiles cvp ON cvp.user_id = am.user_id
-    WHERE am.created_at > cvp.built_at
-    GROUP BY am.user_id, cvp.built_at
-    HAVING COUNT(*) >= 8
-  `);
+  let earlyRebuildCandidates: { user_id: string }[] = [];
+  try {
+    earlyRebuildCandidates = await prisma.$queryRawUnsafe<{ user_id: string }[]>(`
+      SELECT DISTINCT am.user_id
+      FROM aria_memory am
+      JOIN creator_voice_profiles cvp ON cvp.user_id = am.user_id
+      WHERE am.created_at > cvp.built_at
+      GROUP BY am.user_id, cvp.built_at
+      HAVING COUNT(*) >= 8
+    `);
+  } catch (err: any) {
+    logger.warn({ err: err.message }, "Early rebuild query failed — table may not exist yet or migration pending");
+  }
 
   // ── Find users with memory but no portrait at all ─────────────────────────────
   const usersWithNoPortrait = await prisma.aria_memory.findMany({
