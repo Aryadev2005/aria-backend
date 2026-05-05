@@ -1,38 +1,38 @@
 // src/services/vector/embedding.service.ts
 // ══════════════════════════════════════════════════════════════════════════════
 // Tier 2 — Warm Retrieval: Embedding generation + vector similarity search
-// Uses Groq's nomic-embed-text-v1.5 (768-dim) for embeddings
+// Uses OpenAI embeddings for vector generation
 // Falls back gracefully — never blocks the main flow
 // ══════════════════════════════════════════════════════════════════════════════
 
-import Groq from "groq-sdk";
+import OpenAI from "openai";
 import { prisma } from "../../config/database";
 import { cache } from "../../config/redis";
 import { logger } from "../../utils/logger";
 
 // ── Config ────────────────────────────────────────────────────────────────────
-const EMBED_MODEL = process.env.EMBED_MODEL || "nomic-embed-text-v1.5";
-const EMBEDDING_DIM = 768; // nomic-embed-text-v1.5 = 768 dims
-const BATCH_SIZE = 32;     // Groq embedding batch limit
+const EMBED_MODEL = process.env.EMBED_MODEL || "text-embedding-3-small";
+const EMBEDDING_DIM = 1536; // text-embedding-3-small = 1536 dims
+const BATCH_SIZE = 128; // OpenAI embeddings batch limit (conservative)
 
-let _groq: Groq | null = null;
-const getGroq = () => {
-  if (!_groq) {
-    const apiKey = process.env.GROQ_API_KEY?.trim();
-    if (!apiKey) throw new Error("GROQ_API_KEY is required for embeddings");
-    _groq = new Groq({ apiKey });
+let _openai: OpenAI | null = null;
+const getOpenAI = () => {
+  if (!_openai) {
+    const apiKey = process.env.OPENAI_API_KEY?.trim();
+    if (!apiKey) throw new Error("OPENAI_API_KEY is required for embeddings");
+    _openai = new OpenAI({ apiKey });
   }
-  return _groq;
+  return _openai;
 };
 
 // ── Core: Generate embeddings ─────────────────────────────────────────────────
 export async function generateEmbedding(text: string): Promise<number[]> {
   const cacheKey = `emb:${Buffer.from(text).toString("base64").slice(0, 40)}`;
-  const cached = await cache.get(cacheKey) as number[] | null;
+  const cached = (await cache.get(cacheKey)) as number[] | null;
   if (cached) return cached;
 
-  const groq = getGroq();
-  const response = await groq.embeddings.create({
+  const openai = getOpenAI();
+  const response = await openai.embeddings.create({
     model: EMBED_MODEL,
     input: text,
   });
@@ -49,8 +49,8 @@ export async function generateEmbeddingsBatch(
 
   for (let i = 0; i < texts.length; i += BATCH_SIZE) {
     const batch = texts.slice(i, i + BATCH_SIZE);
-    const groq = getGroq();
-    const response = await groq.embeddings.create({
+    const openai = getOpenAI();
+    const response = await openai.embeddings.create({
       model: EMBED_MODEL,
       input: batch,
     });
@@ -162,7 +162,7 @@ export async function findSimilarTrends(
   const { limit = 10, niches, minSimilarity = 0.3 } = options;
 
   const cacheKey = `vsearch:${query}:${niches?.join(",") || "all"}:${limit}`;
-  const cached = await cache.get(cacheKey) as SimilarTrendResult[] | null;
+  const cached = (await cache.get(cacheKey)) as SimilarTrendResult[] | null;
   if (cached) return cached;
 
   const queryEmbedding = await generateEmbedding(query);

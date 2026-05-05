@@ -528,6 +528,31 @@ model song_trajectories {
 // Discovery Raw Tables — Global scrape storage for TikTok, Pinterest, Google Trends
 // ══════════════════════════════════════════════════════════════════════════════
 
+model discovery_reddit_raw {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  post_id      String   @unique
+  subreddit    String
+  title        String
+  score        Int      @default(0)
+  upvote_ratio Decimal  @default(0.0) @db.Decimal(4, 2)
+  num_comments Int      @default(0)
+  url          String?
+  author       String?
+  flair        String?
+  age_hours    Decimal  @default(0.0) @db.Decimal(6, 2)
+  velocity     Int      @default(0)
+  is_breakout  Boolean  @default(false)
+  feed         String?
+  scraped_at   DateTime @default(now()) @db.Timestamptz(6)
+  expires_at   DateTime @db.Timestamptz(6)
+  raw_data     Json     @default("{}")
+
+  @@index([velocity(sort: Desc)])
+  @@index([scraped_at(sort: Desc)])
+  @@index([expires_at])
+  @@index([subreddit])
+}
+
 model discovery_tiktok_raw {
   id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   tiktok_id         String   @unique

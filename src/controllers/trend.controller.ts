@@ -64,7 +64,10 @@ export const getTrends = async (
       TTL.TREND,
     );
 
-    let data = trends as any[];
+    const trendsArray = Array.isArray(trends)
+      ? trends
+      : (trends as any)?.trends || [];
+    let data = trendsArray as any[];
     if (badge !== "ALL") data = data.filter((t) => t.badge === badge);
     return success(reply, data.slice(0, limit));
   } catch (err) {
@@ -323,24 +326,26 @@ export const submitFeedback = async (
 
 // ── VIRAL IDEAS — top 10 niche-matched global trends (48-72h prediction) ─────
 export const getViralIdeas = async (
-  req: FastifyRequest<{ Querystring: { force?: string; browseNiche?: string } }>,
-  reply: FastifyReply
+  req: FastifyRequest<{
+    Querystring: { force?: string; browseNiche?: string };
+  }>,
+  reply: FastifyReply,
 ) => {
-  const user        = req.user as User;
-  const force       = req.query.force === "true";
+  const user = req.user as User;
+  const force = req.query.force === "true";
   const browseNiche = req.query.browseNiche?.trim().toLowerCase();
 
   const dbUser = await (prisma.users as any).findUnique({
     where: { id: user.id },
     select: {
-      niches:             true,
-      archetype:          true,
-      archetype_label:    true,
-      primary_platform:   true,
-      follower_range:     true,
-      instagram_handle:   true,
-      bio:                true,
-      scraped_summary:    true,
+      niches: true,
+      archetype: true,
+      archetype_label: true,
+      primary_platform: true,
+      follower_range: true,
+      instagram_handle: true,
+      bio: true,
+      scraped_summary: true,
       aria_last_analysis: true,
     },
   });
@@ -349,19 +354,19 @@ export const getViralIdeas = async (
 
   // browseNiche = temporary exploration (not saved to DB)
   // If provided, use it as the active niche but keep permanent niche in context
-  const activeNiche  = browseNiche || niches[0] || "general";
-  const platform     = dbUser?.primary_platform ?? "instagram";
+  const activeNiche = browseNiche || niches[0] || "general";
+  const platform = dbUser?.primary_platform ?? "instagram";
   const scrapedSummary = (dbUser?.scraped_summary as any) ?? {};
-  const ariaAnalysis   = (dbUser?.aria_last_analysis as any) ?? {};
+  const ariaAnalysis = (dbUser?.aria_last_analysis as any) ?? {};
 
   const userContext = {
-    userId:          user.id,
-    niches:          browseNiche ? [browseNiche, ...niches] : niches,
-    archetype:       dbUser?.archetype        ?? null,
-    archetypeLabel:  dbUser?.archetype_label  ?? null,
+    userId: user.id,
+    niches: browseNiche ? [browseNiche, ...niches] : niches,
+    archetype: dbUser?.archetype ?? null,
+    archetypeLabel: dbUser?.archetype_label ?? null,
     instagramHandle: dbUser?.instagram_handle ?? null,
-    bio:             dbUser?.bio              ?? null,
-    topHashtags:     scrapedSummary?.topHashtags   ?? [],
+    bio: dbUser?.bio ?? null,
+    topHashtags: scrapedSummary?.topHashtags ?? [],
     brandCategories: ariaAnalysis?.brandCategories ?? [],
     contentPatterns: ariaAnalysis?.contentPatterns ?? null,
   };
@@ -375,12 +380,21 @@ export const getViralIdeas = async (
     if (!force) {
       const cached = await cache.get(cacheKey);
       if (cached) {
-        logger.info({ activeNiche, browseNiche, userId: user.id }, "Viral ideas cache hit");
-        return success(reply, { ideas: cached, cached: true, niche: activeNiche, isBrowsing: !!browseNiche });
+        logger.info(
+          { activeNiche, browseNiche, userId: user.id },
+          "Viral ideas cache hit",
+        );
+        return success(reply, {
+          ideas: cached,
+          cached: true,
+          niche: activeNiche,
+          isBrowsing: !!browseNiche,
+        });
       }
     }
 
-    const { generateViralIdeas } = await import("../services/viralIdeas.service");
+    const { generateViralIdeas } =
+      await import("../services/viralIdeas.service");
 
     const ideas = await generateViralIdeas({
       platform,
@@ -394,16 +408,13 @@ export const getViralIdeas = async (
 
     return success(reply, {
       ideas,
-      cached:      false,
-      niche:       activeNiche,
-      isBrowsing:  !!browseNiche,
+      cached: false,
+      niche: activeNiche,
+      isBrowsing: !!browseNiche,
       refreshedAt: new Date().toISOString(),
     });
-
   } catch (err) {
     logger.error({ err }, "Viral ideas failed");
     return errors.serviceDown(reply, "Trend ideas engine");
   }
 };
-
-

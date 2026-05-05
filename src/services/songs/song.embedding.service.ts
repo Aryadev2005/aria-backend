@@ -5,35 +5,36 @@
 // Mirrors the pattern of src/services/vector/embedding.service.ts but scoped
 // to live_songs → song_embeddings.
 //
-// Uses Groq nomic-embed-text-v1.5 (768-dim) — same model as trend embeddings.
+// Uses OpenAI embeddings — same model as trend embeddings.
 // Falls back gracefully — never blocks the scrape worker.
 // ══════════════════════════════════════════════════════════════════════════════
 
-import Groq from "groq-sdk";
+import OpenAI from "openai";
 import { prisma } from "../../config/database";
 import { cache } from "../../config/redis";
 import { logger } from "../../utils/logger";
 
-const EMBED_MODEL  = process.env.EMBED_MODEL || "nomic-embed-text-v1.5";
-const BATCH_SIZE   = 32;
+const EMBED_MODEL = process.env.EMBED_MODEL || "text-embedding-3-small";
+const BATCH_SIZE = 128;
 
-let _groq: Groq | null = null;
+let _openai: OpenAI | null = null;
 
-function getGroq(): Groq {
-  if (!_groq) {
-    const apiKey = process.env.GROQ_API_KEY?.trim();
-    if (!apiKey) throw new Error("GROQ_API_KEY is required for song embeddings");
-    _groq = new Groq({ apiKey });
+function getOpenAI(): OpenAI {
+  if (!_openai) {
+    const apiKey = process.env.OPENAI_API_KEY?.trim();
+    if (!apiKey)
+      throw new Error("OPENAI_API_KEY is required for song embeddings");
+    _openai = new OpenAI({ apiKey });
   }
-  return _groq;
+  return _openai;
 }
 
 // ── Build rich embed text from a song row ─────────────────────────────────────
 
 function buildSongEmbedText(song: {
-  title:     string;
-  artist:    string;
-  language:  string | null;
+  title: string;
+  artist: string;
+  language: string | null;
   mood_tags: string[] | null;
   niche_tags: string[] | null;
   lifecycle: string | null;
@@ -42,9 +43,9 @@ function buildSongEmbedText(song: {
     song.title,
     `by ${song.artist}`,
     song.language ? `language:${song.language}` : null,
-    song.mood_tags?.length  ? `mood:${song.mood_tags.join(",")}` : null,
+    song.mood_tags?.length ? `mood:${song.mood_tags.join(",")}` : null,
     song.niche_tags?.length ? `niche:${song.niche_tags.join(",")}` : null,
-    song.lifecycle          ? `lifecycle:${song.lifecycle}` : null,
+    song.lifecycle ? `lifecycle:${song.lifecycle}` : null,
   ].filter(Boolean);
 
   return parts.join(" | ");
@@ -54,10 +55,10 @@ function buildSongEmbedText(song: {
 
 async function generateEmbedding(text: string): Promise<number[]> {
   const cacheKey = `semb:${Buffer.from(text).toString("base64").slice(0, 40)}`;
-  const cached   = await cache.get(cacheKey) as number[] | null;
+  const cached = (await cache.get(cacheKey)) as number[] | null;
   if (cached) return cached;
 
-  const response = await getGroq().embeddings.create({
+  const response = await getOpenAI().embeddings.create({
     model: EMBED_MODEL,
     input: text,
   });
@@ -72,7 +73,7 @@ async function generateEmbeddingsBatch(texts: string[]): Promise<number[][]> {
 
   for (let i = 0; i < texts.length; i += BATCH_SIZE) {
     const batch = texts.slice(i, i + BATCH_SIZE);
-    const response = await getGroq().embeddings.create({
+    const response = await getOpenAI().embeddings.create({
       model: EMBED_MODEL,
       input: batch,
     });
@@ -91,25 +92,25 @@ export async function embedSongs(songIds: string[]): Promise<number> {
   const songs = await (prisma as any).live_songs.findMany({
     where: { id: { in: songIds } },
     select: {
-      id:         true,
-      title:      true,
-      artist:     true,
-      language:   true,
-      mood_tags:  true,
+      id: true,
+      title: true,
+      artist: true,
+      language: true,
+      mood_tags: true,
       niche_tags: true,
-      lifecycle:  true,
+      lifecycle: true,
     },
   });
 
   if (!songs.length) return 0;
 
-  const texts      = songs.map(buildSongEmbedText);
+  const texts = songs.map(buildSongEmbedText);
   const embeddings = await generateEmbeddingsBatch(texts);
 
   let upserted = 0;
 
   for (let i = 0; i < songs.length; i++) {
-    const song      = songs[i];
+    const song = songs[i];
     const embedding = embeddings[i];
     const embedText = texts[i];
 
@@ -132,7 +133,10 @@ export async function embedSongs(songIds: string[]): Promise<number> {
       );
       upserted++;
     } catch (err: any) {
-      logger.warn({ err: err.message, songId: song.id }, "Song embedding upsert failed");
+      logger.warn(
+        { err: err.message, songId: song.id },
+        "Song embedding upsert failed",
+      );
     }
   }
 
@@ -155,35 +159,38 @@ export async function embedAllSongs(): Promise<number> {
 // ── Semantic song search ──────────────────────────────────────────────────────
 
 export interface SimilarSongResult {
-  id:         string;
-  songId:     string;
-  title:      string;
-  artist:     string;
-  language:   string | null;
+  id: string;
+  songId: string;
+  title: string;
+  artist: string;
+  language: string | null;
   similarity: number;
-  embedText:  string;
+  embedText: string;
 }
 
 export async function findSimilarSongs(
   query: string,
   options: {
-    limit?:         number;
-    language?:      string;
-    nicheTags?:     string[];
+    limit?: number;
+    language?: string;
+    nicheTags?: string[];
     minSimilarity?: number;
   } = {},
 ): Promise<SimilarSongResult[]> {
   const { limit = 8, language, nicheTags, minSimilarity = 0.25 } = options;
 
   const cacheKey = `svsearch:${query}:${language || "all"}:${nicheTags?.join(",") || "all"}:${limit}`;
-  const cached   = await cache.get(cacheKey) as SimilarSongResult[] | null;
+  const cached = (await cache.get(cacheKey)) as SimilarSongResult[] | null;
   if (cached) return cached;
 
   let queryEmbedding: number[];
   try {
     queryEmbedding = await generateEmbedding(query);
   } catch (err: any) {
-    logger.warn({ err: err.message }, "Song semantic search: embedding generation failed");
+    logger.warn(
+      { err: err.message },
+      "Song semantic search: embedding generation failed",
+    );
     return [];
   }
 
@@ -229,13 +236,13 @@ export async function findSimilarSongs(
     const results = (await prisma.$queryRawUnsafe(sql, ...params)) as any[];
 
     const mapped: SimilarSongResult[] = results.map((r) => ({
-      id:         r.id,
-      songId:     r.songId,
-      title:      r.title,
-      artist:     r.artist,
-      language:   r.language,
+      id: r.id,
+      songId: r.songId,
+      title: r.title,
+      artist: r.artist,
+      language: r.language,
       similarity: parseFloat(r.similarity),
-      embedText:  r.embedText,
+      embedText: r.embedText,
     }));
 
     await cache.set(cacheKey, mapped, 180); // 3 min cache
