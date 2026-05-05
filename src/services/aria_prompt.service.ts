@@ -1,5 +1,6 @@
 import { User } from "../types";
 import { buildMemoryBlock } from "./aria_memory.service";
+import { formatVoiceForPrompt } from "./voice.service";
 
 // ── Archetype hook strategies ────────────────────────────────────────────────
 export interface ArchetypeHook {
@@ -88,6 +89,7 @@ export interface PromptParams {
   sessionContext?: any;
   entryScreen?: string;
   pendingSuggestions?: any[];
+  voicePortrait?: any;
 }
 
 // ── Main prompt builder ──────────────────────────────────────────────────────
@@ -97,6 +99,7 @@ export const buildARIASystemPrompt = ({
   sessionContext = {},
   entryScreen = "direct",
   pendingSuggestions = [],
+  voicePortrait = null,
 }: PromptParams) => {
   const archetype = user?.archetype || "TRENDSETTER";
   const archetypeData =
@@ -203,6 +206,9 @@ Data available:
   // Memory block (persistent learnings)
   const memoryBlock = buildMemoryBlock(memory);
 
+  // Voice portrait block — inject creator's voice fingerprint
+  const voiceBlock = formatVoiceForPrompt(voicePortrait);
+
   const emotionalRegister = getEmotionalRegister(healthScore, 0);
 
   return `You are ARIA — the world-class AI content strategist inside TrendAI, India's first creator OS built for 40 lakh Indian content creators.
@@ -260,6 +266,7 @@ ${sessionBlock}
 ${followUpBlock}
 ${memoryBlock}
 ${scrapedBlock}
+${voiceBlock}
 ${analysisBackgroundBlock}
 ${freshAnalysisBlock}
 ${emotionalRegister}

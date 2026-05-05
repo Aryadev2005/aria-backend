@@ -122,129 +122,83 @@ export const extractLearningsFromTurn = async (
   userId: string,
   userMessage: string,
   ariaResponse: string,
-) => {
-  const lowerMsg = userMessage.toLowerCase();
-  const lowerRes = ariaResponse.toLowerCase();
+): Promise<void> => {
+  // Never block the response — this runs in background only
+  try {
+    const { _callGroq } = await import("./ai/groq.service");
 
-  const extractions: UpsertMemoryParams[] = [];
+    // Only extract if the conversation has enough signal
+    const combinedLength = userMessage.length + ariaResponse.length;
+    if (combinedLength < 80) return; // too short to extract anything meaningful
 
-  // Hook language preference
-  if (lowerMsg.includes("hindi") || lowerRes.includes("hindi hook")) {
-    extractions.push({
-      category: "hook_language",
-      key: "preferred_language",
-      value: "Hindi",
-      source: "explicit",
-    });
-  }
-  if (lowerMsg.includes("english hook") || lowerMsg.includes("in english")) {
-    extractions.push({
-      category: "hook_language",
-      key: "preferred_language",
-      value: "English",
-      source: "explicit",
-    });
-  }
-  if (lowerMsg.includes("hinglish")) {
-    extractions.push({
-      category: "hook_language",
-      key: "preferred_language",
-      value: "Hinglish",
-      source: "explicit",
-    });
-  }
+    const extractionPrompt = `You are ARIA's memory extraction system. Read this conversation turn and extract factual learnings about the creator.
 
-  // Tone preferences
-  if (lowerMsg.includes("more casual") || lowerMsg.includes("too formal")) {
-    extractions.push({
-      category: "tone",
-      key: "preferred_tone",
-      value: "casual",
-      source: "explicit",
-    });
-  }
-  if (
-    lowerMsg.includes("more professional") ||
-    lowerMsg.includes("too casual")
-  ) {
-    extractions.push({
-      category: "tone",
-      key: "preferred_tone",
-      value: "professional",
-      source: "explicit",
-    });
-  }
-  if (lowerMsg.includes("funny") || lowerMsg.includes("humorous")) {
-    extractions.push({
-      category: "tone",
-      key: "preferred_tone",
-      value: "humorous",
-      source: "explicit",
-    });
-  }
+USER SAID: "${userMessage.substring(0, 600)}"
+ARIA RESPONDED: "${ariaResponse.substring(0, 800)}"
 
-  // Content format preferences
-  if (lowerMsg.includes("i like reels") || lowerMsg.includes("prefer reels")) {
-    extractions.push({
-      category: "content_format",
-      key: "preferred_format",
-      value: "Reel",
-      source: "explicit",
-    });
-  }
-  if (
-    lowerMsg.includes("i like carousels") ||
-    lowerMsg.includes("prefer carousels")
-  ) {
-    extractions.push({
-      category: "content_format",
-      key: "preferred_format",
-      value: "Carousel",
-      source: "explicit",
-    });
-  }
+Extract ONLY concrete, specific facts about this creator that ARIA should remember for future conversations. 
 
-  // Schedule preferences
-  const timeMatch = lowerMsg.match(
-    /(\d{1,2}(?::\d{2})?\s?(?:am|pm)\s?(?:ist)?)/i,
-  );
-  if (
-    timeMatch &&
-    (lowerMsg.includes("post") || lowerMsg.includes("schedule"))
-  ) {
-    extractions.push({
-      category: "schedule",
-      key: "preferred_post_time",
-      value: timeMatch[1].trim(),
-      source: "explicit",
-    });
-  }
+Rules:
+- Only extract things explicitly stated or clearly implied by the user
+- Do not extract things ARIA said — only what the USER revealed about themselves
+- Each learning must be specific and actionable, not vague
+- Do not extract the same thing twice — be selective
+- If nothing meaningful can be extracted, return empty array
 
-  // Brand voice
-  if (lowerMsg.includes("no emojis") || lowerMsg.includes("without emojis")) {
-    extractions.push({
-      category: "brand_voice",
-      key: "emoji_preference",
-      value: "none",
-      source: "explicit",
-    });
-  }
-  if (lowerMsg.includes("more emojis") || lowerMsg.includes("add emojis")) {
-    extractions.push({
-      category: "brand_voice",
-      key: "emoji_preference",
-      value: "heavy",
-      source: "explicit",
-    });
-  }
+Respond ONLY with valid JSON:
+{
+  "learnings": [
+    {
+      "category": "content_format | tone | schedule | audience | brand_voice | content_territory | platform_preference | personal_constraint | goal",
+      "key": "short_snake_case_key",
+      "value": "the specific value learned",
+      "source": "explicit | observed",
+      "reason": "one sentence why this matters for future ARIA responses"
+    }
+  ]
+}
 
-  // Save all extracted learnings
-  for (const learning of extractions) {
-    await upsertMemory(userId, learning);
-  }
+Examples of good extractions:
+- User says "I film everything at home" → category: personal_constraint, key: filming_location, value: "always films at home"
+- User says "my audience is mostly college students" → category: audience, key: primary_audience_type, value: "college students"  
+- User says "I never want to do paid promotions" → category: goal, key: monetization_preference, value: "no paid promotions"
+- User says "I post in Hindi but my captions are English" → category: brand_voice, key: language_split, value: "Hindi speech, English captions"
+- User keeps asking about budget content → category: content_territory, key: primary_content_angle, value: "budget and affordable"
 
-  return extractions;
+Examples of BAD extractions (do not do these):
+- Extracting what ARIA suggested
+- Vague things like "user likes content creation"
+- Things already obvious from their profile (archetype etc.)`;
+
+    const result = await _callGroq(extractionPrompt, {
+      maxTokens: 600,
+      useLlama: false,
+    });
+
+    if (!result?.learnings || !Array.isArray(result.learnings)) return;
+    if (result.learnings.length === 0) return;
+
+    // Save each learning — upsertMemory handles deduplication and confidence scoring
+    for (const learning of result.learnings) {
+      if (!learning.category || !learning.key || !learning.value) continue;
+      await upsertMemory(userId, {
+        category: learning.category,
+        key:      learning.key,
+        value:    String(learning.value).substring(0, 500),
+        source:   learning.source === "explicit" ? "explicit" : "observed",
+      });
+    }
+
+    logger.info(
+      { userId, extracted: result.learnings.length },
+      "ARIA memory extracted from turn",
+    );
+  } catch (err: any) {
+    // Never throw — this is background processing
+    logger.warn({ err: err.message, userId }, "Memory extraction failed — non-fatal");
+  }
 };
+
 
 /**
  * Build the memory injection block for the system prompt

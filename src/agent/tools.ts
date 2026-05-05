@@ -328,6 +328,8 @@ export const getUserProfile = tool(
             archetype_label: true,
             niches: true,
             primary_platform: true,
+            instagram_handle: true,
+            youtube_handle: true,
             follower_range: true,
             follower_count: true,
             engagement_rate: true,
@@ -336,6 +338,9 @@ export const getUserProfile = tool(
             tone_profile: true,
             creator_intent: true,
             aria_confirmed_niche: true,
+            scraped_summary: true,        // ADDED — real Instagram data
+            aria_last_analysis: true,     // ADDED — ARIA's own profile analysis
+            aria_analyzed_at: true,       // ADDED — when was this analysis done
           },
         });
 
@@ -354,8 +359,10 @@ export const getUserProfile = tool(
       } else {
         const rows = await db`
           SELECT id, name, archetype, archetype_label, niches, primary_platform,
-                 follower_range, follower_count, engagement_rate, health_score,
-                 growth_stage, tone_profile, creator_intent, aria_confirmed_niche
+                 instagram_handle, youtube_handle, follower_range, follower_count, 
+                 engagement_rate, health_score, growth_stage, tone_profile, 
+                 creator_intent, aria_confirmed_niche, scraped_summary, 
+                 aria_last_analysis, aria_analyzed_at
           FROM users WHERE id = ${userId}
         `;
         user = rows[0];

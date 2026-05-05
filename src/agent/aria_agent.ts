@@ -14,6 +14,7 @@ import { z } from "zod";
 // to avoid passing 'db' through schema-validated .invoke() calls.
 import { getMcpTools } from "./mcp_tools";
 import { hybridTools } from "./tools.hybrid";
+import { observeTurn } from "../services/aria_observer.service";
 
 import { buildARIASystemPrompt } from "../services/aria_prompt.service";
 import {
@@ -190,19 +191,39 @@ export const buildARIAAgent = async (
   // Initialize OpenAI native web search tool
   const webSearchTool = openaiTools.webSearch();
 
+  // Import ALL_ARIA_TOOLS and filter to avoid duplicates
+  const { ALL_ARIA_TOOLS } = await import("./tools");
+
+  // Filter ALL_ARIA_TOOLS to remove tools that have DB-injected versions
+  // in createDBInjectedTools — avoids duplicate tool names confusing the LLM
+  const standaloneTools = ALL_ARIA_TOOLS.filter(
+    (t) => !["get_user_profile", "get_db_live_trends", "get_db_trending_songs",
+             "get_user_content_history", "confirm_niche"].includes((t as any).name)
+  );
+
   const tools = [
-    ...createDBInjectedTools(db, user),
+    ...createDBInjectedTools(db, user),  // DB-injected versions (have access to prisma)
+    ...hybridTools,                       // 4 RAG tools — get_hybrid_context, find_similar_trends etc.
+    ...standaloneTools,                   // YouTube stats, Spotify, JioSaavn, Google Trends etc.
     ...mcpTools,
     webSearchTool,
   ];
 
-  const memory = await getMemory(user.id).catch(() => ({}));
+  const [memory, voicePortrait] = await Promise.allSettled([
+    getMemory(user.id),
+    import("../services/voice.service").then(m => m.getVoicePortrait(user.id)),
+  ]);
+
+  const resolvedMemory   = memory.status        === "fulfilled" ? memory.value        : {};
+  const resolvedPortrait = voicePortrait.status === "fulfilled" ? voicePortrait.value : null;
+
   const systemPrompt = buildARIASystemPrompt({
     user,
-    memory,
+    memory:       resolvedMemory,
     sessionContext,
     entryScreen,
     pendingSuggestions: [],
+    voicePortrait: resolvedPortrait,
   });
 
   const agentConfig: any = {
@@ -285,6 +306,7 @@ export const invokeARIAAgent = async ({
     // Non-blocking post-turn learning
     Promise.all([
       extractLearningsFromTurn(user.id, message, response),
+      observeTurn(user.id, message, response, toolsUsed),
       _extractAndStoreSuggestions(user.id, sessionId, response),
     ]).catch((err) => logger.warn({ err }, "Post-turn learning failed"));
 
@@ -333,8 +355,12 @@ export async function* streamARIAAgent({
       { ...config, version: "v2" },
     );
 
+    let finalResponse = "";
+    let toolsUsedInStream: string[] = [];
+
     for await (const event of stream) {
       if (event.event === "on_tool_start") {
+        toolsUsedInStream.push(event.name);
         yield {
           type: "tool_start" as const,
           tool: event.name,
@@ -346,14 +372,27 @@ export async function* streamARIAAgent({
       }
       if (event.event === "on_chat_model_stream") {
         const token = event.data?.chunk?.content;
-        if (token) yield { type: "token" as const, content: token };
+        if (token) {
+          finalResponse += token;
+          yield { type: "token" as const, content: token };
+        }
       }
       if (event.event === "on_chain_end" && event.name === "LangGraph") {
         const msgs = (event.data?.output?.messages || []) as any[];
         const final = msgs.findLast(
           (m) => m._getType?.() === "ai" && !m.tool_calls?.length,
         );
-        if (final) yield { type: "done" as const, message: final.content };
+        if (final) {
+          finalResponse = final.content as string;
+          yield { type: "done" as const, message: finalResponse };
+
+          // Non-blocking post-turn learning for streaming too
+          Promise.all([
+            extractLearningsFromTurn(user.id, message, finalResponse),
+            observeTurn(user.id, message, finalResponse, toolsUsedInStream),
+            _extractAndStoreSuggestions(user.id, sessionId, finalResponse),
+          ]).catch((err) => logger.warn({ err }, "Post-turn learning failed"));
+        }
       }
     }
   } catch (err) {

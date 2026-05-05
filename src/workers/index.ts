@@ -9,7 +9,8 @@ import { startEmbeddingWorker,  stopEmbeddingWorker  } from "./embedding.worker"
 import { startTrajectoryWorker, stopTrajectoryWorker } from "./trajectory.worker";
 import { startSongWorker,       stopSongWorker       } from "./song.worker";
 import { startDiscoveryWorker,  stopDiscoveryWorker  } from "./discovery.worker";
-import { scheduleEmbedJobs, scheduleSongJobs, scheduleDiscoveryJobs } from "../config/queue.additions";
+import { startVoiceWorker,      stopVoiceWorker      } from "./voice.worker";
+import { scheduleEmbedJobs, scheduleSongJobs, scheduleDiscoveryJobs, scheduleVoiceJobs } from "../config/queue.additions";
 
 const workers: any[] = [];
 
@@ -44,10 +45,18 @@ export const startAllWorkers = async () => {
     logger.warn({ err: err.message }, "Discovery worker failed to start");
   }
 
+  try {
+    const voiceWorker = await startVoiceWorker();
+    if (voiceWorker) workers.push(voiceWorker);
+  } catch (err: any) {
+    logger.warn({ err: err.message }, "Voice worker failed to start");
+  }
+
   // Schedule recurring jobs
   await scheduleEmbedJobs();
   await scheduleSongJobs();
   await scheduleDiscoveryJobs();
+  await scheduleVoiceJobs();
 
   logger.info({ workerCount: workers.length }, "All workers started");
 };
@@ -59,6 +68,7 @@ export const stopAllWorkers = async () => {
     stopTrajectoryWorker(),
     stopSongWorker(),
     stopDiscoveryWorker(),
+    stopVoiceWorker(),
   ]);
   logger.info("All workers stopped");
 };

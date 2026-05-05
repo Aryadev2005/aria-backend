@@ -78,3 +78,21 @@ export async function scheduleDiscoveryJobs(): Promise<void> {
     logger.warn({ err: err.message }, "Failed to schedule discovery jobs");
   }
 }
+
+// ── Voice portrait rebuild schedule ───────────────────────────────────────────
+// Rebuild voice profiles for all active users every 7 days
+
+export async function scheduleVoiceJobs(): Promise<void> {
+  try {
+    const voiceQueue = new Queue("voice-rebuild", { connection: getConnection() });
+    await voiceQueue.upsertJobScheduler(
+      "voice-rebuild-scheduled",
+      { every: 7 * 24 * 60 * 60 * 1000 }, // every 7 days
+      { name: "voice-rebuild", data: {} },
+    );
+    logger.info("Voice portrait jobs scheduled (weekly)");
+    await voiceQueue.close();
+  } catch (err: any) {
+    logger.warn({ err: err.message }, "Failed to schedule voice jobs");
+  }
+}
