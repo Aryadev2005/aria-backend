@@ -314,7 +314,38 @@ export const invokeARIAAgent = async ({
       _extractAndStoreSuggestions(user.id, sessionId, response),
     ]).catch((err) => logger.warn({ err }, "Post-turn learning failed"));
 
-    return { message: response, toolsUsed, sessionId, duration };
+    // Fetch suggestions that were just created (or are pending)
+    let followUpSuggestions: any[] = [];
+    try {
+      followUpSuggestions = await prisma.aria_suggestions.findMany({
+        where: {
+          user_id: user.id,
+          status: "pending",
+          session_id: sessionId,
+        },
+        select: {
+          id: true,
+          suggestion_type: true,
+          suggestion_data: true,
+        },
+        orderBy: { created_at: "desc" },
+        take: 3,
+      });
+    } catch (_) {
+      // Non-fatal
+    }
+
+    return {
+      message: response,
+      toolsUsed,
+      sessionId,
+      duration,
+      followUpSuggestions: followUpSuggestions.map((s) => ({
+        id: s.id,
+        type: s.suggestion_type,
+        content: (s.suggestion_data as any)?.content,
+      })),
+    };
   } catch (err) {
     logger.error(
       { err, userId: user.id, sessionId },

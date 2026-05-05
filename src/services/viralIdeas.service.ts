@@ -321,6 +321,7 @@ Respond ONLY with valid JSON:
       "title": "Trend name max 8 words",
       "contentAngle": "Exact video concept",
       "whyNow": "One sentence urgency tied to actual signal",
+      "personalReason": "One sentence explaining why this specific trend was picked for this creator based on their identity, voice, or audience",
       "formatSuggestion": "Reel|Carousel|Short|Video",
       "velocityScore": 88,
       "badge": "HOT|RISING|NEW",

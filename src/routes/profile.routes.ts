@@ -1,5 +1,6 @@
 import { FastifyInstance } from "fastify";
 import * as ctrl from "../controllers/profile.controller";
+import * as identityCtrl from "../controllers/aria_identity.controller";
 import type { UpdatePlatformBody } from "../controllers/profile.controller";
 import { authenticateFirebase } from "../middleware/auth.middleware";
 
@@ -32,5 +33,47 @@ export default async function profileRoutes(app: FastifyInstance) {
       },
     },
     ctrl.updatePlatform,
+  );
+
+  // GET /api/v1/profile/aria-identity
+  app.get("/aria-identity", auth, identityCtrl.getIdentity);
+
+  // PUT /api/v1/profile/aria-identity/memory
+  app.put(
+    "/aria-identity/memory",
+    {
+      ...auth,
+      schema: {
+        body: {
+          type: "object",
+          required: ["category", "key", "value"],
+          properties: {
+            category: { type: "string", minLength: 1 },
+            key: { type: "string", minLength: 1 },
+            value: { type: "string", minLength: 1 },
+          },
+        },
+      },
+    },
+    identityCtrl.updateMemory,
+  );
+
+  // DELETE /api/v1/profile/aria-identity/memory
+  app.delete(
+    "/aria-identity/memory",
+    {
+      ...auth,
+      schema: {
+        body: {
+          type: "object",
+          required: ["category", "key"],
+          properties: {
+            category: { type: "string", minLength: 1 },
+            key: { type: "string", minLength: 1 },
+          },
+        },
+      },
+    },
+    identityCtrl.deleteMemory,
   );
 }
