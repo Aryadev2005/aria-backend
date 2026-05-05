@@ -30,6 +30,7 @@ export const getScriptStructure = async (
       collaboration,
       angle,
       followerRange: user.follower_range || undefined,
+      userId: user.id,
     });
     return success(reply, result);
   } catch (err) {
@@ -85,6 +86,7 @@ export const matchBGM = async (
       niche: user.niches?.[0] || "general",
       archetype: user.archetype || "EDUCATOR",
       duration,
+      userId: user.id,
     });
     return success(reply, result);
   } catch (err) {

@@ -1,6 +1,7 @@
 import { logger } from "../utils/logger";
 import { _callGroq } from "./ai/groq.service";
 import { prisma } from "../config/database";
+import { getVoicePortrait } from "./voice.service";
 
 export interface ViralIdea {
   id: string;
@@ -17,6 +18,7 @@ export interface ViralIdea {
 }
 
 export interface UserNicheContext {
+  userId: string;
   niches: string[];
   archetype: string | null;
   archetypeLabel: string | null;
@@ -216,6 +218,8 @@ async function resolveAndSynthesize(
   ctx:              UserNicheContext,
   platform:         string,
   followerRange:    string,
+  voicePortrait:    any,
+  memory:           any,
 ): Promise<ViralIdea[]> {
 
   const redditCtx = redditSignals.length > 0
@@ -253,6 +257,29 @@ async function resolveAndSynthesize(
       ).join("\n")
     : "";
 
+  // Extract top topics from memory
+  const topTopics = (memory?.content_territory || [])
+    .sort((a: any, b: any) => b.times_seen - a.times_seen)
+    .slice(0, 5)
+    .map((m: any) => m.value);
+
+  const creatorIdentityCtx = voicePortrait ? `
+
+CREATOR VOICE IDENTITY (use this to filter and angle every idea):
+- Content territory: ${voicePortrait.contentTerritory}
+- Primary topics they own: ${voicePortrait.primaryTopics.join(", ")}
+- Audience: ${voicePortrait.audienceDescription}
+- Their tone: ${voicePortrait.toneSignature}
+- Personal constraints: ${voicePortrait.personalConstraints.join(", ")}
+- Formats they use: ${voicePortrait.preferredFormats.join(", ")}
+${voicePortrait.avoidTopics.length > 0 ? `- NEVER suggest: ${voicePortrait.avoidTopics.join(", ")}` : ""}
+${topTopics.length > 0 ? `- Topics ARIA has observed them return to repeatedly: ${topTopics.join(", ")}` : ""}
+
+CRITICAL RULE: Every single idea must be filtered through this identity.
+A trend idea that does not fit this creator's territory, audience, or constraints must be excluded.
+Reframe trends through the lens of what this specific creator uniquely does.
+Do not give generic trend angles. Give angles only this creator could execute.` : "";
+
   const prompt = `You are ARIA — India's creator intelligence engine.
 
 CREATOR PROFILE:
@@ -265,6 +292,7 @@ CREATOR PROFILE:
 - Brand categories: ${ctx.brandCategories.length > 0 ? ctx.brandCategories.join(", ") : "not available"}
 - Platform: ${platform}
 - Followers: ${followerRange}
+${creatorIdentityCtx}
 
 IMPORTANT: The CONFIRMED NICHE above is what the user selected. Always generate ideas for that niche.
 The handle and bio are context only — do NOT use them to override the confirmed niche.
@@ -330,12 +358,17 @@ export async function generateViralIdeas(params: {
   logger.info({ niches: userContext.niches, handle: userContext.instagramHandle }, "Generating viral ideas");
 
   // Fetch signals in parallel — single Groq call handles everything after
-  const [redditResult, ytResult, tiktokResult, pinterestResult, googleResult] = await Promise.allSettled([
+  const [redditResult, ytResult, tiktokResult, pinterestResult, googleResult, voicePortraitResult, memoryResult] = await Promise.allSettled([
     readRedditSignals(40),
     readYouTubeSignals(30),
     readTikTokSignals(30),
     readPinterestSignals(20),
     readGoogleTrendsSignals(20),
+    getVoicePortrait(userContext.userId),
+    (async () => {
+      const { getMemory } = await import("./aria_memory.service");
+      return getMemory(userContext.userId);
+    })(),
   ]);
 
   const reddit    = redditResult.status    === "fulfilled" ? redditResult.value    : [];
@@ -343,11 +376,13 @@ export async function generateViralIdeas(params: {
   const tiktok    = tiktokResult.status    === "fulfilled" ? tiktokResult.value    : [];
   const pinterest = pinterestResult.status === "fulfilled" ? pinterestResult.value : [];
   const gtrends   = googleResult.status    === "fulfilled" ? googleResult.value    : [];
+  const voicePortrait = voicePortraitResult.status === "fulfilled" ? voicePortraitResult.value : null;
+  const memory = memoryResult.status === "fulfilled" ? memoryResult.value : {};
 
   logger.info({
     reddit: reddit.length, youtube: youtube.length,
     tiktok: tiktok.length, pinterest: pinterest.length, gtrends: gtrends.length,
   }, "All signals collected");
 
-  return resolveAndSynthesize(reddit, youtube, tiktok, pinterest, gtrends, userContext, platform, followerRange);
+  return resolveAndSynthesize(reddit, youtube, tiktok, pinterest, gtrends, userContext, platform, followerRange, voicePortrait, memory);
 }

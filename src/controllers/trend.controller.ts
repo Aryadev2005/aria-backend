@@ -355,6 +355,7 @@ export const getViralIdeas = async (
   const ariaAnalysis   = (dbUser?.aria_last_analysis as any) ?? {};
 
   const userContext = {
+    userId:          user.id,
     niches:          browseNiche ? [browseNiche, ...niches] : niches,
     archetype:       dbUser?.archetype        ?? null,
     archetypeLabel:  dbUser?.archetype_label  ?? null,

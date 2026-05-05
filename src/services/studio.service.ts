@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import { prisma } from "../config/database";
 import { logger } from "../utils/logger";
 import { getSongsForBGM } from "./songs/song.rag.service";
+import { getVoicePortrait } from "./voice.service";
 
 let _openai: OpenAI | null = null;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
@@ -22,6 +23,7 @@ export interface ScriptParams {
   collaboration?: string;
   angle?: string;
   followerRange?: string;
+  userId: string;
 }
 
 /**
@@ -37,9 +39,30 @@ export const generateScriptStructure = async ({
   collaboration,
   angle,
   followerRange,
+  userId,
 }: ScriptParams) => {
   const isYouTube = platform?.toLowerCase() === "youtube";
   // const isShortForm = !isYouTube || format?.includes('Short');
+
+  // Load voice portrait for personalization
+  const voicePortrait = await getVoicePortrait(userId).catch(() => null);
+
+  const voiceRulesCtx = voicePortrait ? `
+
+CREATOR VOICE RULES (mandatory — override generic advice):
+- Write in this tone: ${voicePortrait.toneSignature}
+- Vocabulary level: ${voicePortrait.vocabularyLevel}
+- Energy: ${voicePortrait.energyLevel}
+- Their sentence style: ${voicePortrait.sentenceStyle}
+- Their natural hook style: ${voicePortrait.preferredHookStyle}
+- Language: ${voicePortrait.preferredLanguage}
+${voicePortrait.personalConstraints.length > 0 ? `- Constraints to respect: ${voicePortrait.personalConstraints.join(", ")}` : ""}
+
+The script MUST sound like this specific creator wrote it.
+If their tone is casual-humorous, make the hook funny.
+If they use Hinglish, mix Hindi and English naturally.
+If they are a faceless creator, every visual direction should not require showing a face.
+Write it as if you know this person and their audience personally.` : "";
 
   const prompt = `You are ARIA — India's top content strategist.
 
@@ -57,7 +80,7 @@ RULES:
 - Each section has: duration, what to say/show, ARIA tip
 - Tips must be specific — not generic advice
 - Indian context where natural (mention brands, festivals, places)
-- Short-form: tight, punchy. Long-form: build tension, payoff.
+- Short-form: tight, punchy. Long-form: build tension, payoff.${voiceRulesCtx}
 
 Respond ONLY with valid JSON:
 {
@@ -202,6 +225,7 @@ export interface BGMParams {
   archetype: string;
   duration?: string;
   language?: string;
+  userId:    string;
 }
 
 export const matchBGM = async ({
@@ -212,7 +236,11 @@ export const matchBGM = async ({
   archetype,
   duration,
   language = "Hindi",
+  userId,
 }: BGMParams) => {
+  // Load voice portrait for personalization
+  const voicePortrait = await getVoicePortrait(userId).catch(() => null);
+
   // ── Pull live songs from Tier 1 hot window ────────────────────────────────
   const liveSongs = await getSongsForBGM({ niche, language, limit: 15 });
 
@@ -235,6 +263,18 @@ export const matchBGM = async ({
           .join("\n")
       : "";
 
+  const energyProfileCtx = voicePortrait ? `
+
+CREATOR ENERGY PROFILE:
+- Energy level: ${voicePortrait.energyLevel}
+- Tone: ${voicePortrait.toneSignature}
+- Audience: ${voicePortrait.audienceDescription}
+- Content territory: ${voicePortrait.contentTerritory}
+
+Match BGM to this energy profile specifically.
+A calm-educational creator needs different audio than a high-energy entertainer
+even when covering the same trend. Prioritise mood-match over trend-match for this creator.` : "";
+
   const prompt = `You are ARIA — India's music curator for creators.
 
 Match BGM for this content:
@@ -244,6 +284,7 @@ Match BGM for this content:
 - Archetype: ${archetype}
 - Duration: ${duration || "30s"}
 - Language preference: ${language}
+${energyProfileCtx}
 
 ${liveContext}
 
