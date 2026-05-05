@@ -23,6 +23,7 @@ import {
   storeSuggestion,
 } from "../services/aria_memory.service";
 import { logger } from "../utils/logger";
+import { prisma } from "../config/database";
 
 // ── PostgresSaver is loaded LAZILY — not at module load time ──────────────────
 let PostgresSaver: any = null;
@@ -209,21 +210,24 @@ export const buildARIAAgent = async (
     webSearchTool,
   ];
 
-  const [memory, voicePortrait] = await Promise.allSettled([
+  // Load memory, voice portrait, and pending suggestions in parallel
+  const [memoryResult, voicePortraitResult, pendingSuggestionsResult] = await Promise.allSettled([
     getMemory(user.id),
     import("../services/voice.service").then(m => m.getVoicePortrait(user.id)),
+    import("../services/suggestion.service").then(m => m.getDueSuggestions(user.id)),
   ]);
 
-  const resolvedMemory   = memory.status        === "fulfilled" ? memory.value        : {};
-  const resolvedPortrait = voicePortrait.status === "fulfilled" ? voicePortrait.value : null;
+  const resolvedMemory           = memoryResult.status           === "fulfilled" ? memoryResult.value           : {};
+  const resolvedPortrait         = voicePortraitResult.status    === "fulfilled" ? voicePortraitResult.value    : null;
+  const resolvedPendingSuggestions = pendingSuggestionsResult.status === "fulfilled" ? pendingSuggestionsResult.value : [];
 
   const systemPrompt = buildARIASystemPrompt({
     user,
-    memory:       resolvedMemory,
+    memory:             resolvedMemory,
     sessionContext,
     entryScreen,
-    pendingSuggestions: [],
-    voicePortrait: resolvedPortrait,
+    pendingSuggestions: resolvedPendingSuggestions,
+    voicePortrait:      resolvedPortrait,
   });
 
   const agentConfig: any = {
@@ -432,23 +436,86 @@ const _fallbackResponse = async (message: string, user: any) => {
   }
 };
 
+// ── Helper to call Groq ──────────────────────────────────────────────────────
+const _callGroq = async (prompt: string, opts?: any) => {
+  const { _callGroq: groqCall } = await import("../services/ai/groq.service");
+  return groqCall(prompt, opts);
+};
+
 // ── Extract suggestions from response ────────────────────────────────────────
 const _extractAndStoreSuggestions = async (
   userId: string,
   sessionId: string,
   response: string,
-) => {
-  const lower = response.toLowerCase();
-  if (
-    lower.includes("post") &&
-    /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/.test(lower)
-  ) {
-    const day = response.match(
-      /\b(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b/i,
-    )?.[1];
-    if (day)
-      await storeSuggestion(userId, sessionId, "posting_time", { day }).catch(
-        () => {},
+): Promise<void> => {
+  try {
+    // Only run if response is long enough to contain suggestions
+    if (response.length < 100) return;
+
+    // Use Groq to extract actionable suggestions from the response
+    const extractionPrompt = `You are ARIA's suggestion tracker. Read this ARIA response and extract any concrete, actionable suggestions ARIA made to the creator.
+
+ARIA SAID: "${response.substring(0, 1500)}"
+
+Extract suggestions that the creator could actually follow up on — things like:
+- "Post on Wednesday at 7pm"
+- "Try this hook format"
+- "Make a video about [topic]"
+- "Post 4 times this week"
+- "Use this hashtag strategy"
+- "Collab with a creator in [niche]"
+
+Do NOT extract vague advice like "be consistent" or "engage with your audience".
+Only extract specific, actionable suggestions with a clear completion state.
+If no specific actionable suggestions exist, return empty array.
+
+Respond ONLY with valid JSON:
+{
+  "suggestions": [
+    {
+      "type": "posting_time | hook_format | topic_idea | posting_frequency | hashtag_strategy | collab | format_change | other",
+      "content": "The exact suggestion made",
+      "followUpDays": 3
+    }
+  ]
+}`;
+
+    const result = await _callGroq(extractionPrompt, {
+      maxTokens: 400,
+      useLlama: false,
+    });
+
+    if (!result?.suggestions?.length) return;
+
+    for (const suggestion of result.suggestions) {
+      if (!suggestion.content || !suggestion.type) continue;
+
+      const followUpAt = new Date();
+      followUpAt.setDate(
+        followUpAt.getDate() + (suggestion.followUpDays || 3),
       );
+
+      await prisma.aria_suggestions
+        .create({
+          data: {
+            user_id: userId,
+            session_id: sessionId,
+            suggestion_type: suggestion.type,
+            suggestion_data: {
+              content: suggestion.content,
+              extractedAt: new Date(),
+            },
+            status: "pending",
+            follow_up_at: followUpAt,
+            follow_up_sent: false,
+          },
+        })
+        .catch(() => {}); // Non-fatal
+    }
+  } catch (err: any) {
+    logger.warn(
+      { err: err.message, userId },
+      "Suggestion extraction failed — non-fatal",
+    );
   }
 };

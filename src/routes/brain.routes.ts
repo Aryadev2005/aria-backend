@@ -5,6 +5,10 @@ import type {
   GreetQuery,
 } from "../controllers/aria_agent.controller";
 import { authenticateFirebase } from "../middleware/auth.middleware";
+import { recordSuggestionFeedback } from "../services/suggestion.service";
+import { success, errors } from "../utils/response";
+import { logger } from "../utils/logger";
+import { User } from "../types";
 
 const aiRateLimit = {
   max: 60,
@@ -90,5 +94,36 @@ export default async function brainRoutes(app: FastifyInstance) {
       },
     },
     greet,
+  );
+
+  // POST /api/v1/brain/suggestion-feedback
+  app.post(
+    "/suggestion-feedback",
+    {
+      preHandler: [authenticateFirebase],
+      schema: {
+        body: {
+          type: "object",
+          required: ["suggestionId", "outcome"],
+          properties: {
+            suggestionId: { type: "string" },
+            outcome: { type: "string", enum: ["followed", "ignored", "partially"] },
+            notes: { type: "string", maxLength: 500 },
+          },
+        },
+      },
+    },
+    async (req, reply) => {
+      const user = req.user as User;
+      const { suggestionId, outcome, notes } = req.body as any;
+
+      try {
+        await recordSuggestionFeedback(suggestionId, user.id, outcome, notes);
+        return success(reply, { recorded: true });
+      } catch (err: any) {
+        logger.error({ err: err.message, userId: user.id }, "Record suggestion feedback failed");
+        return errors.internal(reply, "Failed to record feedback");
+      }
+    },
   );
 }

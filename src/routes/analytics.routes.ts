@@ -1,5 +1,6 @@
 import { FastifyInstance } from "fastify";
 import * as analyticsController from "../controllers/analytics.controller";
+import * as roadmapController from "../controllers/roadmap.controller";
 import type { TriggerScrapeBody } from "../controllers/analytics.controller";
 import {
   authenticateFirebase,
@@ -53,6 +54,22 @@ export default async function analyticsRoutes(app: FastifyInstance) {
       preHandler: [authenticateFirebase],
     },
     analyticsController.getArchetype,
+  );
+
+  app.get(
+    "/roadmap",
+    {
+      preHandler: [authenticateFirebase],
+    },
+    roadmapController.getPersonalisedRoadmap,
+  );
+
+  app.get(
+    "/roadmap/refresh",
+    {
+      preHandler: [authenticateFirebase],
+    },
+    roadmapController.refreshRoadmap,
   );
 
   app.post<{ Body: TriggerScrapeBody }>(

@@ -22,6 +22,7 @@ async function processJob(job: Job): Promise<{ built: number; skipped: number; f
   logger.info({ jobId: job.id }, "Voice portrait worker started");
 
   const { buildVoicePortrait } = await import("../services/voice.service");
+  const { invalidateRoadmapCache } = await import("../services/roadmap.service");
 
   // Find users who need a rebuild
   const users = await (prisma as any).creator_voice_profiles.findMany({
@@ -53,6 +54,8 @@ async function processJob(job: Job): Promise<{ built: number; skipped: number; f
       const portrait = await buildVoicePortrait(userId);
       if (portrait) {
         built++;
+        // Bust roadmap cache so next fetch uses new voice portrait
+        await invalidateRoadmapCache(userId);
       } else {
         skipped++;
       }
