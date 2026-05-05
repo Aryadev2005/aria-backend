@@ -2,6 +2,26 @@ import { User } from "../types";
 import { buildMemoryBlock } from "./aria_memory.service";
 import { formatVoiceForPrompt } from "./voice.service";
 
+// ── Token budget helpers ─────────────────────────────────────────────────────
+
+// Rough token estimator — 4 characters ≈ 1 token
+function estimateTokens(text: string): number {
+  return Math.ceil((text || '').length / 4);
+}
+
+// Apply a character limit to a block — returns the block if within limit, empty string if over budget
+function applyBudget(
+  block:         string,
+  currentTokens: number,
+  maxTokens:     number,
+): { text: string; tokens: number } {
+  const blockTokens = estimateTokens(block);
+  if (currentTokens + blockTokens <= maxTokens) {
+    return { text: block, tokens: currentTokens + blockTokens };
+  }
+  return { text: '', tokens: currentTokens };
+}
+
 // ── Archetype hook strategies ────────────────────────────────────────────────
 export interface ArchetypeHook {
   hookStyle: string;
@@ -211,6 +231,43 @@ Data available:
 
   const emotionalRegister = getEmotionalRegister(healthScore, 0);
 
+  // ── Budget-aware context assembly ─────────────────────────────────────────────
+  // Cap creator-specific context at 2000 tokens to prevent prompt bloat
+  // Priority: voice > session > memory > follow-ups > scraped > analysis
+  const CONTEXT_BUDGET = 2000;
+  let usedTokens = 0;
+  let budgetedContext = '';
+
+  // Priority 1 — Voice portrait (always included, capped at 400 tokens)
+  const voiceCapped = voiceBlock.substring(0, 1600); // 1600 chars ≈ 400 tokens
+  budgetedContext += voiceCapped;
+  usedTokens += estimateTokens(voiceCapped);
+
+  // Priority 2 — Session context (always included, capped at 300 tokens)
+  const sessionCapped = sessionBlock.substring(0, 1200);
+  budgetedContext += sessionCapped;
+  usedTokens += estimateTokens(sessionCapped);
+
+  // Priority 3 — Memory block (always included, capped at 300 tokens)
+  const memoryCapped = memoryBlock.substring(0, 1200);
+  budgetedContext += memoryCapped;
+  usedTokens += estimateTokens(memoryCapped);
+
+  // Priority 4 — Pending follow-ups (always included, capped at 200 tokens)
+  const followUpCapped = followUpBlock.substring(0, 800);
+  budgetedContext += followUpCapped;
+  usedTokens += estimateTokens(followUpCapped);
+
+  // Priority 5 — Scraped platform data (included if budget allows)
+  const scrapedResult = applyBudget(scrapedBlock, usedTokens, CONTEXT_BUDGET);
+  budgetedContext += scrapedResult.text;
+  usedTokens = scrapedResult.tokens;
+
+  // Priority 6 — ARIA analysis background (included if budget allows)
+  const analysisResult = applyBudget(analysisBackgroundBlock, usedTokens, CONTEXT_BUDGET);
+  budgetedContext += analysisResult.text;
+  usedTokens = analysisResult.tokens;
+
   return `You are ARIA — the world-class AI content strategist inside TrendAI, India's first creator OS built for 40 lakh Indian content creators.
 
 ════════════════════════════════════════
@@ -262,12 +319,7 @@ ${analyticsBlock}
 CONTEXT
 ════════════════════════════════════════
 SCREEN: ${SCREEN_CONTEXT[entryScreen] || SCREEN_CONTEXT.direct}
-${sessionBlock}
-${followUpBlock}
-${memoryBlock}
-${scrapedBlock}
-${voiceBlock}
-${analysisBackgroundBlock}
+${budgetedContext}
 ${freshAnalysisBlock}
 ${emotionalRegister}
 

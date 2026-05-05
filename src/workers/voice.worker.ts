@@ -24,28 +24,57 @@ async function processJob(job: Job): Promise<{ built: number; skipped: number; f
   const { buildVoicePortrait } = await import("../services/voice.service");
   const { invalidateRoadmapCache } = await import("../services/roadmap.service");
 
-  // Find users who need a rebuild
-  const users = await (prisma as any).creator_voice_profiles.findMany({
+  // ── Find users with stale voice portraits ─────────────────────────────────
+  const staleProfiles = await (prisma as any).creator_voice_profiles.findMany({
     where: { next_rebuild_at: { lte: new Date() } },
-    select: { user_id: true },
-    take: 50, // Process max 50 per run to avoid overloading
+    select: { user_id: true, built_at: true },
+    take: 50,
   });
 
-  // Also find users with no portrait at all but who have memory
-  const usersWithMemory = await prisma.aria_memory.findMany({
+  // ── Find users who have accumulated 8+ new memories since last voice build ────
+  // These users get a rebuild even if their schedule hasn't hit yet
+  const earlyRebuildCandidates = await prisma.$queryRawUnsafe<{ user_id: string }[]>(`
+    SELECT DISTINCT am.user_id
+    FROM aria_memory am
+    JOIN creator_voice_profiles cvp ON cvp.user_id = am.user_id
+    WHERE am.created_at > cvp.built_at
+    GROUP BY am.user_id, cvp.built_at
+    HAVING COUNT(*) >= 8
+  `);
+
+  // ── Find users with memory but no portrait at all ─────────────────────────────
+  const usersWithNoPortrait = await prisma.aria_memory.findMany({
     where: {
-      // Not already in the above list
-      user_id: { notIn: users.map((u: any) => u.user_id) },
+      user_id: {
+        notIn: [
+          ...staleProfiles.map((u: any) => u.user_id),
+          ...earlyRebuildCandidates.map((u: any) => u.user_id),
+        ].filter(Boolean),
+      },
     },
-    select: { user_id: true },
-    distinct: ["user_id"],
-    take: 20,
+    select:   { user_id: true },
+    distinct: ['user_id'],
+    take:     20,
   });
 
-  const allUserIds = [
-    ...users.map((u: any) => u.user_id),
-    ...usersWithMemory.map(u => u.user_id),
-  ];
+  // Deduplicate all user IDs
+  const seen = new Set<string>();
+  const allUserIds: string[] = [];
+
+  for (const u of [...staleProfiles, ...earlyRebuildCandidates, ...usersWithNoPortrait]) {
+    const id = (u as any).user_id;
+    if (id && !seen.has(id)) {
+      seen.add(id);
+      allUserIds.push(id);
+    }
+  }
+
+  logger.info({
+    stale:         staleProfiles.length,
+    earlyRebuild:  earlyRebuildCandidates.length,
+    noPortrait:    usersWithNoPortrait.length,
+    total:         allUserIds.length,
+  }, "Voice portrait rebuild candidates");
 
   let built = 0, skipped = 0, failed = 0;
 

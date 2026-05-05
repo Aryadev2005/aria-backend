@@ -220,6 +220,7 @@ async function resolveAndSynthesize(
   followerRange:    string,
   voicePortrait:    any,
   memory:           any,
+  feedbackHistory:  any[],
 ): Promise<ViralIdea[]> {
 
   const redditCtx = redditSignals.length > 0
@@ -263,6 +264,37 @@ async function resolveAndSynthesize(
     .slice(0, 5)
     .map((m: any) => m.value);
 
+  // Build feedback context from creator's history
+  const helpfulAngles = feedbackHistory
+    .filter((f: any) => f.was_helpful === true)
+    .map((f: any) => {
+      const data = f.recommendation_data as any;
+      return data?.title || data?.contentAngle || '';
+    })
+    .filter(Boolean)
+    .slice(0, 5);
+
+  const unhelpfulAngles = feedbackHistory
+    .filter((f: any) => f.was_helpful === false)
+    .map((f: any) => {
+      const data = f.recommendation_data as any;
+      return data?.title || data?.contentAngle || '';
+    })
+    .filter(Boolean)
+    .slice(0, 5);
+
+  const feedbackCtx = helpfulAngles.length > 0 || unhelpfulAngles.length > 0
+    ? `\nCREATOR FEEDBACK HISTORY (learn from this — do not repeat rejected ideas):\n${
+        helpfulAngles.length > 0
+          ? `Ideas this creator found valuable (lean into these angles): ${helpfulAngles.join('; ')}`
+          : ''
+      }\n${
+        unhelpfulAngles.length > 0
+          ? `Ideas this creator rejected (avoid these angles entirely): ${unhelpfulAngles.join('; ')}`
+          : ''
+      }`
+    : '';
+
   const creatorIdentityCtx = voicePortrait ? `
 
 CREATOR VOICE IDENTITY (use this to filter and angle every idea):
@@ -278,7 +310,7 @@ ${topTopics.length > 0 ? `- Topics ARIA has observed them return to repeatedly: 
 CRITICAL RULE: Every single idea must be filtered through this identity.
 A trend idea that does not fit this creator's territory, audience, or constraints must be excluded.
 Reframe trends through the lens of what this specific creator uniquely does.
-Do not give generic trend angles. Give angles only this creator could execute.` : "";
+Do not give generic trend angles. Give angles only this creator could execute.${feedbackCtx}` : feedbackCtx;
 
   const prompt = `You are ARIA — India's creator intelligence engine.
 
@@ -359,7 +391,7 @@ export async function generateViralIdeas(params: {
   logger.info({ niches: userContext.niches, handle: userContext.instagramHandle }, "Generating viral ideas");
 
   // Fetch signals in parallel — single Groq call handles everything after
-  const [redditResult, ytResult, tiktokResult, pinterestResult, googleResult, voicePortraitResult, memoryResult] = await Promise.allSettled([
+  const [redditResult, ytResult, tiktokResult, pinterestResult, googleResult, voicePortraitResult, memoryResult, feedbackResult] = await Promise.allSettled([
     readRedditSignals(40),
     readYouTubeSignals(30),
     readTikTokSignals(30),
@@ -370,6 +402,17 @@ export async function generateViralIdeas(params: {
       const { getMemory } = await import("./aria_memory.service");
       return getMemory(userContext.userId);
     })(),
+    // NEW — read creator's feedback history
+    prisma.aria_feedback.findMany({
+      where:   { user_id: userContext.userId },
+      orderBy: { created_at: 'desc' },
+      take:    20,
+      select:  {
+        recommendation_type: true,
+        recommendation_data: true,
+        was_helpful:         true,
+      },
+    }),
   ]);
 
   const reddit    = redditResult.status    === "fulfilled" ? redditResult.value    : [];
@@ -379,11 +422,12 @@ export async function generateViralIdeas(params: {
   const gtrends   = googleResult.status    === "fulfilled" ? googleResult.value    : [];
   const voicePortrait = voicePortraitResult.status === "fulfilled" ? voicePortraitResult.value : null;
   const memory = memoryResult.status === "fulfilled" ? memoryResult.value : {};
+  const feedback  = feedbackResult.status  === "fulfilled" ? feedbackResult.value  : [];
 
   logger.info({
     reddit: reddit.length, youtube: youtube.length,
     tiktok: tiktok.length, pinterest: pinterest.length, gtrends: gtrends.length,
   }, "All signals collected");
 
-  return resolveAndSynthesize(reddit, youtube, tiktok, pinterest, gtrends, userContext, platform, followerRange, voicePortrait, memory);
+  return resolveAndSynthesize(reddit, youtube, tiktok, pinterest, gtrends, userContext, platform, followerRange, voicePortrait, memory, feedback);
 }
