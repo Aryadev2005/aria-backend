@@ -61,15 +61,21 @@ const TIKTOK_HASHTAGS = [
   "gym", "yoga", "cooking", "entrepreneur", "startup",
 ];
 
-// ── Pinterest queries — global coverage ───────────────────────────────────────
+// ── Pinterest queries — global coverage
+// fatihtahta/pinterest-scraper-search takes startUrls (Pinterest search URLs)
 const PINTEREST_QUERIES = [
-  "trending 2025", "viral content", "aesthetic", "home decor",
+  "trending", "viral content", "aesthetic", "home decor",
   "fashion outfits", "fitness motivation", "food recipes",
   "travel destinations", "beauty tips", "diy projects",
   "india trending", "bollywood style", "wedding india",
   "skincare routine", "minimalist", "boho style", "art ideas",
   "photography", "interior design", "healthy recipes",
 ];
+
+// Converts query strings into Pinterest search URLs as required by the actor
+function toPinterestSearchUrl(query: string): string {
+  return `https://www.pinterest.com/search/pins/?q=${encodeURIComponent(query)}`;
+}
 
 // ── Google Trends keywords ────────────────────────────────────────────────────
 const GOOGLE_TRENDS_KEYWORDS = [
@@ -263,8 +269,8 @@ async function scrapeYouTube(): Promise<number> {
 async function scrapeTikTok(client: any): Promise<number> {
   let total = 0;
   const expiresAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
-  const BATCH = 5;
-  const PER_TAG = 100;
+  const BATCH = 2; // Run 2 hashtag scrapes in parallel to avoid Apify memory spikes
+  const PER_TAG = 25; // Number of videos to fetch per hashtag (reduced from 100 to limit memory usage)
 
   for (let i = 0; i < TIKTOK_HASHTAGS.length; i += BATCH) {
     const batch = TIKTOK_HASHTAGS.slice(i, i + BATCH);
@@ -348,8 +354,9 @@ async function scrapeTikTok(client: any): Promise<number> {
 async function scrapePinterest(client: any): Promise<number> {
   let total = 0;
   const expiresAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
-  const BATCH = 5;
-  const PER_QUERY = 100;
+  // Run queries one at a time to avoid Apify memory spikes
+  const BATCH = 3;
+  const PER_QUERY = 50;
 
   for (let i = 0; i < PINTEREST_QUERIES.length; i += BATCH) {
     const batch = PINTEREST_QUERIES.slice(i, i + BATCH);
@@ -357,9 +364,9 @@ async function scrapePinterest(client: any): Promise<number> {
     const results = await Promise.allSettled(
       batch.map(async (query) => {
         try {
-          const run = await client.actor("joshuakane/pinterest-scraper").call({
-            searchQuery: query,
-            maxItems:    PER_QUERY,
+          const run = await client.actor("fatihtahta/pinterest-scraper-search").call({
+            startUrls: [toPinterestSearchUrl(query)],
+            maxItems:  PER_QUERY,
           });
           const dataset = await client.dataset(run.defaultDatasetId).listItems({ limit: PER_QUERY });
           return dataset.items as any[];
@@ -374,26 +381,49 @@ async function scrapePinterest(client: any): Promise<number> {
       if (r.status !== "fulfilled") continue;
       for (const item of r.value) {
         try {
-          const saves      = Number(item.saves || item.num_saves || 0);
-          const clicks     = Number(item.clicks || item.num_clicks || 0);
+          // fatihtahta actor returns: id, title, description, images, url,
+          // saves (repinCount), pinType, pinner (username/fullName), board
+          const saves       = Number(item.repinCount || item.saves || item.num_saves || 0);
+          const clicks      = Number(item.clicks || item.num_clicks || 0);
           const impressions = Number(item.impressions || item.num_impressions || 1);
-          const engagement = (saves + clicks) / Math.max(impressions, 1);
+          const engagement  = (saves + clicks) / Math.max(impressions, 1);
+
+          // Resolve image URL — actor returns images as object or string
+          const imageUrl =
+            item.images?.orig?.url ||
+            item.images?.["736x"]?.url ||
+            item.imageUrl ||
+            item.image ||
+            "";
+
+          // Resolve pin URL
+          const pinUrl = item.url || item.link || item.pin_link || "";
+
+          // Resolve creator
+          const boardOwner =
+            item.pinner?.username ||
+            item.pinner?.fullName ||
+            item.board_owner ||
+            "";
+          const boardName = item.board?.name || item.board_name || "";
+
+          const pinId = String(item.id || item.pinId || `pin_${Math.random()}`);
 
           await (prisma as any).discovery_pinterest_raw.upsert({
-            where:  { pinterest_id: String(item.id || item.pinId || `pin_${Math.random()}`) },
+            where:  { pinterest_id: pinId },
             create: {
-              pinterest_id:    String(item.id || item.pinId || ""),
+              pinterest_id:    pinId,
               title:           (item.title || item.description || "").substring(0, 300),
               description:     (item.description || "").substring(0, 500),
-              image_url:       item.image || item.imageUrl || "",
-              pin_url:         item.pin_link || item.url || "",
-              board_name:      item.board_name || "",
-              board_owner:     item.board_owner || "",
+              image_url:       imageUrl,
+              pin_url:         pinUrl,
+              board_name:      boardName,
+              board_owner:     boardOwner,
               saves:           BigInt(saves),
               clicks:          BigInt(clicks),
               engagement_rate: engagement,
               hashtags:        extractHashtags(item.description || ""),
-              pin_type:        item.pinType || "standard",
+              pin_type:        item.pinType || item.type || "standard",
               expires_at:      expiresAt,
               raw_data:        { source: "pinterest", scraped_at: new Date() },
             },
@@ -405,7 +435,7 @@ async function scrapePinterest(client: any): Promise<number> {
             },
           });
           total++;
-        } catch { /* skip */ }
+        } catch { /* skip individual pin failures */ }
       }
     }
     await new Promise((r) => setTimeout(r, 2000));
@@ -429,7 +459,7 @@ async function scrapeGoogleTrends(client: any): Promise<number> {
       searchTerms: GOOGLE_TRENDS_KEYWORDS,
       geo:         "",
       timeRange:   "now 1-d",
-      category:    0,
+      category:    "",   // must be string, not number
     });
 
     const dataset = await client.dataset(run.defaultDatasetId).listItems();

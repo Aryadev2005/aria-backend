@@ -93,75 +93,64 @@ function inferNicheTags(moodTags: string[], language: string): string[] {
 
 export async function scrapeSpotify(): Promise<SongRecord[]> {
   try {
-    logger.info("Scraping Spotify India daily charts...");
+    logger.info("Scraping Spotify India daily charts via CSV...");
 
     const { data } = await axios.get(
-      "https://charts.spotify.com/charts/view/regional-in-daily/latest",
+      "https://charts.spotify.com/charts/view/regional-in-daily/latest.csv",
       {
         headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-          Accept: "text/html,application/xhtml+xml",
+          "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+          "Accept": "text/csv,text/plain,*/*",
         },
         timeout: 15000,
+        responseType: "text",
       },
     );
 
-    const match = data.match(
-      /<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/,
-    );
-    if (!match) {
-      logger.warn("Spotify: could not find __NEXT_DATA__ in page");
-      return [];
-    }
+    // CSV format: rank,uri,artist_names,track_name,source,peak_rank,previous_rank,weeks_on_chart,streams
+    const lines = (data as string).trim().split("\n");
 
-    const parsed = JSON.parse(match[1]);
-    const entries: any[] =
-      parsed?.props?.pageProps?.chartEntryData ||
-      parsed?.props?.pageProps?.entries ||
-      [];
-
-    if (!entries.length) {
-      logger.warn("Spotify: empty entries array in chart data");
-      return [];
-    }
-
-    const songs: SongRecord[] = entries
+    // Skip header row
+    const songs: SongRecord[] = lines
+      .slice(1)
       .slice(0, 50)
-      .map((entry: any, i: number) => {
-        const meta = entry.trackMetadata || entry;
-        const chartData = entry.chartEntryData || {};
+      .map((line: string, i: number) => {
+        // Handle quoted CSV fields properly
+        const cols = line.match(/(".*?"|[^,]+)(?=\s*,|\s*$)/g) || line.split(",");
+        const clean = (s: string) => s?.replace(/^"|"$/g, "").trim() || "";
 
-        const title  = meta.trackName  || meta.name  || "Unknown";
-        const artist = (meta.artists || []).map((a: any) => a.name).join(", ") ||
-                       meta.artistName || "Unknown";
-        const rank   = chartData.currentRank  ?? i + 1;
-        const prev   = chartData.previousRank ?? rank;
-        const streams = BigInt(Math.round(chartData.rankingMetric?.value || 0));
+        const rank        = parseInt(clean(cols[0])) || i + 1;
+        const artist      = clean(cols[2]);
+        const title       = clean(cols[3]);
+        const peakRank    = parseInt(clean(cols[5])) || rank;
+        const prevRank    = parseInt(clean(cols[6])) || rank;
+        const streams     = BigInt(Math.round(parseFloat(clean(cols[8])) || 0));
 
-        const language = detectLanguage(title, artist);
-        const moodTags = inferMoodTags(title);
+        if (!title || title === "track_name") return null;
+
+        const language  = detectLanguage(title, artist);
+        const moodTags  = inferMoodTags(title);
         const nicheTags = inferNicheTags(moodTags, language);
 
         return {
           source:         "spotify",
-          title:          title.trim(),
-          artist:         artist.trim(),
+          title:          title,
+          artist:         artist,
           chart_position: rank,
-          chart_change:   prev - rank,     // positive means chart improved
+          chart_change:   prevRank - rank,
           streams_today:  streams,
           language,
           mood_tags:      moodTags,
           niche_tags:     nicheTags,
-          raw_data:       { entry, rank, prev },
+          raw_data:       { rank, peakRank, prevRank },
         } satisfies SongRecord;
       })
-      .filter((s) => s.title !== "Unknown");
+      .filter(Boolean) as SongRecord[];
 
-    logger.info({ count: songs.length }, "Spotify scrape complete");
+    logger.info({ count: songs.length }, "Spotify CSV scrape complete");
     return songs;
   } catch (err: any) {
-    logger.warn({ err: err.message }, "Spotify scrape failed — skipping source");
+    logger.warn({ err: err.message }, "Spotify CSV scrape failed — skipping source");
     return [];
   }
 }
@@ -169,120 +158,123 @@ export async function scrapeSpotify(): Promise<SongRecord[]> {
 // ── Source 2: JioSaavn Trending ───────────────────────────────────────────────
 
 export async function scrapeJioSaavn(): Promise<SongRecord[]> {
-  try {
-    logger.info("Scraping JioSaavn trending...");
+  // Try 3 endpoints in order — first success wins
+  return (
+    (await _jiosaavnTrending())     ||
+    (await _jiosaavnTopCharts())    ||
+    (await _jiosaavnSearchFallback()) ||
+    []
+  );
+}
 
-    // JioSaavn public web API — no auth required
+// Attempt 1: trending songs API (most accurate)
+async function _jiosaavnTrending(): Promise<SongRecord[] | null> {
+  try {
+    logger.info("JioSaavn: trying trending songs endpoint...");
     const { data } = await axios.get("https://www.jiosaavn.com/api.php", {
       params: {
-        __call:    "webapi.get",
-        _format:   "json",
-        _marker:   "0",
-        ctx:       "web6dot0",
-        n:         50,
-        p:         1,
-        query:     "trending",
-        type:      "playlist",
-        id:        "2001282063", // JioSaavn "Trending Today" playlist ID
+        __call:   "song.getTrending",
+        _format:  "json",
+        _marker:  "0",
+        ctx:      "web6dot0",
+        entity_type: "song",
+        entity_language: "hindi,english,punjabi",
+        n:        50,
+        p:        1,
       },
-      headers: {
-        "User-Agent": "Mozilla/5.0",
-        Referer:      "https://www.jiosaavn.com/",
-      },
+      headers: { "User-Agent": "Mozilla/5.0", Referer: "https://www.jiosaavn.com/" },
       timeout: 12000,
     });
 
-    // Try songs array from multiple possible shapes
-    const rawSongs: any[] =
-      data?.songs ||
-      data?.list ||
-      data?.results ||
-      (Array.isArray(data) ? data : []);
+    const rawSongs: any[] = Array.isArray(data) ? data : (data?.results || data?.songs || []);
+    if (!rawSongs.length) return null;
 
-    if (!rawSongs.length) {
-      // Fallback: fetch top charts
-      return scrapeJioSaavnCharts();
-    }
-
-    const songs: SongRecord[] = rawSongs
-      .slice(0, 40)
-      .map((song: any, i: number) => {
-        const title   = song.title  || song.song  || "Unknown";
-        const artist  = song.primary_artists || song.more_info?.primary_artists || "Unknown";
-        const lang    = song.language || detectLanguage(title, artist);
-        const moodTags  = inferMoodTags(title);
-        const nicheTags = inferNicheTags(moodTags, lang);
-
-        return {
-          source:         "jiosaavn",
-          title:          decodeHtmlEntities(title.trim()),
-          artist:         decodeHtmlEntities(artist.trim()),
-          chart_position: i + 1,
-          chart_change:   0,
-          streams_today:  BigInt(song.play_count || 0),
-          language:       capitaliseFirst(lang),
-          mood_tags:      moodTags,
-          niche_tags:     nicheTags,
-          raw_data:       { songId: song.id, language: song.language },
-        } satisfies SongRecord;
-      })
-      .filter((s) => s.title !== "Unknown");
-
-    logger.info({ count: songs.length }, "JioSaavn trending scrape complete");
-    return songs;
-  } catch (err: any) {
-    logger.warn({ err: err.message }, "JioSaavn trending scrape failed — trying charts fallback");
-    return scrapeJioSaavnCharts();
+    return _mapJioSaavnSongs(rawSongs, 40);
+  } catch {
+    return null;
   }
 }
 
-async function scrapeJioSaavnCharts(): Promise<SongRecord[]> {
+// Attempt 2: top songs via webapi (reliable fallback)
+async function _jiosaavnTopCharts(): Promise<SongRecord[] | null> {
   try {
+    logger.info("JioSaavn: trying top songs fallback...");
     const { data } = await axios.get("https://www.jiosaavn.com/api.php", {
       params: {
-        __call:  "content.getCharts",
+        __call:  "webapi.get",
         _format: "json",
         _marker: "0",
         ctx:     "web6dot0",
-        n:       20,
+        token:   "ze2Qe7oCVGTF4J4w",  // JioSaavn India Top 50 — stable public token
+        type:    "playlist",
+        n:       50,
+        p:       1,
+      },
+      headers: { "User-Agent": "Mozilla/5.0", Referer: "https://www.jiosaavn.com/" },
+      timeout: 12000,
+    });
+
+    const rawSongs: any[] = data?.songs || data?.list || [];
+    if (!rawSongs.length) return null;
+
+    return _mapJioSaavnSongs(rawSongs, 40);
+  } catch {
+    return null;
+  }
+}
+
+// Attempt 3: search "trending" and pull song results
+async function _jiosaavnSearchFallback(): Promise<SongRecord[] | null> {
+  try {
+    logger.info("JioSaavn: trying search fallback...");
+    const { data } = await axios.get("https://www.jiosaavn.com/api.php", {
+      params: {
+        __call:  "search.getResults",
+        _format: "json",
+        _marker: "0",
+        ctx:     "web6dot0",
+        query:   "trending hindi 2025",
+        n:       40,
         p:       1,
       },
       headers: { "User-Agent": "Mozilla/5.0", Referer: "https://www.jiosaavn.com/" },
       timeout: 10000,
     });
 
-    const charts: any[] = Array.isArray(data) ? data : data?.charts || [];
+    const rawSongs: any[] = data?.results || [];
+    if (!rawSongs.length) return null;
 
-    const songs: SongRecord[] = charts
-      .slice(0, 20)
-      .map((chart: any, i: number) => {
-        const title   = chart.title || "Unknown";
-        const artist  = chart.subtitle || "Various Artists";
-        const lang    = detectLanguage(title, artist);
-        const moodTags  = inferMoodTags(title);
-        const nicheTags = inferNicheTags(moodTags, lang);
-
-        return {
-          source:         "jiosaavn",
-          title:          decodeHtmlEntities(title.trim()),
-          artist:         decodeHtmlEntities(artist.trim()),
-          chart_position: i + 1,
-          chart_change:   0,
-          streams_today:  BigInt(0),
-          language:       capitaliseFirst(lang),
-          mood_tags:      moodTags,
-          niche_tags:     nicheTags,
-          raw_data:       { chartId: chart.id },
-        } satisfies SongRecord;
-      })
-      .filter((s) => s.title !== "Unknown");
-
-    logger.info({ count: songs.length }, "JioSaavn charts fallback complete");
-    return songs;
-  } catch (err: any) {
-    logger.warn({ err: err.message }, "JioSaavn charts fallback failed");
-    return [];
+    return _mapJioSaavnSongs(rawSongs, 30);
+  } catch {
+    return null;
   }
+}
+
+// Shared mapper for all JioSaavn responses
+function _mapJioSaavnSongs(rawSongs: any[], limit: number): SongRecord[] {
+  return rawSongs
+    .slice(0, limit)
+    .map((song: any, i: number) => {
+      const title  = song.title || song.song || "Unknown";
+      const artist = song.primary_artists || song.more_info?.primary_artists || song.subtitle || "Unknown";
+      const lang   = song.language || detectLanguage(title, artist);
+      const moodTags  = inferMoodTags(title);
+      const nicheTags = inferNicheTags(moodTags, lang);
+
+      return {
+        source:         "jiosaavn",
+        title:          decodeHtmlEntities(title.trim()),
+        artist:         decodeHtmlEntities(artist.trim()),
+        chart_position: i + 1,
+        chart_change:   0,
+        streams_today:  BigInt(song.play_count || 0),
+        language:       capitaliseFirst(lang),
+        mood_tags:      moodTags,
+        niche_tags:     nicheTags,
+        raw_data:       { songId: song.id, language: song.language },
+      } satisfies SongRecord;
+    })
+    .filter((s) => s.title !== "Unknown");
 }
 
 // ── Source 3: YouTube Music Trending ──────────────────────────────────────────

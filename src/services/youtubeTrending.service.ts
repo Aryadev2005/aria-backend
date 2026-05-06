@@ -3,6 +3,20 @@ import { logger } from '../utils/logger';
 
 const YT_API_BASE = 'https://www.googleapis.com/youtube/v3';
 
+// YouTube video category IDs for India — each gives up to 50 trending videos
+const YT_TREND_CATEGORIES = [
+  { id: "0",  label: "All"          },  // general trending (your current call)
+  { id: "10", label: "Music"        },
+  { id: "17", label: "Sports"       },
+  { id: "20", label: "Gaming"       },
+  { id: "22", label: "PeopleBlogs"  },
+  { id: "23", label: "Comedy"       },
+  { id: "24", label: "Entertainment"},
+  { id: "25", label: "NewsPolitics" },
+  { id: "26", label: "HowtoStyle"   },
+  { id: "28", label: "SciTech"      },
+];
+
 // Niche category IDs for YouTube India
 const YT_CATEGORY_MAP: Record<string, string> = {
   '1':  'film',
@@ -96,49 +110,72 @@ export const fetchYouTubeTrending = async (): Promise<YouTubeTrend[] | null> => 
   }
 
   try {
-    logger.info('Fetching YouTube trending videos for India...');
+    logger.info('Fetching YouTube trending videos for India across categories...');
 
-    // Fetch top 50 trending videos in India
-    const response = await axios.get(`${YT_API_BASE}/videos`, {
-      params: {
-        part: 'snippet,statistics,contentDetails',
-        chart: 'mostPopular',
-        regionCode: 'IN',
-        maxResults: 50,
-        key: apiKey,
-      },
-      timeout: 15000,
-    });
+    // Fetch all categories in parallel — each gives up to 50 videos
+    const categoryResults = await Promise.allSettled(
+      YT_TREND_CATEGORIES.map(async (cat) => {
+        const params: any = {
+          part:        'snippet,statistics,contentDetails',
+          chart:       'mostPopular',
+          regionCode:  'IN',
+          maxResults:  50,
+          key:         apiKey,
+        };
+        // Category "0" means no filter — general trending
+        if (cat.id !== "0") {
+          params.videoCategoryId = cat.id;
+        }
 
-    const videos = response.data?.items || [];
+        const response = await axios.get(`${YT_API_BASE}/videos`, {
+          params,
+          timeout: 15000,
+        });
+        return response.data?.items || [];
+      })
+    );
 
-    if (videos.length === 0) {
-      logger.warn('YouTube API returned 0 trending videos');
+    // Merge all results and deduplicate by videoId
+    const seen = new Set<string>();
+    const allVideos: any[] = [];
+
+    for (const result of categoryResults) {
+      if (result.status !== "fulfilled") continue;
+      for (const video of result.value) {
+        if (!seen.has(video.id)) {
+          seen.add(video.id);
+          allVideos.push(video);
+        }
+      }
+    }
+
+    if (allVideos.length === 0) {
+      logger.warn('YouTube API returned 0 trending videos across all categories');
       return null;
     }
 
-    // Transform to ARIA trend format
-    const trends: YouTubeTrend[] = videos.map((video: any) => {
-      const snippet    = video.snippet || {};
-      const stats      = video.statistics || {};
-      const title      = snippet.title || '';
-      const channel    = snippet.channelTitle || '';
-      const viewCount  = parseInt(stats.viewCount) || 0;
-      const likeCount  = parseInt(stats.likeCount) || 0;
+    // Transform to ARIA trend format (same logic as before)
+    const trends: YouTubeTrend[] = allVideos.map((video: any) => {
+      const snippet      = video.snippet || {};
+      const stats        = video.statistics || {};
+      const title        = snippet.title || '';
+      const channel      = snippet.channelTitle || '';
+      const viewCount    = parseInt(stats.viewCount) || 0;
+      const likeCount    = parseInt(stats.likeCount) || 0;
       const commentCount = parseInt(stats.commentCount) || 0;
-      const categoryId = snippet.categoryId || '22';
+      const categoryId   = snippet.categoryId || '22';
 
       const nicheFromCategory = YT_CATEGORY_MAP[categoryId] || 'general';
       const nicheFromKeywords = detectNiches(`${title} ${snippet.description || ''}`);
       const allNiches = [...new Set([nicheFromCategory, ...nicheFromKeywords])];
 
       return {
-        title:        title,
+        title,
         search_volume: viewCount,
-        velocity:     calculateVelocity(viewCount, likeCount, commentCount),
-        niche_tags:   allNiches,
+        velocity:      calculateVelocity(viewCount, likeCount, commentCount),
+        niche_tags:    allNiches,
         platform_tags: { youtube: true, instagram: false },
-        source:       'youtube',
+        source:        'youtube',
         raw_data: {
           videoId:      video.id,
           channelTitle: channel,
@@ -152,10 +189,9 @@ export const fetchYouTubeTrending = async (): Promise<YouTubeTrend[] | null> => 
       };
     });
 
-    // Sort by velocity (engagement quality, not just raw views)
     trends.sort((a, b) => b.velocity - a.velocity);
 
-    logger.info({ count: trends.length }, 'YouTube trending fetched successfully');
+    logger.info({ count: trends.length, categories: YT_TREND_CATEGORIES.length }, 'YouTube trending fetched successfully');
     return trends;
 
   } catch (err: any) {
