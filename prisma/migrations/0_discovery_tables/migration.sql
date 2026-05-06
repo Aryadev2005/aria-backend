@@ -82,10 +82,12 @@ CREATE INDEX IF NOT EXISTS idx_gtrends_expires   ON discovery_google_trends_raw 
 CREATE INDEX IF NOT EXISTS idx_gtrends_geo       ON discovery_google_trends_raw (geo);
 
 -- Add title_source unique constraint on live_trends for normalisation upserts
--- (only if it doesn't already exist)
+-- (only if it doesn't already exist AND table exists)
 DO $$
 BEGIN
-  IF NOT EXISTS (
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables WHERE table_name = 'live_trends'
+  ) AND NOT EXISTS (
     SELECT 1 FROM pg_constraint WHERE conname = 'title_source'
   ) THEN
     ALTER TABLE live_trends ADD CONSTRAINT title_source UNIQUE (title, source);

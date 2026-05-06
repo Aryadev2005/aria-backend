@@ -1,7 +1,4 @@
 import { Queue } from "bullmq";
-import { PrismaClient } from "@prisma/client";
-
-const prisma = new PrismaClient();
 
 async function main() {
   const url = process.env.REDIS_URL || "redis://localhost:6379";
@@ -17,4 +14,4 @@ async function main() {
   await queue.close();
 }
 
-main().catch(console.error).finally(() => prisma.$disconnect());
+main().catch(console.error);
