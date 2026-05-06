@@ -782,6 +782,38 @@ async function processJob(job: Job): Promise<{
 
   await job.updateProgress(90);
 
+  // ── Pre-warm trend hot windows for all niches ─────────────────────────────
+  // This ensures the first request after a discovery run hits Redis in <5ms
+  try {
+    const { hybridRetrieve } = await import("../services/retrieval/hybrid-rag.service");
+    const NICHES = [
+      "lifestyle",
+      "fashion",
+      "fitness",
+      "gaming",
+      "tech",
+      "food",
+      "travel",
+      "comedy",
+      "education",
+      "general",
+    ];
+
+    for (const niche of NICHES) {
+      try {
+        await hybridRetrieve({ niche, forceRefresh: true });
+      } catch {
+        /* non-fatal — continue with next niche */
+      }
+    }
+    logger.info({ niches: NICHES.length }, "Trend hot windows pre-warmed");
+  } catch (err: any) {
+    logger.warn(
+      { err: err.message },
+      "Trend hot window pre-warm failed — non-fatal",
+    );
+  }
+
   // ── Cleanup expired ───────────────────────────────────────────────────────
   await cleanupExpired();
 

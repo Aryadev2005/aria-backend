@@ -253,6 +253,7 @@ export async function hybridRetrieve(
 ): Promise<HybridRetrievalResult> {
   const startTime = Date.now();
   const { niche, forceRefresh = false, limit = 10 } = options;
+  const RETRIEVAL_TIMEOUT_MS = 3000; // 3-second timeout guard
 
   // ─ Tier 1: Check hot window cache ─
   if (!forceRefresh) {
@@ -284,81 +285,122 @@ export async function hybridRetrieve(
     }
   }
 
-  // ─ Tier 2 + 3: Full retrieval ─
+  // ─ Tier 2 + 3: Full retrieval with timeout guard ─
   logger.info({ niche }, "Hot window MISS — performing full hybrid retrieval");
 
-  // Get related niches for broader vector search
-  const relatedNichesList = await getNicheCrossPollination(niche).catch(
-    () => [],
-  );
-  const searchNiches = [
-    niche,
-    ...relatedNichesList.slice(0, 2).map((r) => r.niche),
-  ];
+  // Build the full retrieval promise with timeout protection
+  const fullRetrievalPromise = (async () => {
+    // Parallel retrieval from all tiers — getNicheCrossPollination now runs
+    // in parallel instead of serially, saving ~500ms-1s
+    const [crossPollinationResult, liveSignalsResult, graphResult] =
+      await Promise.allSettled([
+        // Cross-pollination lookup (now parallel!)
+        getNicheCrossPollination(niche),
 
-  // Parallel retrieval from all tiers
-  const [liveSignalsResult, vectorResult, graphResult] =
-    await Promise.allSettled([
-      // Tier 2: Get live signals from DB
-      prisma.live_trends
-        .findMany({
-          where: {
-            expires_at: { gt: new Date() },
-            niche_tags: { hasSome: [niche] },
-          },
-          orderBy: { velocity: "desc" },
-          take: limit,
-          select: {
-            id: true,
-            title: true,
-            velocity: true,
-            badge: true,
-            source: true,
-            recommendation: true,
-            niche_tags: true,
-          },
-        })
-        .catch(() => []),
+        // Tier 2: Get live signals from DB
+        prisma.live_trends
+          .findMany({
+            where: {
+              expires_at: { gt: new Date() },
+              niche_tags: { hasSome: [niche] },
+            },
+            orderBy: { velocity: "desc" },
+            take: limit,
+            select: {
+              id: true,
+              title: true,
+              velocity: true,
+              badge: true,
+              source: true,
+              recommendation: true,
+              niche_tags: true,
+            },
+          })
+          .catch(() => []),
 
-      // Tier 2: Vector similarity search
-      findSimilarTrends(`${niche} trending content India`, {
+        // Tier 3: Knowledge graph context (called once with empty titles)
+        getGraphContextForNiche(
+          niche,
+          [], // Will use top titles from live signals for trajectories
+        ).catch(() => ({
+          platformLags: [],
+          relatedNiches: [],
+          trajectories: [],
+        })),
+      ]);
+
+    // Extract results
+    const relatedNichesList =
+      crossPollinationResult.status === "fulfilled"
+        ? (crossPollinationResult.value as any[])
+        : [];
+
+    const liveSignals =
+      liveSignalsResult.status === "fulfilled"
+        ? (liveSignalsResult.value as any[])
+        : [];
+
+    const graphContext =
+      graphResult.status === "fulfilled"
+        ? (graphResult.value as GraphContext)
+        : { platformLags: [], relatedNiches: [], trajectories: [] };
+
+    // Build search niches for vector search
+    const searchNiches = [
+      niche,
+      ...relatedNichesList.slice(0, 2).map((r) => r.niche),
+    ];
+
+    // Tier 2: Vector similarity search (now runs after we have search niches)
+    let vectorResults: SimilarTrendResult[] = [];
+    try {
+      vectorResults = await findSimilarTrends(`${niche} trending content India`, {
         limit,
         niches: searchNiches,
         minSimilarity: 0.25,
-      }).catch(() => []),
-
-      // Tier 3: Knowledge graph context
-      getGraphContextForNiche(
-        niche,
-        [], // Will populate with top trend titles below
-      ).catch(() => ({
-        platformLags: [],
-        relatedNiches: [],
-        trajectories: [],
-      })),
-    ]);
-
-  const liveSignals =
-    liveSignalsResult.status === "fulfilled"
-      ? (liveSignalsResult.value as any[])
-      : [];
-  const vectorResults =
-    vectorResult.status === "fulfilled"
-      ? (vectorResult.value as SimilarTrendResult[])
-      : [];
-  const graphContext =
-    graphResult.status === "fulfilled"
-      ? (graphResult.value as GraphContext)
-      : { platformLags: [], relatedNiches: [], trajectories: [] };
-
-  // If we got live signals, also fetch their trajectories
-  if (liveSignals.length > 0 && graphContext.trajectories.length === 0) {
-    try {
-      const topTitles = liveSignals.slice(0, 5).map((s: any) => s.title);
-      const ctx = await getGraphContextForNiche(niche, topTitles);
-      graphContext.trajectories = ctx.trajectories;
+      });
     } catch {
-      // Non-critical
+      vectorResults = [];
+    }
+
+    return { liveSignals, vectorResults, graphContext };
+  })();
+
+  // Race timeout against full retrieval
+  const timeoutPromise = new Promise<never>((_, reject) =>
+    setTimeout(
+      () => reject(new Error("retrieval timeout")),
+      RETRIEVAL_TIMEOUT_MS,
+    ),
+  );
+
+  let liveSignals: any[] = [];
+  let vectorResults: SimilarTrendResult[] = [];
+  let graphContext: GraphContext = {
+    platformLags: [],
+    relatedNiches: [],
+    trajectories: [],
+  };
+  let timedOut = false;
+
+  try {
+    const result = await Promise.race([
+      fullRetrievalPromise,
+      timeoutPromise,
+    ]);
+    liveSignals = result.liveSignals;
+    vectorResults = result.vectorResults;
+    graphContext = result.graphContext;
+  } catch (err: any) {
+    if (err.message === "retrieval timeout") {
+      timedOut = true;
+      logger.warn(
+        { niche },
+        "Hybrid retrieval timed out after 3s — returning empty narrative for fast response",
+      );
+    } else {
+      // Some other error — log but continue with empty results
+      logger.error({ niche, err: err.message }, "Hybrid retrieval error");
     }
   }
 
