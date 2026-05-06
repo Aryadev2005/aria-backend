@@ -207,6 +207,43 @@ async function readGoogleTrendsSignals(limit = 20): Promise<any[]> {
   }
 }
 
+// ── Fallback: generate synthetic signals from YouTube when a source is empty ──
+// Used when Pinterest/Google Trends tables have no data yet
+function buildFallbackSignals(
+  ytSignals: any[],
+  tiktokSignals: any[],
+  source: "pinterest_global" | "google_trends_global",
+  limit: number,
+): any[] {
+  // Derive fallback signals from YouTube + TikTok titles as proxy topics
+  const combined = [
+    ...ytSignals.map(v => ({ title: v.title, score: v.views || 70 })),
+    ...tiktokSignals.map(v => ({ title: v.title, score: v.views || 60 })),
+  ]
+    .filter(s => s.title)
+    .slice(0, limit);
+
+  if (source === "pinterest_global") {
+    return combined.map(s => ({
+      title:    s.title.substring(0, 100),
+      saves:    s.score,
+      board:    "trending",
+      hashtags: "",
+      source:   "pinterest_global",
+      isFallback: true,
+    }));
+  }
+
+  return combined.map(s => ({
+    title:    s.title.substring(0, 100),
+    score:    70,
+    breakout: false,
+    related:  "",
+    source:   "google_trends_global",
+    isFallback: true,
+  }));
+}
+
 // ── Single Groq call: resolves subreddits + synthesizes 10 ideas ─────────────
 // Merging niche resolution + idea synthesis into ONE call to avoid rate limits
 async function resolveAndSynthesize(
@@ -334,16 +371,28 @@ LIVE SIGNALS:
 ${redditCtx}${ytCtx}${tiktokCtx}${pinterestCtx}${googleCtx}
 
 YOUR TASK:
-Generate 10 specific, actionable content IDEAS for this creator using the live signals above and their CONFIRMED NICHE.
+Generate exactly 20 specific, actionable content ideas for this creator.
+
+MANDATORY SOURCE DISTRIBUTION — you must follow this exactly:
+- 4 ideas sourced from REDDIT signals above (source: "reddit")
+- 4 ideas sourced from YOUTUBE signals above (source: "youtube")  
+- 4 ideas sourced from TIKTOK signals above (source: "tiktok")
+- 4 ideas sourced from PINTEREST signals above (source: "pinterest")
+- 4 ideas sourced from GOOGLE TRENDS signals above (source: "google_trends")
+
+If a source has fewer signals than needed, still generate 4 ideas for it — infer related trends in the creator's niche from that source's style (Pinterest = visual/aesthetic angles, Google Trends = search-intent angles, etc.)
 
 RULES:
-1. Each idea must be inspired by the live signals (or current niche trends if signals unavailable)
+1. Each idea must directly reference the signal it came from — name it in whyNow
 2. Content angle must be SPECIFIC — exact video concept, not a vague topic
-3. Use Indian context — ₹ prices, Indian brands (Myntra, Meesho, Nykaa, Zerodha), Indian culture
-4. WhyNow must explain the 48-72h urgency tied to actual signals
-5. HOT = breakout signal or <6h old. RISING = strong growth. NEW = emerging
-6. MUST match what this creator actually makes — not generic content
-7. Format: Reel for quick trends, Carousel for educational, Short for challenges, Video for deep dives
+3. Idea must match the CONFIRMED NICHE — do not generate off-niche ideas
+4. Hook must be the exact first 3 seconds of the video (actual words to say or show)
+5. formatSuggestion must be one of: Reel 30s | Reel 60s | Carousel | YouTube Short | Talking Head
+6. velocityScore must be 60-99 based on signal strength
+7. badge: HOT if score>80, RISING if 65-80, NEW if <65
+8. growthSignal must reference actual numbers from the signal (views, upvotes, saves)
+9. MUST match what this creator actually makes — not generic content
+10. Use Indian context — ₹ prices, Indian brands (Myntra, Meesho, Nykaa, Zerodha), Indian culture
 
 Respond ONLY with valid JSON:
 {
@@ -354,18 +403,19 @@ Respond ONLY with valid JSON:
       "contentAngle": "Exact video concept",
       "whyNow": "One sentence urgency tied to actual signal",
       "personalReason": "One sentence explaining why this specific trend was picked for this creator based on their identity, voice, or audience",
-      "formatSuggestion": "Reel|Carousel|Short|Video",
+      "formatSuggestion": "Reel 30s | Reel 60s | Carousel | YouTube Short | Talking Head",
       "velocityScore": 88,
       "badge": "HOT|RISING|NEW",
       "growthSignal": "actual signal e.g. '2.4K upvotes in 3h on r/Entrepreneur'",
       "geo": "GLOBAL",
-      "source": "reddit_rising",
+      "source": "reddit",
+      "sourcePlatform": "reddit | youtube | tiktok | pinterest | google_trends",
       "niche": "resolved niche"
     }
   ]
 }`;
 
-  const result = await _callGroq(prompt, { useLlama: false, maxTokens: 2500 });
+  const result = await _callGroq(prompt, { useLlama: false, maxTokens: 6000 });
 
   if (!result?.ideas || !Array.isArray(result.ideas)) {
     logger.warn({ result }, "Groq returned invalid ideas structure");
@@ -374,7 +424,7 @@ Respond ONLY with valid JSON:
 
   logger.info({ resolvedNiche: result.resolvedNiche }, "Niche resolved by Groq");
 
-  return result.ideas.slice(0, 10).map((idea: any, idx: number) => ({
+  return result.ideas.slice(0, 20).map((idea: any, idx: number) => ({
     ...idea,
     id: `idea_${Date.now()}_${idx}`,
   }));
@@ -415,11 +465,22 @@ export async function generateViralIdeas(params: {
     }),
   ]);
 
-  const reddit    = redditResult.status    === "fulfilled" ? redditResult.value    : [];
-  const youtube   = ytResult.status        === "fulfilled" ? ytResult.value        : [];
-  const tiktok    = tiktokResult.status    === "fulfilled" ? tiktokResult.value    : [];
-  const pinterest = pinterestResult.status === "fulfilled" ? pinterestResult.value : [];
-  const gtrends   = googleResult.status    === "fulfilled" ? googleResult.value    : [];
+  const reddit  = redditResult.status  === "fulfilled" ? redditResult.value  : [];
+  const youtube = ytResult.status      === "fulfilled" ? ytResult.value      : [];
+  const tiktok  = tiktokResult.status  === "fulfilled" ? tiktokResult.value  : [];
+
+  // Use real data if available, otherwise fall back to derived signals
+  const pinterestRaw = pinterestResult.status === "fulfilled" ? pinterestResult.value : [];
+  const gtrendsRaw   = googleResult.status    === "fulfilled" ? googleResult.value    : [];
+
+  const pinterest = pinterestRaw.length > 0
+    ? pinterestRaw
+    : buildFallbackSignals(youtube, tiktok, "pinterest_global", 8);
+
+  const gtrends = gtrendsRaw.length > 0
+    ? gtrendsRaw
+    : buildFallbackSignals(youtube, tiktok, "google_trends_global", 8);
+
   const voicePortrait = voicePortraitResult.status === "fulfilled" ? voicePortraitResult.value : null;
   const memory = memoryResult.status === "fulfilled" ? memoryResult.value : {};
   const feedback  = feedbackResult.status  === "fulfilled" ? feedbackResult.value  : [];
