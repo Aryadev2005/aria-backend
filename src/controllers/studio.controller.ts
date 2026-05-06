@@ -1,6 +1,8 @@
 import { FastifyRequest, FastifyReply } from "fastify";
 import * as studioSvc from "../services/studio.service";
 import * as videoSvc from "../services/videoAnalysis.service";
+import { extractScriptLearnings, IntentLabel } from "../services/studio_learning.service";
+import { prisma } from "../config/database";
 import { success, errors } from "../utils/response";
 import { logger } from "../utils/logger";
 import path from "path";
@@ -220,21 +222,141 @@ export const saveSession = async (
   reply: FastifyReply,
 ) => {
   const user = req.user as User;
-  const { idea, platform, niche, scriptStructure, bgmSuggestions, shotList } =
-    req.body as any;
+  const {
+    idea,
+    platform,
+    niche,
+    generatedScript,
+    editedScript,
+    bgmSuggestions,
+    shotList,
+    pinned,
+  } = req.body as any;
 
   try {
-    const sessionId = await studioSvc.saveStudioSession(user.id, {
-      idea,
-      platform,
-      niche,
-      scriptStructure,
-      bgmSuggestions,
-      shotList,
+    const session = await (prisma as any).studio_scripts.create({
+      data: {
+        user_id: user.id,
+        idea,
+        platform: platform || user.primary_platform || 'instagram',
+        niche: niche || user.niches?.[0] || 'general',
+        archetype: user.archetype || 'CREATOR',
+        generated_script: generatedScript || {},
+        edited_script: editedScript || {},
+        bgm_suggestions: bgmSuggestions || {},
+        shot_list: shotList || {},
+        pinned: pinned || false,
+      },
+      select: { id: true },
     });
-    return success(reply, { sessionId, saved: true });
+
+    return success(reply, { sessionId: session.id });
   } catch (err) {
-    logger.error({ err }, "Session save failed");
+    logger.error({ err }, 'saveSession failed');
+    return errors.internal(reply);
+  }
+};
+
+/**
+ * Learn from editor feedback
+ */
+export const learnFromEdit = async (
+  req: FastifyRequest<{ Body: any }>,
+  reply: FastifyReply,
+) => {
+  const user = req.user as User;
+  const {
+    generatedSections,
+    editedSections,
+    intentLabel,
+    sessionId,
+  } = req.body as any;
+
+  if (!generatedSections || !editedSections || !intentLabel) {
+    return errors.validation(reply, 'Missing required fields');
+  }
+
+  try {
+    // Run learning extraction
+    await extractScriptLearnings({
+      userId: user.id,
+      generatedSections,
+      editedSections,
+      intentLabel: intentLabel as IntentLabel,
+    });
+
+    // Update the session with the edited script
+    if (sessionId) {
+      await (prisma as any).studio_scripts.updateMany({
+        where: { id: sessionId, user_id: user.id },
+        data: { edited_script: { sections: editedSections }, updated_at: new Date() },
+      });
+    }
+
+    return success(reply, { learned: true });
+  } catch (err) {
+    logger.error({ err }, 'learnFromEdit failed');
+    return errors.internal(reply);
+  }
+};
+
+/**
+ * Get script history
+ */
+export const getScriptHistory = async (
+  req: FastifyRequest<{ Body: any }>,
+  reply: FastifyReply,
+) => {
+  const user = req.user as User;
+  try {
+    const scripts = await (prisma as any).studio_scripts.findMany({
+      where: { user_id: user.id },
+      orderBy: [{ pinned: 'desc' }, { created_at: 'desc' }],
+      take: 50,
+      select: {
+        id: true,
+        idea: true,
+        platform: true,
+        niche: true,
+        pinned: true,
+        created_at: true,
+        edited_script: true,
+        generated_script: true,
+      },
+    });
+    return success(reply, scripts);
+  } catch (err) {
+    logger.error({ err }, 'getScriptHistory failed');
+    return errors.internal(reply);
+  }
+};
+
+/**
+ * Toggle pin status of a script
+ */
+export const togglePin = async (
+  req: FastifyRequest<{ Body: any; Params: any }>,
+  reply: FastifyReply,
+) => {
+  const user = req.user as User;
+  const { scriptId } = req.params as any;
+
+  try {
+    const existing = await (prisma as any).studio_scripts.findFirst({
+      where: { id: scriptId, user_id: user.id },
+      select: { pinned: true },
+    });
+
+    if (!existing) return errors.notFound(reply, 'Script');
+
+    await (prisma as any).studio_scripts.update({
+      where: { id: scriptId },
+      data: { pinned: !existing.pinned },
+    });
+
+    return success(reply, { pinned: !existing.pinned });
+  } catch (err) {
+    logger.error({ err }, 'togglePin failed');
     return errors.internal(reply);
   }
 };

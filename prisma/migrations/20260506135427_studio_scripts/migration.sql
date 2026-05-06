@@ -180,6 +180,25 @@ CREATE TABLE "discovery_reddit_raw" (
     CONSTRAINT "discovery_reddit_raw_pkey" PRIMARY KEY ("id")
 );
 
+-- CreateTable
+CREATE TABLE "studio_scripts" (
+    "id" TEXT NOT NULL,
+    "user_id" TEXT NOT NULL,
+    "idea" TEXT NOT NULL,
+    "platform" TEXT NOT NULL DEFAULT 'instagram',
+    "niche" TEXT NOT NULL DEFAULT 'general',
+    "archetype" TEXT NOT NULL DEFAULT 'CREATOR',
+    "generated_script" JSONB NOT NULL DEFAULT '{}',
+    "edited_script" JSONB NOT NULL DEFAULT '{}',
+    "bgm_suggestions" JSONB NOT NULL DEFAULT '{}',
+    "shot_list" JSONB NOT NULL DEFAULT '{}',
+    "pinned" BOOLEAN NOT NULL DEFAULT false,
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "studio_scripts_pkey" PRIMARY KEY ("id")
+);
+
 -- CreateIndex
 CREATE UNIQUE INDEX "song_hot_window_cache_key_key" ON "song_hot_window"("cache_key");
 
@@ -221,6 +240,12 @@ CREATE INDEX "discovery_reddit_raw_expires_at_idx" ON "discovery_reddit_raw"("ex
 
 -- CreateIndex
 CREATE INDEX "discovery_reddit_raw_subreddit_idx" ON "discovery_reddit_raw"("subreddit");
+
+-- CreateIndex
+CREATE INDEX "studio_scripts_user_id_idx" ON "studio_scripts"("user_id");
+
+-- CreateIndex
+CREATE INDEX "studio_scripts_user_id_pinned_idx" ON "studio_scripts"("user_id", "pinned");
 
 -- CreateIndex
 CREATE INDEX "idx_live_songs_lang_lifecycle" ON "live_songs"("language", "lifecycle");

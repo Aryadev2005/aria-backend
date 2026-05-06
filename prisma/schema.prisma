@@ -640,3 +640,22 @@ model creator_voice_profiles {
   @@index([user_id])
   @@index([next_rebuild_at])
 }
+
+model studio_scripts {
+  id               String   @id @default(cuid())
+  user_id          String
+  idea             String
+  platform         String   @default("instagram")
+  niche            String   @default("general")
+  archetype        String   @default("CREATOR")
+  generated_script Json     @default("{}")
+  edited_script    Json     @default("{}")
+  bgm_suggestions  Json     @default("{}")
+  shot_list        Json     @default("{}")
+  pinned           Boolean  @default(false)
+  created_at       DateTime @default(now())
+  updated_at       DateTime @updatedAt
+
+  @@index([user_id])
+  @@index([user_id, pinned])
+}

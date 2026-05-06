@@ -4,6 +4,35 @@ import { logger } from "../utils/logger";
 import { getSongsForBGM } from "./songs/song.rag.service";
 import { getVoicePortrait } from "./voice.service";
 
+// ── Fetch studio learnings for a user from aria_memory ────────────────────────
+const getStudioLearnings = async (userId: string): Promise<string> => {
+  try {
+    const rows = await (prisma as any).aria_memory.findMany({
+      where: {
+        user_id: userId,
+        category: { in: ['style', 'voice'] },
+      },
+      select: { category: true, key: true, value: true },
+    });
+
+    if (!rows.length) return '';
+
+    const lines: string[] = [];
+    for (const row of rows) {
+      try {
+        const val = JSON.parse(row.value);
+        lines.push(`${row.category}.${row.key}: ${JSON.stringify(val)}`);
+      } catch {
+        lines.push(`${row.category}.${row.key}: ${row.value}`);
+      }
+    }
+
+    return `\nCREATOR VOICE PREFERENCES LEARNED FROM PAST SCRIPTS:\n${lines.join('\n')}\nApply these preferences silently — do not mention them in output.\n`;
+  } catch (err) {
+    return '';
+  }
+};
+
 let _openai: OpenAI | null = null;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
 const groq = () => {
@@ -47,6 +76,9 @@ export const generateScriptStructure = async ({
   // Load voice portrait for personalization
   const voicePortrait = await getVoicePortrait(userId).catch(() => null);
 
+  // Pull learned preferences from ARIA memory
+  const learnedPreferences = await getStudioLearnings(userId);
+
   const voiceRulesCtx = voicePortrait ? `
 
 CREATOR VOICE RULES (mandatory — override generic advice):
@@ -66,15 +98,13 @@ Write it as if you know this person and their audience personally.` : "";
 
   const prompt = `You are ARIA — India's top content strategist.
 
-Generate a SCRIPT STRUCTURE (not the full script — a skeleton the creator fills in).
-
 Creator: ${archetype} | Niche: ${niche} | Platform: ${platform}
 Idea: "${idea}"
 Format: ${format || (isYouTube ? "YouTube 8min" : "Reel 30s")}
 Mood: ${mood || "informative"} | Collab: ${collaboration || "solo"}
 Angle: "${angle || "general"}"
 Followers: ${followerRange || "10K-50K"}
-
+${learnedPreferences}
 RULES:
 - Give EXACT words for the hook (first 3 seconds). This is the most important line.
 - Each section has: duration, what to say/show, ARIA tip
