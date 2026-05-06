@@ -118,6 +118,23 @@ const HTTP = axios.create({
   },
 });
 
+// ── Apify quota check guard ───────────────────────────────────────────────────
+// Prevents spam warnings when monthly quota is exhausted
+async function checkApifyQuota(client: any): Promise<boolean> {
+  try {
+    const user = await client.user().get();
+    const used  = user?.monthlyUsage?.actorComputeUnits || 0;
+    const limit = user?.plan?.monthlyActorComputeUnits || 0;
+    if (limit > 0 && used >= limit * 0.98) {
+      logger.warn({ used, limit }, "Apify monthly quota exhausted — skipping TikTok/Pinterest/Google Trends");
+      return false;
+    }
+    return true;
+  } catch {
+    return true; // if check fails, try anyway
+  }
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // SOURCE 1: Reddit
 // ════════════════════════════════════════════════════════════════════════════
@@ -127,8 +144,8 @@ async function scrapeReddit(): Promise<number> {
   const expiresAt = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000); // 3 days
   let total = 0;
 
-  // Process subreddits in batches of 5 to avoid rate limiting
-  const BATCH_SIZE = 5;
+  // Process subreddits in batches of 3 to avoid rate limiting (reduced from 5)
+  const BATCH_SIZE = 3;
   for (let i = 0; i < REDDIT_SUBREDDITS.length; i += BATCH_SIZE) {
     const batch = REDDIT_SUBREDDITS.slice(i, i + BATCH_SIZE);
 
@@ -136,6 +153,8 @@ async function scrapeReddit(): Promise<number> {
       batch.flatMap((sub) =>
         ["rising", "hot"].map(async (feed) => {
           try {
+            // Add random jitter (0-1s) before each request to spread load
+            await new Promise((r) => setTimeout(r, Math.random() * 1000));
             const { data } = await HTTP.get(
               `https://www.reddit.com/r/${sub}/${feed}.json?limit=25&raw_json=1`,
             );
@@ -197,8 +216,8 @@ async function scrapeReddit(): Promise<number> {
       ),
     );
 
-    // Pause between batches to avoid Reddit rate limiting
-    await new Promise((r) => setTimeout(r, 1500));
+    // Pause between batches to avoid Reddit rate limiting (increased from 1500ms to 3000ms)
+    await new Promise((r) => setTimeout(r, 3000));
   }
 
   logger.info({ total }, "Reddit global scrape complete");
@@ -732,19 +751,27 @@ async function processJob(job: Job): Promise<{
     const { ApifyClient } = await import("apify-client");
     const client = new ApifyClient({ token });
 
-    const [tiktokResult, pinterestResult, googleResult] = await Promise.allSettled([
-      scrapeTikTok(client),
-      scrapePinterest(client),
-      scrapeGoogleTrends(client),
-    ]);
+    // Check Apify quota before attempting scrapes
+    const quotaOk = await checkApifyQuota(client);
+    if (!quotaOk) {
+      diagnostics["tiktok"]       = "skipped: monthly quota exhausted";
+      diagnostics["pinterest"]    = "skipped: monthly quota exhausted";
+      diagnostics["googleTrends"] = "skipped: monthly quota exhausted";
+    } else {
+      const [tiktokResult, pinterestResult, googleResult] = await Promise.allSettled([
+        scrapeTikTok(client),
+        scrapePinterest(client),
+        scrapeGoogleTrends(client),
+      ]);
 
-    tiktok       = tiktokResult.status    === "fulfilled" ? tiktokResult.value    : 0;
-    pinterest    = pinterestResult.status === "fulfilled" ? pinterestResult.value : 0;
-    googleTrends = googleResult.status    === "fulfilled" ? googleResult.value    : 0;
+      tiktok       = tiktokResult.status    === "fulfilled" ? tiktokResult.value    : 0;
+      pinterest    = pinterestResult.status === "fulfilled" ? pinterestResult.value : 0;
+      googleTrends = googleResult.status    === "fulfilled" ? googleResult.value    : 0;
 
-    diagnostics["tiktok"]       = tiktokResult.status    === "fulfilled" ? `ok (${tiktok})`       : `failed: ${(tiktokResult as any).reason?.message}`;
-    diagnostics["pinterest"]    = pinterestResult.status === "fulfilled" ? `ok (${pinterest})`    : `failed: ${(pinterestResult as any).reason?.message}`;
-    diagnostics["googleTrends"] = googleResult.status    === "fulfilled" ? `ok (${googleTrends})` : `failed: ${(googleResult as any).reason?.message}`;
+      diagnostics["tiktok"]       = tiktokResult.status    === "fulfilled" ? `ok (${tiktok})`       : `failed: ${(tiktokResult as any).reason?.message}`;
+      diagnostics["pinterest"]    = pinterestResult.status === "fulfilled" ? `ok (${pinterest})`    : `failed: ${(pinterestResult as any).reason?.message}`;
+      diagnostics["googleTrends"] = googleResult.status    === "fulfilled" ? `ok (${googleTrends})` : `failed: ${(googleResult as any).reason?.message}`;
+    }
   }
 
   await job.updateProgress(70);

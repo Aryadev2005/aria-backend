@@ -95,16 +95,13 @@ async function processJob(job: Job): Promise<{
       NICHES.map((niche) => ({ language: lang, niche })),
     );
 
-    // Warm in batches of 5 to avoid hammering Groq embeddings
-    for (let i = 0; i < warmupPairs.length; i += 5) {
-      const batch = warmupPairs.slice(i, i + 5);
-      await Promise.allSettled(
-        batch.map(({ language, niche }) =>
-          retrieveSongs({ language, niche, forceRefresh: true }).catch((err) =>
-            logger.warn({ err: err.message, language, niche }, "Hot window warmup failed"),
-          ),
-        ),
-      );
+    // Warm sequentially to avoid race conditions — each write must complete before next read
+    for (const { language, niche } of warmupPairs) {
+      try {
+        await retrieveSongs({ language, niche, forceRefresh: true });
+      } catch (err: any) {
+        logger.warn({ err: err.message, language, niche }, "Hot window warmup failed");
+      }
     }
 
     logger.info({ pairs: warmupPairs.length }, "Song hot windows pre-warmed");
