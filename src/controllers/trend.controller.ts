@@ -338,6 +338,7 @@ export const getViralIdeas = async (
   const dbUser = await (prisma.users as any).findUnique({
     where: { id: user.id },
     select: {
+      id: true,
       niches: true,
       archetype: true,
       archetype_label: true,
@@ -350,22 +351,26 @@ export const getViralIdeas = async (
     },
   });
 
-  const niches: string[] = (dbUser?.niches as string[]) ?? [];
+  if (!dbUser) {
+    return errors.notFound(reply, "User not found");
+  }
+
+  const niches: string[] = (dbUser.niches as string[]) ?? [];
 
   // browseNiche = temporary exploration (not saved to DB)
   // If provided, use it as the active niche but keep permanent niche in context
   const activeNiche = browseNiche || niches[0] || "general";
-  const platform = dbUser?.primary_platform ?? "instagram";
-  const scrapedSummary = (dbUser?.scraped_summary as any) ?? {};
-  const ariaAnalysis = (dbUser?.aria_last_analysis as any) ?? {};
+  const platform = dbUser.primary_platform ?? "instagram";
+  const scrapedSummary = (dbUser.scraped_summary as any) ?? {};
+  const ariaAnalysis = (dbUser.aria_last_analysis as any) ?? {};
 
   const userContext = {
-    userId: user.id,
+    userId: dbUser.id,
     niches: browseNiche ? [browseNiche, ...niches] : niches,
-    archetype: dbUser?.archetype ?? null,
-    archetypeLabel: dbUser?.archetype_label ?? null,
-    instagramHandle: dbUser?.instagram_handle ?? null,
-    bio: dbUser?.bio ?? null,
+    archetype: dbUser.archetype ?? null,
+    archetypeLabel: dbUser.archetype_label ?? null,
+    instagramHandle: dbUser.instagram_handle ?? null,
+    bio: dbUser.bio ?? null,
     topHashtags: scrapedSummary?.topHashtags ?? [],
     brandCategories: ariaAnalysis?.brandCategories ?? [],
     contentPatterns: ariaAnalysis?.contentPatterns ?? null,
@@ -382,7 +387,7 @@ export const getViralIdeas = async (
       if (cached) {
         logger.info(
           { activeNiche, browseNiche, userId: user.id },
-          "Viral ideas cache hit",
+          "Viral ideas cache hit"
         );
         return success(reply, {
           ideas: cached,
@@ -396,10 +401,22 @@ export const getViralIdeas = async (
     const { generateViralIdeas } =
       await import("../services/viralIdeas.service");
 
-    const ideas = await generateViralIdeas({
-      platform,
-      followerRange: dbUser?.follower_range ?? "10K–50K",
-      userContext,
+    // Add a hard 25s timeout so the request never hangs forever
+    const ideas = await Promise.race([
+      generateViralIdeas({
+        platform,
+        followerRange: dbUser.follower_range ?? "10K–50K",
+        userContext,
+      }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("TIMEOUT")), 25000)
+      ),
+    ]).catch((err) => {
+      if (err.message === "TIMEOUT") {
+        logger.warn({ userId: user.id }, "getViralIdeas timed out — returning empty");
+        return [];
+      }
+      throw err;
     });
 
     // Browse cache: shorter TTL (30 min) — exploration is temporary
