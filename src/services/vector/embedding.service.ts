@@ -245,3 +245,72 @@ export async function getEmbeddingStats(): Promise<{
 
   return { totalEmbeddings: total, nicheBreakdown };
 }
+
+// ── Embed new live_trends records that don't have embeddings yet ──────────────
+export async function embedNewTrends(): Promise<number> {
+  try {
+    // Find live_trends with no corresponding trend_embedding
+    const unembedded = await prisma.$queryRaw<Array<{
+      id: string; title: string; recommendation: string | null;
+      niche_tags: string[]; platform_tags: string[]; badge: string | null;
+    }>>`
+      SELECT lt.id, lt.title, lt.recommendation, lt.niche_tags, lt.platform_tags, lt.badge
+      FROM live_trends lt
+      LEFT JOIN trend_embeddings te ON te.trend_id = lt.id
+      WHERE te.id IS NULL
+        AND lt.expires_at > NOW()
+      LIMIT 50
+    `;
+
+    if (unembedded.length === 0) return 0;
+
+    logger.info({ count: unembedded.length }, "embedNewTrends: embedding new records");
+
+    // Build embed texts
+    const texts = unembedded.map(t => buildEmbedText({
+      title: t.title,
+      recommendation: t.recommendation || "",
+      niche_tags: t.niche_tags || [],
+      platform_tags: t.platform_tags || [],
+      badge: t.badge || "",
+    }));
+
+    // Generate embeddings in batch
+    const embeddings = await generateEmbeddingsBatch(texts);
+
+    // Persist each embedding
+    for (let i = 0; i < unembedded.length; i++) {
+      const trend = unembedded[i];
+      const embedding = embeddings[i];
+      if (!embedding) continue;
+
+      try {
+        await prisma.$executeRaw`
+          INSERT INTO trend_embeddings (trend_id, embedding, embed_text, niche, platform, created_at, updated_at)
+          VALUES (
+            ${trend.id}::uuid,
+            ${JSON.stringify(embedding)}::vector,
+            ${texts[i]},
+            ${(trend.niche_tags || [])[0] || null},
+            ${(trend.platform_tags || [])[0] || null},
+            NOW(),
+            NOW()
+          )
+          ON CONFLICT (trend_id) DO UPDATE SET
+            embedding   = EXCLUDED.embedding,
+            embed_text  = EXCLUDED.embed_text,
+            updated_at  = NOW()
+        `;
+      } catch (err: any) {
+        logger.warn({ err: err.message, trendId: trend.id }, "embedNewTrends: single row failed — skipping");
+      }
+    }
+
+    logger.info({ embedded: unembedded.length }, "embedNewTrends: complete");
+    return unembedded.length;
+
+  } catch (err: any) {
+    logger.warn({ err: err.message }, "embedNewTrends: failed — non-fatal");
+    return 0;
+  }
+}
