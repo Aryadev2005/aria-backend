@@ -372,7 +372,7 @@ model account_connections {
 // ══════════════════════════════════════════════════════════════════════════════
 
 /// Tier 2 — Warm Retrieval: Vector embeddings of live trend signals.
-/// The `embedding` column (vector(768)) is managed via raw SQL since Prisma
+/// The `embedding` column (vector(1536)) is managed via raw SQL since Prisma
 /// doesn't support pgvector natively.
 model trend_embeddings {
   id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
@@ -486,7 +486,7 @@ model song_hot_window {
 }
 
 // ── Tier 2: Song Embeddings ───────────────────────────────────────────────────
-// embedding vector(768) is managed via raw SQL — Prisma can't model pgvector.
+// embedding vector(1536) is managed via raw SQL — Prisma can't model pgvector.
 // The column exists in the DB but is invisible to Prisma's type system.
 model song_embeddings {
   id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
