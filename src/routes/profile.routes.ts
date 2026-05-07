@@ -78,8 +78,11 @@ export default async function profileRoutes(app: FastifyInstance) {
   );
 
   // GET /api/v1/profile/creator-analytics
-  app.get('/creator-analytics', auth, ctrl.getCreatorAnalytics);
+  app.get("/creator-analytics", auth, ctrl.getCreatorAnalytics);
 
   // POST /api/v1/profile/creator-analytics/refresh
-  app.post('/creator-analytics/refresh', auth, ctrl.refreshCreatorAnalytics);
+  app.post("/creator-analytics/refresh", auth, ctrl.refreshCreatorAnalytics);
+
+  // POST /api/v1/profile/voice-portrait/rebuild (Manual trigger for testing)
+  app.post("/voice-portrait/rebuild", auth, ctrl.rebuildVoicePortrait);
 }

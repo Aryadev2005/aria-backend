@@ -25,7 +25,7 @@ export interface AriaIdentityResponse {
     preferredLanguage: string;
     confidence: number;
     lastBuiltAt: string;
-  };
+  } | null;
   keyMemories: Array<{
     category: string;
     key: string;
@@ -38,6 +38,7 @@ export interface AriaIdentityResponse {
     topFollowedTypes: string[];
   };
   portraitAge: string;
+  nextRebuildAt: string | null;
 }
 
 /**
@@ -52,8 +53,8 @@ export async function getAriaIdentity(
 
   try {
     // Load voice portrait, memory, and suggestion stats in parallel
-    const [voicePortrait, memoryRows, suggestionStats] = await Promise.allSettled(
-      [
+    const [voicePortrait, memoryRows, suggestionStats] =
+      await Promise.allSettled([
         getVoicePortrait(userId),
         prisma.aria_memory.findMany({
           where: { user_id: userId, confidence: { gte: 50 } },
@@ -67,30 +68,24 @@ export async function getAriaIdentity(
           },
         }),
         getSuggestionStats(userId),
-      ],
-    );
+      ]);
 
     // Extract values from Promise settlements
     const portrait =
       voicePortrait.status === "fulfilled" ? voicePortrait.value : null;
-    const memories =
-      memoryRows.status === "fulfilled" ? memoryRows.value : [];
+    const memories = memoryRows.status === "fulfilled" ? memoryRows.value : [];
     const stats =
       suggestionStats.status === "fulfilled"
         ? suggestionStats.value
         : { totalSuggestions: 0, followRate: 0, topFollowedTypes: [] };
 
-    if (!portrait) {
-      logger.warn({ userId }, "No voice portrait found for identity endpoint");
-      throw new Error("Voice portrait not yet built");
-    }
-
-    // Calculate portrait age
-    let portraitAge = "unknown";
+    // Calculate portrait age and next rebuild metadata
+    let portraitAge = "not yet built";
+    let nextRebuildAt: string | null = null;
     try {
       const voiceRow = await (prisma as any).creator_voice_profiles.findUnique({
         where: { user_id: userId },
-        select: { built_at: true },
+        select: { built_at: true, next_rebuild_at: true },
       });
       if (voiceRow) {
         const now = new Date();
@@ -105,23 +100,29 @@ export async function getAriaIdentity(
         } else {
           portraitAge = "just now";
         }
+
+        nextRebuildAt = voiceRow.next_rebuild_at
+          ? voiceRow.next_rebuild_at.toISOString()
+          : null;
       }
     } catch (err) {
       logger.warn({ err }, "Failed to calculate portrait age");
     }
 
     const response: AriaIdentityResponse = {
-      voicePortrait: {
-        contentTerritory: portrait.contentTerritory,
-        toneSignature: portrait.toneSignature,
-        primaryTopics: portrait.primaryTopics,
-        audienceDescription: portrait.audienceDescription,
-        personalConstraints: portrait.personalConstraints,
-        preferredFormats: portrait.preferredFormats,
-        preferredLanguage: portrait.preferredLanguage,
-        confidence: portrait.confidence,
-        lastBuiltAt: portrait.builtAt,
-      },
+      voicePortrait: portrait
+        ? {
+            contentTerritory: portrait.contentTerritory,
+            toneSignature: portrait.toneSignature,
+            primaryTopics: portrait.primaryTopics,
+            audienceDescription: portrait.audienceDescription,
+            personalConstraints: portrait.personalConstraints,
+            preferredFormats: portrait.preferredFormats,
+            preferredLanguage: portrait.preferredLanguage,
+            confidence: portrait.confidence,
+            lastBuiltAt: portrait.builtAt,
+          }
+        : null,
       keyMemories: (memories as any[]).map((m) => ({
         category: m.category,
         key: m.key,
@@ -130,6 +131,7 @@ export async function getAriaIdentity(
       })),
       suggestionStats: stats,
       portraitAge,
+      nextRebuildAt,
     };
 
     await cache.set(cacheKey, response, IDENTITY_CACHE_TTL);

@@ -5,7 +5,7 @@ import { logger } from "../utils/logger";
 import { prisma } from "../config/database";
 import { cache } from "../config/redis";
 import { User } from "../types";
-import * as creatorAnalyticsSvc from '../services/creator_analytics.service';
+import * as creatorAnalyticsSvc from "../services/creator_analytics.service";
 // GET /api/v1/profile/analytics
 export const getAnalytics = async (
   req: FastifyRequest,
@@ -132,7 +132,10 @@ export const updatePlatform = async (
 };
 
 // GET /api/v1/profile/creator-analytics
-export const getCreatorAnalytics = async (req: FastifyRequest, reply: FastifyReply) => {
+export const getCreatorAnalytics = async (
+  req: FastifyRequest,
+  reply: FastifyReply,
+) => {
   const user = req.user as User;
   try {
     // Try to return stored data first (fast path)
@@ -149,19 +152,25 @@ export const getCreatorAnalytics = async (req: FastifyRequest, reply: FastifyRep
       return success(reply, null); // frontend shows "connect Instagram" prompt
     }
 
-    const niche = Array.isArray(dbUser.niches) ? dbUser.niches[0] : 'general';
+    const niche = Array.isArray(dbUser.niches) ? dbUser.niches[0] : "general";
     const data = await creatorAnalyticsSvc.buildAndSaveCreatorAnalytics(
-      user.id, dbUser.instagram_handle, niche || 'general', false
+      user.id,
+      dbUser.instagram_handle,
+      niche || "general",
+      false,
     );
     return success(reply, data);
   } catch (err) {
-    logger.error({ err, userId: user.id }, 'getCreatorAnalytics failed');
-    return errors.serviceDown(reply, 'ARIA Creator Analytics');
+    logger.error({ err, userId: user.id }, "getCreatorAnalytics failed");
+    return errors.serviceDown(reply, "ARIA Creator Analytics");
   }
 };
 
 // POST /api/v1/profile/creator-analytics/refresh
-export const refreshCreatorAnalytics = async (req: FastifyRequest, reply: FastifyReply) => {
+export const refreshCreatorAnalytics = async (
+  req: FastifyRequest,
+  reply: FastifyReply,
+) => {
   const user = req.user as User;
   try {
     await cache.del(`creator_analytics:${user.id}`);
@@ -172,16 +181,60 @@ export const refreshCreatorAnalytics = async (req: FastifyRequest, reply: Fastif
     });
 
     if (!dbUser?.instagram_handle) {
-      return reply.status(400).send({ success: false, error: 'No Instagram account connected' });
+      return reply
+        .status(400)
+        .send({ success: false, error: "No Instagram account connected" });
     }
 
-    const niche = Array.isArray(dbUser.niches) ? dbUser.niches[0] : 'general';
+    const niche = Array.isArray(dbUser.niches) ? dbUser.niches[0] : "general";
     const data = await creatorAnalyticsSvc.buildAndSaveCreatorAnalytics(
-      user.id, dbUser.instagram_handle, niche || 'general', true
+      user.id,
+      dbUser.instagram_handle,
+      niche || "general",
+      true,
     );
     return success(reply, data);
   } catch (err) {
-    logger.error({ err, userId: user.id }, 'refreshCreatorAnalytics failed');
-    return errors.serviceDown(reply, 'ARIA Creator Analytics Refresh');
+    logger.error({ err, userId: user.id }, "refreshCreatorAnalytics failed");
+    return errors.serviceDown(reply, "ARIA Creator Analytics Refresh");
+  }
+};
+
+// POST /api/v1/profile/voice-portrait/rebuild (Manual trigger for testing)
+export const rebuildVoicePortrait = async (
+  req: FastifyRequest,
+  reply: FastifyReply,
+) => {
+  const user = req.user as User;
+  try {
+    const { buildVoicePortrait } = await import("../services/voice.service");
+
+    logger.info(
+      { userId: user.id },
+      "Manually triggering voice portrait rebuild",
+    );
+
+    const portrait = await buildVoicePortrait(user.id);
+
+    if (!portrait) {
+      return errors.badRequest(
+        reply,
+        "Could not build voice portrait — insufficient data. Try generating more memories first by chatting with ARIA.",
+      );
+    }
+
+    // Clear cache to force fresh fetch
+    await cache.del(`aria_identity:${user.id}`);
+    await cache.del(`voice:${user.id}`);
+
+    return success(reply, {
+      success: true,
+      message: "Voice portrait rebuilt successfully",
+      portrait,
+      portraitAge: "just now",
+    });
+  } catch (err) {
+    logger.error({ err, userId: user.id }, "rebuildVoicePortrait failed");
+    return errors.internal(reply, "Failed to rebuild voice portrait");
   }
 };
