@@ -76,4 +76,10 @@ export default async function profileRoutes(app: FastifyInstance) {
     },
     identityCtrl.deleteMemory,
   );
+
+  // GET /api/v1/profile/creator-analytics
+  app.get('/creator-analytics', auth, ctrl.getCreatorAnalytics);
+
+  // POST /api/v1/profile/creator-analytics/refresh
+  app.post('/creator-analytics/refresh', auth, ctrl.refreshCreatorAnalytics);
 }

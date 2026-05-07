@@ -345,6 +345,8 @@ model users {
   account_connections     account_connections[]
   creator_voice_profiles  creator_voice_profiles?
 
+  creator_analytics       creator_analytics[]
+
   @@index([archetype], map: "idx_users_archetype")
   @@index([firebase_uid], map: "idx_users_firebase_uid")
   @@index([deletion_confirmation_code], map: "idx_users_deletion_code", where: raw("(deletion_confirmation_code IS NOT NULL)"))
@@ -658,4 +660,52 @@ model studio_scripts {
 
   @@index([user_id])
   @@index([user_id, pinned])
+}
+
+model creator_analytics {
+  id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id             String    @db.Uuid
+  platform            String    @default("instagram")
+  handle              String
+
+  followers           Int       @default(0)
+  following           Int       @default(0)
+  total_posts         Int       @default(0)
+  avg_likes           Decimal   @default(0) @db.Decimal(10, 2)
+  avg_comments        Decimal   @default(0) @db.Decimal(10, 2)
+  avg_views           Decimal   @default(0) @db.Decimal(10, 2)
+  engagement_rate     Decimal   @default(0) @db.Decimal(5, 2)
+  posts_per_week      Decimal   @default(0) @db.Decimal(5, 2)
+  reel_count          Int       @default(0)
+  photo_count         Int       @default(0)
+  carousel_count      Int       @default(0)
+
+  health_score        Int       @default(0)
+  engagement_score    Int       @default(0)
+  consistency_score   Int       @default(0)
+  growth_score        Int       @default(0)
+  monetisation_score  Int       @default(0)
+
+  top_posts           Json      @default("[]")
+  top_hashtags        Json      @default("[]")
+  format_breakdown    Json      @default("{}")
+  best_posting_times  Json      @default("[]")
+  niche_benchmarks    Json      @default("{}")
+  growth_projection   Json      @default("{}")
+  monetisation        Json      @default("{}")
+
+  aria_diagnosis      String?
+  aria_top_insights   Json      @default("[]")
+  aria_action_items   Json      @default("[]")
+  aria_content_gaps   Json      @default("[]")
+
+  scraped_at          DateTime  @default(now()) @db.Timestamptz(6)
+  analysis_version    Int       @default(1)
+  created_at          DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at          DateTime  @default(now()) @db.Timestamptz(6)
+
+  users               users     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([user_id, platform], map: "creator_analytics_user_platform_key")
+  @@index([user_id], map: "idx_creator_analytics_user")
 }

@@ -5,7 +5,7 @@ import { logger } from "../utils/logger";
 import { prisma } from "../config/database";
 import { cache } from "../config/redis";
 import { User } from "../types";
-
+import * as creatorAnalyticsSvc from '../services/creator_analytics.service';
 // GET /api/v1/profile/analytics
 export const getAnalytics = async (
   req: FastifyRequest,
@@ -128,5 +128,60 @@ export const updatePlatform = async (
   } catch (err) {
     logger.error({ err, userId: user.id }, "updatePlatform failed");
     return errors.internal(reply);
+  }
+};
+
+// GET /api/v1/profile/creator-analytics
+export const getCreatorAnalytics = async (req: FastifyRequest, reply: FastifyReply) => {
+  const user = req.user as User;
+  try {
+    // Try to return stored data first (fast path)
+    const stored = await creatorAnalyticsSvc.getStoredCreatorAnalytics(user.id);
+    if (stored) return success(reply, stored);
+
+    // No data yet — check if they have a handle to trigger fresh analysis
+    const dbUser = await (prisma.users as any).findUnique({
+      where: { id: user.id },
+      select: { instagram_handle: true, niches: true },
+    });
+
+    if (!dbUser?.instagram_handle) {
+      return success(reply, null); // frontend shows "connect Instagram" prompt
+    }
+
+    const niche = Array.isArray(dbUser.niches) ? dbUser.niches[0] : 'general';
+    const data = await creatorAnalyticsSvc.buildAndSaveCreatorAnalytics(
+      user.id, dbUser.instagram_handle, niche || 'general', false
+    );
+    return success(reply, data);
+  } catch (err) {
+    logger.error({ err, userId: user.id }, 'getCreatorAnalytics failed');
+    return errors.serviceDown(reply, 'ARIA Creator Analytics');
+  }
+};
+
+// POST /api/v1/profile/creator-analytics/refresh
+export const refreshCreatorAnalytics = async (req: FastifyRequest, reply: FastifyReply) => {
+  const user = req.user as User;
+  try {
+    await cache.del(`creator_analytics:${user.id}`);
+
+    const dbUser = await (prisma.users as any).findUnique({
+      where: { id: user.id },
+      select: { instagram_handle: true, niches: true },
+    });
+
+    if (!dbUser?.instagram_handle) {
+      return reply.status(400).send({ success: false, error: 'No Instagram account connected' });
+    }
+
+    const niche = Array.isArray(dbUser.niches) ? dbUser.niches[0] : 'general';
+    const data = await creatorAnalyticsSvc.buildAndSaveCreatorAnalytics(
+      user.id, dbUser.instagram_handle, niche || 'general', true
+    );
+    return success(reply, data);
+  } catch (err) {
+    logger.error({ err, userId: user.id }, 'refreshCreatorAnalytics failed');
+    return errors.serviceDown(reply, 'ARIA Creator Analytics Refresh');
   }
 };
