@@ -113,4 +113,32 @@ export default async function trendRoutes(app: FastifyInstance) {
     },
     trendController.getViralIdeas
   );
+
+  // POST /api/v1/trends/interaction
+  app.post<{
+    Body: {
+      trendId?: string; trendTitle: string;
+      source?: string; niche?: string;
+      action: string;
+    }
+  }>(
+    '/interaction',
+    {
+      preHandler: [authenticateFirebase],
+      schema: {
+        body: {
+          type: 'object',
+          required: ['trendTitle', 'action'],
+          properties: {
+            trendId:    { type: 'string' },
+            trendTitle: { type: 'string', maxLength: 200 },
+            source:     { type: 'string' },
+            niche:      { type: 'string' },
+            action:     { type: 'string', enum: ['viewed', 'saved', 'created', 'dismissed'] },
+          },
+        },
+      },
+    },
+    trendController.recordTrendInteraction,
+  );
 }

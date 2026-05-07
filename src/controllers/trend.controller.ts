@@ -435,3 +435,38 @@ export const getViralIdeas = async (
     return errors.serviceDown(reply, "Trend ideas engine");
   }
 };
+
+// ── POST /api/v1/trends/interaction ──────────────────────────────────────────
+export const recordTrendInteraction = async (
+  req: FastifyRequest<{
+    Body: {
+      trendId?:    string;
+      trendTitle:  string;
+      source?:     string;
+      niche?:      string;
+      action:      'viewed' | 'saved' | 'created' | 'dismissed';
+    };
+  }>,
+  reply: FastifyReply,
+) => {
+  const user = req.user as User;
+  const { trendId, trendTitle, source, niche, action } = req.body;
+
+  try {
+    await (prisma as any).trend_interactions.create({
+      data: {
+        user_id:     user.id,
+        trend_id:    trendId || null,
+        trend_title: trendTitle.substring(0, 200),
+        source:      source || null,
+        niche:       niche  || null,
+        action,
+      },
+    });
+    return success(reply, { recorded: true });
+  } catch (err) {
+    // Non-fatal — never block UI for analytics failure
+    logger.warn({ err }, 'recordTrendInteraction failed');
+    return success(reply, { recorded: false });
+  }
+};

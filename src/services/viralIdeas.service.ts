@@ -437,58 +437,191 @@ export async function generateViralIdeas(params: {
   userContext:   UserNicheContext;
 }): Promise<ViralIdea[]> {
   const { platform, followerRange, userContext } = params;
+  const primaryNiche = userContext.niches[0] || 'general';
 
-  logger.info({ niches: userContext.niches, handle: userContext.instagramHandle }, "Generating viral ideas");
+  // ── Step 1: Use hybrid RAG to get the pre-assembled hot window ────────────
+  // This is Tier 1 — already narrowed, already embedded, ARIA-ready
+  let hotWindowNarrative = '';
+  let vectorTrends: any[] = [];
 
-  // Fetch signals in parallel — single Groq call handles everything after
-  const [redditResult, ytResult, tiktokResult, pinterestResult, googleResult, voicePortraitResult, memoryResult, feedbackResult] = await Promise.allSettled([
-    readRedditSignals(40),
-    readYouTubeSignals(30),
-    readTikTokSignals(30),
-    readPinterestSignals(20),
-    readGoogleTrendsSignals(20),
-    getVoicePortrait(userContext.userId),
-    (async () => {
-      const { getMemory } = await import("./aria_memory.service");
-      return getMemory(userContext.userId);
-    })(),
-    // NEW — read creator's feedback history
-    prisma.aria_feedback.findMany({
-      where:   { user_id: userContext.userId },
-      orderBy: { created_at: 'desc' },
-      take:    20,
-      select:  {
-        recommendation_type: true,
-        recommendation_data: true,
-        was_helpful:         true,
-      },
+  try {
+    const { hybridRetrieve } = await import('./retrieval/hybrid-rag.service');
+    const ragResult = await hybridRetrieve({ niche: primaryNiche, forceRefresh: false });
+    hotWindowNarrative = ragResult.hotWindowNarrative || '';
+    vectorTrends       = ragResult.signals?.vectorResults || [];
+  } catch (err: any) {
+    logger.warn({ err: err.message }, 'viralIdeas: hybridRetrieve failed — falling back to direct DB');
+  }
+
+  // ── Step 2: Direct live_trends query as fallback / supplement ─────────────
+  // Only used if RAG returned nothing — NEVER dump all rows, always limit
+  let directSignals: any[] = [];
+  if (vectorTrends.length < 5) {
+    try {
+      directSignals = await (prisma as any).live_trends.findMany({
+        where: {
+          expires_at: { gt: new Date() },
+          OR: [
+            { niche_tags: { has: primaryNiche } },
+            { niche_tags: { has: 'general' } },
+          ],
+        },
+        orderBy: { velocity: 'desc' },
+        take: 20,
+        select: {
+          title: true,
+          source: true,
+          velocity: true,
+          badge: true,
+          niche_tags: true,
+          content_format: true,
+          recommendation: true,
+          is_override: true,
+          override_reason: true,
+          raw_data: true,
+          fetched_at: true,
+        },
+      });
+    } catch (err: any) {
+      logger.warn({ err: err.message }, 'viralIdeas: direct live_trends query failed');
+    }
+  }
+
+  // ── Step 3: Build source-labelled signal strings for the prompt ───────────
+  const allSignals = [
+    ...vectorTrends.map((t: any) => ({ ...t, fromRag: true })),
+    ...directSignals.map((t: any) => ({ ...t, fromRag: false })),
+  ];
+
+  // Group by source for the prompt
+  const bySource: Record<string, string[]> = {};
+  for (const s of allSignals) {
+    const src = s.source || 'unknown';
+    if (!bySource[src]) bySource[src] = [];
+    const override = s.is_override ? ` [${s.override_reason?.toUpperCase()}]` : '';
+    const format   = s.content_format && s.content_format !== 'unknown' ? ` · ${s.content_format}` : '';
+    bySource[src].push(`- "${s.title}" | ${s.badge || 'NEW'} | velocity:${s.velocity || 0}${format}${override}`);
+  }
+
+  const signalContext = Object.entries(bySource)
+    .map(([src, lines]) => `\n${src.toUpperCase()} SIGNALS:\n${lines.slice(0, 8).join('\n')}`)
+    .join('\n');
+
+  // ── Step 4: Fetch user context (memory, feedback history, voice portrait) ──
+  const [memoryRow, feedbackHistory, voicePortrait] = await Promise.allSettled([
+    (prisma as any).aria_memory.findFirst({
+      where: { user_id: userContext.userId },
+      select: { memory_data: true },
     }),
+    (prisma as any).aria_feedback.findMany({
+      where: { user_id: userContext.userId },
+      orderBy: { created_at: 'desc' },
+      take: 20,
+      select: { was_helpful: true, recommendation_data: true },
+    }),
+    (prisma as any).creator_voice_profiles?.findFirst?.({
+      where: { user_id: userContext.userId },
+      select: { portrait: true },
+    }).catch(() => null),
   ]);
 
-  const reddit  = redditResult.status  === "fulfilled" ? redditResult.value  : [];
-  const youtube = ytResult.status      === "fulfilled" ? ytResult.value      : [];
-  const tiktok  = tiktokResult.status  === "fulfilled" ? tiktokResult.value  : [];
+  const memory        = memoryRow.status === 'fulfilled' ? (memoryRow.value as any)?.memory_data : null;
+  const feedback      = feedbackHistory.status === 'fulfilled' ? feedbackHistory.value : [];
+  const voice         = voicePortrait.status === 'fulfilled' ? voicePortrait.value : null;
 
-  // Use real data if available, otherwise fall back to derived signals
-  const pinterestRaw = pinterestResult.status === "fulfilled" ? pinterestResult.value : [];
-  const gtrendsRaw   = googleResult.status    === "fulfilled" ? googleResult.value    : [];
+  const helpfulAngles = (feedback as any[])
+    .filter((f: any) => f.was_helpful === true)
+    .map((f: any) => (f.recommendation_data as any)?.title || '')
+    .filter(Boolean).slice(0, 5);
 
-  const pinterest = pinterestRaw.length > 0
-    ? pinterestRaw
-    : buildFallbackSignals(youtube, tiktok, "pinterest_global", 8);
+  const unhelpfulAngles = (feedback as any[])
+    .filter((f: any) => f.was_helpful === false)
+    .map((f: any) => (f.recommendation_data as any)?.title || '')
+    .filter(Boolean).slice(0, 5);
 
-  const gtrends = gtrendsRaw.length > 0
-    ? gtrendsRaw
-    : buildFallbackSignals(youtube, tiktok, "google_trends_global", 8);
+  // ── Step 5: Build the OpenAI prompt ──────────────────────────────────────
+  const prompt = `You are ARIA, India's most advanced creator intelligence engine.
 
-  const voicePortrait = voicePortraitResult.status === "fulfilled" ? voicePortraitResult.value : null;
-  const memory = memoryResult.status === "fulfilled" ? memoryResult.value : {};
-  const feedback  = feedbackResult.status  === "fulfilled" ? feedbackResult.value  : [];
+CREATOR PROFILE:
+- Niche: ${primaryNiche}
+- Platform: ${platform}
+- Follower Range: ${followerRange}
+- Archetype: ${userContext.archetypeLabel || userContext.archetype || 'Creator'}
+- Bio: ${userContext.bio || 'Not provided'}
+- Top hashtags they use: ${userContext.topHashtags.slice(0, 5).join(', ') || 'none yet'}
+${voice ? `- Voice & Tone: ${JSON.stringify(voice.portrait).substring(0, 300)}` : ''}
 
-  logger.info({
-    reddit: reddit.length, youtube: youtube.length,
-    tiktok: tiktok.length, pinterest: pinterest.length, gtrends: gtrends.length,
-  }, "All signals collected");
+LIVE TREND SIGNALS (scraped from YouTube, Reddit, TikTok, Pinterest, Google — last 12-24 hours):
+${signalContext || 'No live signals available — use your knowledge of Indian trends'}
 
-  return resolveAndSynthesize(reddit, youtube, tiktok, pinterest, gtrends, userContext, platform, followerRange, voicePortrait, memory, feedback);
+${hotWindowNarrative ? `ARIA INTELLIGENCE CONTEXT:\n${hotWindowNarrative.substring(0, 800)}` : ''}
+
+${helpfulAngles.length > 0 ? `CREATOR LIKED THESE ANGLES (use similar): ${helpfulAngles.join('; ')}` : ''}
+${unhelpfulAngles.length > 0 ? `CREATOR REJECTED THESE (avoid entirely): ${unhelpfulAngles.join('; ')}` : ''}
+
+TASK: Generate exactly 6 trending content ideas for this creator for ${platform}.
+Each idea must be directly inspired by the live signals above.
+Ideas must be specific to the INDIAN market and the creator's niche.
+
+RESPOND IN THIS EXACT JSON FORMAT (no markdown, no backticks):
+{
+  "ideas": [
+    {
+      "title": "specific content idea title",
+      "format": "Reel|Carousel|Story|Video",
+      "hook": "the first 3 seconds / opening line that stops the scroll",
+      "whyNow": "which signal makes this timely — reference the actual source",
+      "contentAngle": "the unique angle that makes this different from what others will make",
+      "ariaTip": "one specific tactical tip for this creator given their niche and stage",
+      "viralityScore": 75,
+      "badge": "HOT|RISING|NEW",
+      "sources": ["youtube", "reddit"],
+      "isContentGap": false,
+      "contentGapNote": ""
+    }
+  ]
+}
+
+RULES:
+- viralityScore must be between 60-98, not all the same
+- badge must match the velocity of the underlying signal
+- isContentGap = true if Google Trends shows this topic trending but no video covers it well
+- All ideas must be distinct formats — no two the same format
+- First idea should be the strongest signal (HOT badge)
+- Ideas 5-6 can be "sleeper" picks — override signals with high potential`;
+
+  // ── Step 6: Call OpenAI ───────────────────────────────────────────────────
+  try {
+    const OpenAI = (await import('openai')).default;
+    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+    const response = await client.chat.completions.create({
+      model:       'gpt-4o-mini',
+      max_tokens:  2000,
+      temperature: 0.8,
+      messages:    [{ role: 'user', content: prompt }],
+    });
+
+    const raw   = response.choices[0]?.message?.content || '';
+    const clean = raw.replace(/```json|```/g, '').trim();
+    const parsed = JSON.parse(clean);
+    return parsed.ideas || [];
+
+  } catch (err: any) {
+    logger.error({ err: err.message }, 'viralIdeas: OpenAI call failed');
+    // Graceful fallback — return what we have from live_trends directly
+    return allSignals.slice(0, 6).map((s: any) => ({
+      title:         s.title,
+      format:        s.content_format === 'short_form' ? 'Reel' : 'Carousel',
+      hook:          `Here's what's trending in ${primaryNiche} right now...`,
+      whyNow:        s.recommendation || `Trending on ${s.source}`,
+      contentAngle:  `Your take on: ${s.title}`,
+      ariaTip:       'Post within 24 hours to ride the peak.',
+      viralityScore: s.velocity || 50,
+      badge:         s.badge || 'NEW',
+      sources:       [s.source],
+      isContentGap:  false,
+      contentGapNote:'',
+    }));
+  }
 }

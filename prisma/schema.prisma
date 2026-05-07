@@ -234,18 +234,22 @@ model live_songs {
 }
 
 model live_trends {
-  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  source         String
-  title          String
-  search_volume  Int?
-  velocity       Decimal?  @db.Decimal(5, 2)
-  niche_tags     String[]
-  platform_tags  String[]
-  raw_data       Json?
-  fetched_at     DateTime? @default(now()) @db.Timestamptz(6)
-  expires_at     DateTime? @db.Timestamptz(6)
-  badge          String?
-  recommendation String?
+  id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  source              String
+  title               String
+  search_volume       Int?
+  velocity            Decimal?  @db.Decimal(5, 2)
+  platform_raw_score  Decimal?  @db.Decimal(10, 4) @default(0)
+  niche_tags          String[]
+  platform_tags       String[]
+  raw_data            Json?
+  fetched_at          DateTime? @default(now()) @db.Timestamptz(6)
+  expires_at          DateTime? @db.Timestamptz(6)
+  badge               String?
+  recommendation      String?
+  content_format      String?   @default("unknown")
+  override_reason     String?
+  is_override         Boolean?  @default(false)
 
   trend_embeddings trend_embeddings[]
 
@@ -266,6 +270,37 @@ model radar_snapshots {
 
   @@index([expires_at], map: "idx_radar_expires")
   @@index([niche, platform], map: "idx_radar_niche_platform")
+}
+
+// ── Scrape Health Monitor ────────────────────────────────────────────────────
+model scrape_health {
+  id                   String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  source               String    @unique
+  last_run_at          DateTime? @db.Timestamptz(6)
+  last_success_at      DateTime? @db.Timestamptz(6)
+  last_result_count    Int       @default(0)
+  consecutive_failures Int       @default(0)
+  last_error           String?
+  status               String    @default("idle")
+  updated_at           DateTime  @default(now()) @db.Timestamptz(6)
+}
+
+// ── Trend Interactions (Feedback Loop) ──────────────────────────────────────
+model trend_interactions {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id     String    @db.Uuid
+  trend_id    String?   @db.Uuid
+  trend_title String
+  source      String?
+  niche       String?
+  action      String    // 'viewed' | 'saved' | 'created' | 'dismissed'
+  created_at  DateTime  @default(now()) @db.Timestamptz(6)
+
+  users       users     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
+  @@index([source, niche])
+  @@index([created_at(sort: Desc)])
 }
 
 model rate_cards {
@@ -344,6 +379,7 @@ model users {
   studio_sessions         studio_sessions[]
   account_connections     account_connections[]
   creator_voice_profiles  creator_voice_profiles?
+  trend_interactions      trend_interactions[]
 
   creator_analytics       creator_analytics[]
 
