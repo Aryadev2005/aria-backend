@@ -9,29 +9,13 @@ import { cache } from '../config/redis';
 import { logger } from '../utils/logger';
 import { scrapeInstagramWithApify, ApifyScrapedResult } from './apify.service';
 import { _callGroq } from './ai/groq.service';
+import { getBenchmark, getAllBenchmarks, FALLBACK_BENCHMARKS } from './benchmarks.service';
 
-// ── Cache TTL: 6 hours ────────────────────────────────────────────────────────
 const CACHE_TTL = 60 * 60 * 6;
 
-// ── Niche engagement benchmarks (Indian creator market) ──────────────────────
-const NICHE_BENCHMARKS: Record<string, { avgER: number; topER: number; cpm: number; label: string }> = {
-  fitness:     { avgER: 3.8, topER: 7.2, cpm: 140, label: 'Fitness & Wellness' },
-  finance:     { avgER: 2.9, topER: 5.8, cpm: 220, label: 'Finance & Investing' },
-  food:        { avgER: 4.1, topER: 8.0, cpm: 120, label: 'Food & Cooking' },
-  fashion:     { avgER: 3.2, topER: 6.5, cpm: 130, label: 'Fashion & Style' },
-  tech:        { avgER: 2.5, topER: 5.0, cpm: 190, label: 'Tech & Gadgets' },
-  travel:      { avgER: 3.5, topER: 6.8, cpm: 130, label: 'Travel' },
-  education:   { avgER: 3.0, topER: 6.0, cpm: 160, label: 'Education' },
-  comedy:      { avgER: 4.5, topER: 9.0, cpm: 100, label: 'Comedy & Entertainment' },
-  beauty:      { avgER: 3.6, topER: 7.0, cpm: 125, label: 'Beauty & Skincare' },
-  motivation:  { avgER: 3.4, topER: 6.5, cpm: 110, label: 'Motivation & Lifestyle' },
-  general:     { avgER: 3.0, topER: 6.0, cpm:  90, label: 'General' },
-};
+// ── Score computation helpers (pure functions — use passed benchmark param) ────
 
-// ── Score computation helpers ─────────────────────────────────────────────────
-
-function computeEngagementScore(er: number, niche: string): number {
-  const bench = NICHE_BENCHMARKS[niche] || NICHE_BENCHMARKS.general;
+function computeEngagementScore(er: number, bench: { avgER: number; topER: number }): number {
   if (er >= bench.topER) return 95;
   if (er >= bench.avgER * 1.5) return 80;
   if (er >= bench.avgER) return 65;
@@ -49,7 +33,6 @@ function computeConsistencyScore(postsPerWeek: number): number {
 }
 
 function computeGrowthScore(followers: number, engagementRate: number): number {
-  // Growth score combines follower tier progress + engagement signal
   let base = 0;
   if (followers >= 500000) base = 90;
   else if (followers >= 100000) base = 75;
@@ -63,25 +46,28 @@ function computeGrowthScore(followers: number, engagementRate: number): number {
   return Math.min(Math.round(base + erBonus), 100);
 }
 
-function computeMonetisationScore(followers: number, er: number, niche: string): number {
+function computeMonetisationScore(
+  followers: number,
+  er: number,
+  bench: { avgER: number; topER: number; cpm: number },
+  niche: string
+): number {
   let score = 0;
-  // Follower tier (40 points max)
   if (followers >= 100000) score += 40;
-  else if (followers >= 50000)  score += 32;
-  else if (followers >= 10000)  score += 22;
-  else if (followers >= 5000)   score += 14;
-  else if (followers >= 1000)   score += 8;
+  else if (followers >= 50000) score += 32;
+  else if (followers >= 10000) score += 22;
+  else if (followers >= 5000) score += 14;
+  else if (followers >= 1000) score += 8;
 
-  // Engagement (40 points max)
-  const bench = NICHE_BENCHMARKS[niche] || NICHE_BENCHMARKS.general;
-  if (er >= bench.topER)        score += 40;
-  else if (er >= bench.avgER)   score += 28;
+  if (er >= bench.topER) score += 40;
+  else if (er >= bench.avgER) score += 28;
   else if (er >= bench.avgER * 0.5) score += 16;
   else score += 6;
 
-  // Niche premium (20 points max)
-  const nichePremium = { finance: 20, tech: 18, education: 16, fitness: 14, fashion: 12 };
-  score += (nichePremium as any)[niche] || 8;
+  const nichePremium: Record<string, number> = {
+    finance: 20, tech: 18, education: 16, fitness: 14, fashion: 12,
+  };
+  score += nichePremium[niche] || 8;
 
   return Math.min(score, 100);
 }
@@ -100,8 +86,11 @@ function computeHealthScore(
   );
 }
 
-function estimateBrandDealValue(followers: number, er: number, niche: string): { min: number; max: number } {
-  const bench = NICHE_BENCHMARKS[niche] || NICHE_BENCHMARKS.general;
+function estimateBrandDealValue(
+  followers: number,
+  er: number,
+  bench: { avgER: number; topER: number; cpm: number }
+): { min: number; max: number } {
   const erMultiplier = er >= bench.topER ? 1.8 : er >= bench.avgER ? 1.2 : 0.8;
   const base =
     followers >= 500000 ? 80000 :
@@ -111,9 +100,10 @@ function estimateBrandDealValue(followers: number, er: number, niche: string): {
     followers >= 5000   ?  1500 :
     followers >= 1000   ?   500 : 150;
 
-  const min = Math.round(base * erMultiplier * 0.8 / 500) * 500;
-  const max = Math.round(base * erMultiplier * 1.4 / 500) * 500;
-  return { min, max };
+  return {
+    min: Math.round(base * erMultiplier * 0.8 / 500) * 500,
+    max: Math.round(base * erMultiplier * 1.4 / 500) * 500,
+  };
 }
 
 function estimateDaysToNextMilestone(followers: number, weeklyGrowthRate = 0.02): { milestone: number; days: number } {
@@ -194,7 +184,7 @@ function computeBestPostingTimes(posts: ApifyScrapedResult['posts']) {
   }));
 }
 
-// ── ARIA Diagnosis via Groq ───────────────────────────────────────────────────
+// ── ARIA Diagnosis ────────────────────────────────────────────────────────────
 
 async function generateARIADiagnosis(params: {
   handle: string;
@@ -207,7 +197,7 @@ async function generateARIADiagnosis(params: {
   topHashtags: string[];
   postsPerWeek: number;
   bestTimes: any[];
-  benchmarks: any;
+  benchmarks: { avgER: number; topER: number; cpm: number; label: string };
   monetisation: any;
 }): Promise<{ diagnosis: string; insights: string[]; actionItems: string[]; contentGaps: string[] }> {
   const {
@@ -238,19 +228,19 @@ RESPOND ONLY IN THIS EXACT JSON FORMAT (no markdown, no backticks):
 {
   "diagnosis": "3-4 sentence paragraph. Brutally honest, specific to this account's numbers. Mention what is actually working, what is holding them back, and the single biggest lever they have right now. Reference actual numbers from the data.",
   "insights": [
-    "Insight 1 — specific to their data, e.g. 'Your Reels get 2.1x more likes than your photos — you are underutilising your strongest format'",
+    "Insight 1 — specific to their data",
     "Insight 2 — specific",
     "Insight 3 — specific",
     "Insight 4 — specific",
     "Insight 5 — specific"
   ],
   "actionItems": [
-    "Action 1 — concrete, do-it-today specific, e.g. 'Post a Reel this ${bestTimes[0]?.day || 'Tuesday'} at 7:30 PM IST using #${topHashtags[0] || 'trending'}'",
+    "Action 1 — concrete, do-it-today specific",
     "Action 2 — concrete",
     "Action 3 — concrete"
   ],
   "contentGaps": [
-    "Gap 1 — what this creator is missing that their niche audience wants",
+    "Gap 1 — what this creator is missing",
     "Gap 2",
     "Gap 3"
   ]
@@ -258,14 +248,14 @@ RESPOND ONLY IN THIS EXACT JSON FORMAT (no markdown, no backticks):
 
   try {
     const raw = await _callGroq(prompt, { maxTokens: 1200, useLlama: true });
-    const clean = raw.replace(/```json|```/g, '').trim();
-    return JSON.parse(clean);
+    const clean = typeof raw === 'string' ? raw.replace(/```json|```/g, '').trim() : JSON.stringify(raw);
+    return typeof raw === 'object' ? raw as any : JSON.parse(clean);
   } catch (err) {
     logger.warn({ err }, 'ARIA diagnosis parse failed — using fallback');
     return {
-      diagnosis: `@${handle} has a health score of ${healthScore}/100. Your engagement rate of ${er}% is ${er >= (NICHE_BENCHMARKS[niche]?.avgER || 3) ? 'above' : 'below'} the ${niche} niche average. ${formatBreakdown.bestFormat === 'reels' ? 'Reels are your strongest format' : 'Photos are outperforming your Reels'}. Focus on consistency — posting ${postsPerWeek < 3 ? 'more regularly (aim for 3–4x/week)' : 'is solid, now optimise for saves'}.`,
+      diagnosis: `@${handle} has a health score of ${healthScore}/100. Your engagement rate of ${er}% is ${er >= benchmarks.avgER ? 'above' : 'below'} the ${niche} niche average of ${benchmarks.avgER}%. ${formatBreakdown.bestFormat === 'reels' ? 'Reels are your strongest format' : 'Photos are outperforming your Reels'}. Focus on consistency — posting ${postsPerWeek < 3 ? 'more regularly (aim for 3–4x/week)' : 'is solid, now optimise for saves'}.`,
       insights: [
-        `Your engagement rate of ${er}% vs niche average of ${NICHE_BENCHMARKS[niche]?.avgER || 3}%`,
+        `Your ER of ${er}% vs niche average of ${benchmarks.avgER}%`,
         `${formatBreakdown.bestFormat} is your best performing content format`,
         `${postsPerWeek} posts/week — ${postsPerWeek >= 3 ? 'consistent' : 'needs more regularity'}`,
         `Top hashtag: #${topHashtags[0] || 'not yet tracked'}`,
@@ -273,7 +263,7 @@ RESPOND ONLY IN THIS EXACT JSON FORMAT (no markdown, no backticks):
       ],
       actionItems: [
         `Post a ${formatBreakdown.bestFormat === 'reels' ? 'Reel' : 'Carousel'} on ${bestTimes[0]?.day || 'Tuesday'} between 7–9 PM IST`,
-        `Cut hashtags that are getting zero reach — audit your top 5`,
+        `Cut hashtags getting zero reach — audit your top 5`,
         `Add a save-worthy element (checklist, tip list) to your next post`,
       ],
       contentGaps: [
@@ -305,21 +295,23 @@ export async function buildAndSaveCreatorAnalytics(
   // ── 1. Scrape via Apify ──────────────────────────────────────────────────────
   const scraped: ApifyScrapedResult = await scrapeInstagramWithApify(handle, 50);
 
-  // ── 2. Compute all scores ────────────────────────────────────────────────────
-  const erFloat    = parseFloat(scraped.engagementRate) || 0;
-  const bench      = NICHE_BENCHMARKS[niche] || NICHE_BENCHMARKS.general;
+  // ── 2. Load benchmark dynamically ────────────────────────────────────────────
+  const bench = await getBenchmark(niche);
 
-  const engScore   = computeEngagementScore(erFloat, niche);
+  // ── 3. Compute all scores ────────────────────────────────────────────────────
+  const erFloat    = parseFloat(scraped.engagementRate) || 0;
+
+  const engScore   = computeEngagementScore(erFloat, bench);
   const conScore   = computeConsistencyScore(scraped.postsPerWeek);
   const growScore  = computeGrowthScore(scraped.followers, erFloat);
-  const monScore   = computeMonetisationScore(scraped.followers, erFloat, niche);
+  const monScore   = computeMonetisationScore(scraped.followers, erFloat, bench, niche);
   const healthScore = computeHealthScore(engScore, conScore, growScore, monScore);
 
-  // ── 3. Derived analytics ─────────────────────────────────────────────────────
+  // ── 4. Derived analytics ─────────────────────────────────────────────────────
   const formatBreakdown  = computeFormatBreakdown(scraped);
   const topPosts         = computeTopPosts(scraped);
   const bestTimes        = computeBestPostingTimes(scraped.posts);
-  const brandDeal        = estimateBrandDealValue(scraped.followers, erFloat, niche);
+  const brandDeal        = estimateBrandDealValue(scraped.followers, erFloat, bench);
   const nextMilestone    = estimateDaysToNextMilestone(scraped.followers);
 
   const followerRange =
@@ -359,7 +351,7 @@ export async function buildAndSaveCreatorAnalytics(
     unlockAt: scraped.followers < 5000 ? '5,000 followers' : scraped.followers < 10000 ? '10,000 followers' : null,
   };
 
-  // ── 4. Run ARIA diagnosis ────────────────────────────────────────────────────
+  // ── 5. Run ARIA diagnosis ────────────────────────────────────────────────────
   const ariaResult = await generateARIADiagnosis({
     handle, followers: scraped.followers, er: erFloat, niche,
     healthScore, formatBreakdown, topPosts,
@@ -367,7 +359,7 @@ export async function buildAndSaveCreatorAnalytics(
     bestTimes, benchmarks: bench, monetisation,
   });
 
-  // ── 5. Persist to DB ─────────────────────────────────────────────────────────
+  // ── 6. Persist to DB ─────────────────────────────────────────────────────────
   const row = await (prisma as any).creator_analytics.upsert({
     where: { creator_analytics_user_platform_key: { user_id: userId, platform: 'instagram' } },
     create: {
