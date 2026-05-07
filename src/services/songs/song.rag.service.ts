@@ -13,42 +13,45 @@
 import { prisma } from "../../config/database";
 import { cache } from "../../config/redis";
 import { logger } from "../../utils/logger";
-import { findSimilarSongs, type SimilarSongResult } from "./song.embedding.service";
+import {
+  findSimilarSongs,
+  type SimilarSongResult,
+} from "./song.embedding.service";
 
 // ── Config ─────────────────────────────────────────────────────────────────────
-const HOT_TTL_SECONDS = 30 * 60;   // 30 minutes — same cadence as trend hot window
-const HOT_TTL_MS      = HOT_TTL_SECONDS * 1000;
+const HOT_TTL_SECONDS = 30 * 60; // 30 minutes — same cadence as trend hot window
+const HOT_TTL_MS = HOT_TTL_SECONDS * 1000;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface SongRetrievalResult {
   hotWindowNarrative: string;
-  fromCache:          boolean;
-  songs:              SongRow[];
-  similarSongs:       SimilarSongResult[];
+  fromCache: boolean;
+  songs: SongRow[];
+  similarSongs: SimilarSongResult[];
   metadata: {
-    language:          string;
-    niche:             string;
-    retrievalTimeMs:   number;
-    songCount:         number;
-    cacheAge?:         number;
+    language: string;
+    niche: string;
+    retrievalTimeMs: number;
+    songCount: number;
+    cacheAge?: number;
   };
 }
 
 export interface SongRow {
-  id:             string;
-  title:          string;
-  artist:         string;
+  id: string;
+  title: string;
+  artist: string;
   chart_position: number;
-  chart_change:   number;
-  streams_today:  string;   // BigInt as string
-  language:       string;
-  lifecycle:      string;
-  signal:         string;
-  growth:         string;
-  niche_tags:     string[];
-  mood_tags:      string[];
-  source:         string;
+  chart_change: number;
+  streams_today: string; // BigInt as string
+  language: string;
+  lifecycle: string;
+  signal: string;
+  growth: string;
+  niche_tags: string[];
+  mood_tags: string[];
+  source: string;
 }
 
 // ── Tier 1: Hot Window ────────────────────────────────────────────────────────
@@ -61,12 +64,12 @@ async function getHotWindow(language: string, niche: string) {
   const key = makeCacheKey(language, niche);
 
   // L1: Redis
-  const redisHit = await cache.get(key) as any | null;
+  const redisHit = (await cache.get(key)) as any | null;
   if (redisHit?.narrative) {
     return {
       narrative: redisHit.narrative as string,
-      songs:     (redisHit.songs || []) as SongRow[],
-      age:       Date.now() - (redisHit.createdAt || 0),
+      songs: (redisHit.songs || []) as SongRow[],
+      age: Date.now() - (redisHit.createdAt || 0),
     };
   }
 
@@ -74,23 +77,34 @@ async function getHotWindow(language: string, niche: string) {
   try {
     const row = await (prisma as any).song_hot_window.findFirst({
       where: {
-        cache_key:  key,
+        cache_key: key,
         expires_at: { gt: new Date() },
       },
     });
 
     if (row) {
-      const age  = Date.now() - (row.created_at?.getTime() || 0);
+      const age = Date.now() - (row.created_at?.getTime() || 0);
       const meta = (row.metadata as any) || {};
 
       // Promote back to Redis
-      await cache.set(key, {
-        narrative: row.narrative,
-        songs:     meta.songs || [],
-        createdAt: row.created_at?.getTime(),
-      }, Math.max(60, Math.round((row.expires_at.getTime() - Date.now()) / 1000)));
+      await cache.set(
+        key,
+        {
+          narrative: row.narrative,
+          songs: meta.songs || [],
+          createdAt: row.created_at?.getTime(),
+        },
+        Math.max(
+          60,
+          Math.round((row.expires_at.getTime() - Date.now()) / 1000),
+        ),
+      );
 
-      return { narrative: row.narrative as string, songs: (meta.songs || []) as SongRow[], age };
+      return {
+        narrative: row.narrative as string,
+        songs: (meta.songs || []) as SongRow[],
+        age,
+      };
     }
   } catch (err: any) {
     logger.warn({ err: err.message }, "Song hot window Postgres fetch failed");
@@ -106,10 +120,10 @@ async function setHotWindow(
   songs: SongRow[],
   metadata: Record<string, unknown> = {},
 ): Promise<void> {
-  const key      = makeCacheKey(language, niche);
-  const now      = new Date();
+  const key = makeCacheKey(language, niche);
+  const now = new Date();
   const expiresAt = new Date(now.getTime() + HOT_TTL_MS);
-  const payload  = { narrative, songs, createdAt: now.getTime(), ...metadata };
+  const payload = { narrative, songs, createdAt: now.getTime(), ...metadata };
 
   await cache.set(key, payload, HOT_TTL_SECONDS);
 
@@ -141,22 +155,22 @@ function buildSongNarrative(
   const parts: string[] = [];
 
   const lifecycleEmoji: Record<string, string> = {
-    RISING:    "🚀",
-    PEAKING:   "🔥",
+    RISING: "🚀",
+    PEAKING: "🔥",
     DECLINING: "📉",
-    DEAD:      "💀",
-    CYCLICAL:  "🔄",
+    DEAD: "💀",
+    CYCLICAL: "🔄",
   };
 
   const signalLabel: Record<string, string> = {
     postNow: "Post NOW",
-    wait:    "Wait",
+    wait: "Wait",
     tooLate: "Too Late",
   };
 
   if (songs.length > 0) {
-    const postNow  = songs.filter((s) => s.signal === "postNow").slice(0, 5);
-    const waiting  = songs.filter((s) => s.signal === "wait").slice(0, 3);
+    const postNow = songs.filter((s) => s.signal === "postNow").slice(0, 5);
+    const waiting = songs.filter((s) => s.signal === "wait").slice(0, 3);
 
     if (postNow.length > 0) {
       parts.push(
@@ -182,7 +196,9 @@ function buildSongNarrative(
 
   // Add semantically similar songs (from vector search)
   const uniqueTitles = new Set(songs.map((s) => s.title.toLowerCase()));
-  const novelSimilar = similar.filter((s) => !uniqueTitles.has(s.title.toLowerCase()));
+  const novelSimilar = similar.filter(
+    (s) => !uniqueTitles.has(s.title.toLowerCase()),
+  );
 
   if (novelSimilar.length > 0) {
     parts.push(
@@ -207,15 +223,15 @@ function buildSongNarrative(
 // ── Main retrieval function ───────────────────────────────────────────────────
 
 export async function retrieveSongs(options: {
-  language?:     string;
-  niche?:        string;
+  language?: string;
+  niche?: string;
   forceRefresh?: boolean;
-  limit?:        number;
+  limit?: number;
 }): Promise<SongRetrievalResult> {
   const startTime = Date.now();
-  const language  = options.language || "Hindi";
-  const niche     = options.niche    || "general";
-  const limit     = options.limit    || 15;
+  const language = options.language || "Hindi";
+  const niche = options.niche || "general";
+  const limit = options.limit || 15;
 
   // Tier 1 check
   if (!options.forceRefresh) {
@@ -224,15 +240,15 @@ export async function retrieveSongs(options: {
       logger.info({ language, niche, age: hot.age }, "Song hot window HIT");
       return {
         hotWindowNarrative: hot.narrative,
-        fromCache:          true,
-        songs:              hot.songs,
-        similarSongs:       [],
+        fromCache: true,
+        songs: hot.songs,
+        similarSongs: [],
         metadata: {
           language,
           niche,
           retrievalTimeMs: Date.now() - startTime,
-          songCount:       hot.songs.length,
-          cacheAge:        hot.age,
+          songCount: hot.songs.length,
+          cacheAge: hot.age,
         },
       };
     }
@@ -241,63 +257,64 @@ export async function retrieveSongs(options: {
   logger.info({ language, niche }, "Song hot window MISS — full retrieval");
 
   // Tier 2 + 3: parallel retrieval
-  const [liveResult, similarResult, trajectoryResult] = await Promise.allSettled([
-    // Live songs from DB
-    (prisma as any).live_songs.findMany({
-      where: {
-        expires_at: { gt: new Date() },
-        language:   { equals: language, mode: "insensitive" },
-        lifecycle:  { not: "DEAD" },
-        ...(niche !== "general" ? { niche_tags: { has: niche } } : {}),
-      },
-      orderBy: [
-        { lifecycle: "asc" },        // PEAKING first via sort order
-        { chart_position: "asc" },
-      ],
-      take: limit,
-      select: {
-        id:             true,
-        title:          true,
-        artist:         true,
-        chart_position: true,
-        chart_change:   true,
-        streams_today:  true,
-        language:       true,
-        lifecycle:      true,
-        signal:         true,
-        growth:         true,
-        niche_tags:     true,
-        mood_tags:      true,
-        source:         true,
-      },
-    }),
+  const [liveResult, similarResult, trajectoryResult] =
+    await Promise.allSettled([
+      // Live songs from DB
+      (prisma as any).live_songs.findMany({
+        where: {
+          expires_at: { gt: new Date() },
+          language: { equals: language, mode: "insensitive" },
+          lifecycle: { not: "DEAD" },
+          ...(niche !== "general" ? { niche_tags: { has: niche } } : {}),
+        },
+        orderBy: [
+          { lifecycle: "asc" }, // PEAKING first via sort order
+          { chart_position: "asc" },
+        ],
+        take: limit,
+        select: {
+          id: true,
+          title: true,
+          artist: true,
+          chart_position: true,
+          chart_change: true,
+          streams_today: true,
+          language: true,
+          lifecycle: true,
+          signal: true,
+          growth: true,
+          niche_tags: true,
+          mood_tags: true,
+          source: true,
+        },
+      }),
 
-    // Semantic similarity (Tier 2)
-    findSimilarSongs(`${niche} trending music ${language}`, {
-      language,
-      limit: 6,
-      minSimilarity: 0.2,
-    }),
+      // Semantic similarity (Tier 2)
+      findSimilarSongs(`${niche} trending music ${language}`, {
+        language,
+        limit: 6,
+        minSimilarity: 0.2,
+      }),
 
-    // Tier 3 trajectories
-    (prisma as any).song_trajectories.findMany({
-      where: {
-        language:  { equals: language, mode: "insensitive" },
-        lifecycle: { not: "DEAD" },
-        ...(niche !== "general" ? { niche_tags: { has: niche } } : {}),
-      },
-      orderBy: { updated_at: "desc" },
-      take: 10,
-      select: {
-        song_title:  true,
-        artist:      true,
-        lifecycle:   true,
-        rank_history: true,
-        confidence:  true,
-        peak_rank:   true,
-      },
-    }),
-  ]);
+      // Tier 3 trajectories
+      (prisma as any).song_trajectories.findMany({
+        where: {
+          language: { equals: language, mode: "insensitive" },
+          lifecycle: { not: "DEAD" },
+          ...(niche !== "general" ? { niche_tags: { has: niche } } : {}),
+        },
+        orderBy: { updated_at: "desc" },
+        take: 10,
+        select: {
+          song_title: true,
+          artist: true,
+          lifecycle: true,
+          rank_history: true,
+          confidence: true,
+          peak_rank: true,
+        },
+      }),
+    ]);
 
   const liveSongs: SongRow[] =
     liveResult.status === "fulfilled"
@@ -307,40 +324,70 @@ export async function retrieveSongs(options: {
         }))
       : [];
 
+  // Ensure a stable, business-intended ordering: lifecycle priority then chart_position
+  const lifecyclePriority: Record<string, number> = {
+    PEAKING: 1,
+    RISING: 2,
+    DECLINING: 3,
+    CYCLICAL: 4,
+    DEAD: 5,
+  };
+
+  liveSongs.sort((a, b) => {
+    const pa = lifecyclePriority[a.lifecycle] ?? 99;
+    const pb = lifecyclePriority[b.lifecycle] ?? 99;
+    if (pa !== pb) return pa - pb;
+    const ca = a.chart_position ?? 9999;
+    const cb = b.chart_position ?? 9999;
+    return ca - cb;
+  });
+
   const similarSongs: SimilarSongResult[] =
     similarResult.status === "fulfilled" ? similarResult.value : [];
 
   // Build and cache narrative
-  const narrative = buildSongNarrative(language, niche, liveSongs, similarSongs);
+  const narrative = buildSongNarrative(
+    language,
+    niche,
+    liveSongs,
+    similarSongs,
+  );
 
   await setHotWindow(language, niche, narrative, liveSongs, {
-    songCount:    liveSongs.length,
+    songCount: liveSongs.length,
     similarCount: similarSongs.length,
-    generatedAt:  new Date().toISOString(),
+    generatedAt: new Date().toISOString(),
   });
 
   return {
     hotWindowNarrative: narrative,
-    fromCache:          false,
-    songs:              liveSongs,
+    fromCache: false,
+    songs: liveSongs,
     similarSongs,
     metadata: {
       language,
       niche,
       retrievalTimeMs: Date.now() - startTime,
-      songCount:       liveSongs.length,
+      songCount: liveSongs.length,
     },
   };
 }
 
 // ── Invalidation ──────────────────────────────────────────────────────────────
 
-export async function invalidateSongHotWindow(language: string, niche: string): Promise<void> {
+export async function invalidateSongHotWindow(
+  language: string,
+  niche: string,
+): Promise<void> {
   const key = makeCacheKey(language, niche);
   await cache.del(key);
   try {
-    await (prisma as any).song_hot_window.deleteMany({ where: { cache_key: key } });
-  } catch { /* non-critical */ }
+    await (prisma as any).song_hot_window.deleteMany({
+      where: { cache_key: key },
+    });
+  } catch {
+    /* non-critical */
+  }
   logger.info({ language, niche }, "Song hot window invalidated");
 }
 
@@ -348,7 +395,9 @@ export async function invalidateAllSongHotWindows(): Promise<void> {
   await cache.delPattern("songhot:*");
   try {
     await (prisma as any).song_hot_window.deleteMany({});
-  } catch { /* non-critical */ }
+  } catch {
+    /* non-critical */
+  }
   logger.info("All song hot windows invalidated");
 }
 
@@ -356,19 +405,22 @@ export async function invalidateAllSongHotWindows(): Promise<void> {
 // Called by studio.service.ts — returns normalised song rows ready for Groq prompt.
 
 export async function getSongsForBGM(options: {
-  niche:    string;
+  niche: string;
   language: string;
-  limit?:   number;
+  limit?: number;
 }): Promise<SongRow[]> {
   try {
     const result = await retrieveSongs({
       language: options.language,
-      niche:    options.niche,
-      limit:    options.limit || 10,
+      niche: options.niche,
+      limit: options.limit || 10,
     });
     return result.songs;
   } catch (err: any) {
-    logger.warn({ err: err.message }, "getSongsForBGM failed — returning empty");
+    logger.warn(
+      { err: err.message },
+      "getSongsForBGM failed — returning empty",
+    );
     return [];
   }
 }

@@ -17,32 +17,42 @@ import { logger } from "../../utils/logger";
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface SongRecord {
-  source:        "spotify" | "jiosaavn" | "youtube";
-  title:         string;
-  artist:        string;
+  source: "spotify" | "jiosaavn" | "youtube";
+  title: string;
+  artist: string;
   chart_position: number;
-  chart_change:  number;   // positive = climbing, negative = falling, 0 = stable
+  chart_change: number; // positive = climbing, negative = falling, 0 = stable
   streams_today: bigint;
-  language:      string;   // "Hindi" | "English" | "Punjabi" | "Telugu" | etc.
-  mood_tags:     string[];
-  niche_tags:    string[];
-  raw_data:      Record<string, unknown>;
+  language: string; // "Hindi" | "English" | "Punjabi" | "Telugu" | etc.
+  mood_tags: string[];
+  niche_tags: string[];
+  raw_data: Record<string, unknown>;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function detectLanguage(title: string, artist: string, meta: string = ""): string {
+function detectLanguage(
+  title: string,
+  artist: string,
+  meta: string = "",
+): string {
   const text = `${title} ${artist} ${meta}`.toLowerCase();
 
   // Simple heuristic — extend as needed
-  if (/[\u0900-\u097F]/.test(text)) return "Hindi";    // Devanagari script
+  if (/[\u0900-\u097F]/.test(text)) return "Hindi"; // Devanagari script
   if (/[\u0A80-\u0AFF]/.test(text)) return "Gujarati";
   if (/[\u0C00-\u0C7F]/.test(text)) return "Telugu";
   if (/[\u0B80-\u0BFF]/.test(text)) return "Tamil";
   if (/[\u0900-\u097F]/.test(artist)) return "Hindi";
 
   // Keyword-based
-  const hindiKeywords = ["bollywood", "filmi", "bhojpuri", "haryanvi", "punjabi"];
+  const hindiKeywords = [
+    "bollywood",
+    "filmi",
+    "bhojpuri",
+    "haryanvi",
+    "punjabi",
+  ];
   if (hindiKeywords.some((k) => text.includes(k))) return "Hindi";
 
   const englishKeywords = ["english", "pop", "r&b", "hip-hop"];
@@ -93,64 +103,59 @@ function inferNicheTags(moodTags: string[], language: string): string[] {
 
 export async function scrapeSpotify(): Promise<SongRecord[]> {
   try {
-    logger.info("Scraping Spotify India daily charts via CSV...");
+    logger.info("Scraping Spotify via official Web API...");
 
-    const { data } = await axios.get(
-      "https://charts.spotify.com/charts/view/regional-in-daily/latest.csv",
-      {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-          "Accept": "text/csv,text/plain,*/*",
+    const { scrapeSpotifyOfficial } =
+      await import("./spotify-official.service");
+    const { songs, diagnostics } = await scrapeSpotifyOfficial();
+
+    if (!songs.length) {
+      logger.warn({ diagnostics }, "Spotify official API returned no songs");
+      return [];
+    }
+
+    const mappedSongs: SongRecord[] = songs.map((spot) => {
+      const moodTags = inferMoodTags(spot.title);
+      const nicheTags = inferNicheTags(moodTags, "Hindi");
+
+      // Convert popularity (0-100) into a gentler pseudo-rank so most Spotify
+      // tracks land in RISING/PEAKING instead of collapsing into DECLINING.
+      const chartPosition = Math.max(
+        1,
+        Math.min(25, Math.ceil((100 - spot.popularity) / 4) + 1),
+      );
+
+      return {
+        source: "spotify",
+        title: spot.title,
+        artist: spot.artist,
+        chart_position: chartPosition,
+        chart_change: 0,
+        streams_today: BigInt(spot.popularity || 0),
+        language: "Hindi",
+        mood_tags: moodTags,
+        niche_tags: nicheTags,
+        raw_data: {
+          spotify_id: spot.spotify_id,
+          popularity: spot.popularity,
+          release_date: spot.release_date,
+          image_url: spot.image_url,
+          external_url: spot.external_url,
+          source: "official-api",
         },
-        timeout: 15000,
-        responseType: "text",
-      },
+      } satisfies SongRecord;
+    });
+
+    logger.info(
+      { count: mappedSongs.length, diagnostics },
+      "Spotify official API scrape complete",
     );
-
-    // CSV format: rank,uri,artist_names,track_name,source,peak_rank,previous_rank,weeks_on_chart,streams
-    const lines = (data as string).trim().split("\n");
-
-    // Skip header row
-    const songs: SongRecord[] = lines
-      .slice(1)
-      .slice(0, 50)
-      .map((line: string, i: number) => {
-        // Handle quoted CSV fields properly
-        const cols = line.match(/(".*?"|[^,]+)(?=\s*,|\s*$)/g) || line.split(",");
-        const clean = (s: string) => s?.replace(/^"|"$/g, "").trim() || "";
-
-        const rank        = parseInt(clean(cols[0])) || i + 1;
-        const artist      = clean(cols[2]);
-        const title       = clean(cols[3]);
-        const peakRank    = parseInt(clean(cols[5])) || rank;
-        const prevRank    = parseInt(clean(cols[6])) || rank;
-        const streams     = BigInt(Math.round(parseFloat(clean(cols[8])) || 0));
-
-        if (!title || title === "track_name") return null;
-
-        const language  = detectLanguage(title, artist);
-        const moodTags  = inferMoodTags(title);
-        const nicheTags = inferNicheTags(moodTags, language);
-
-        return {
-          source:         "spotify",
-          title:          title,
-          artist:         artist,
-          chart_position: rank,
-          chart_change:   prevRank - rank,
-          streams_today:  streams,
-          language,
-          mood_tags:      moodTags,
-          niche_tags:     nicheTags,
-          raw_data:       { rank, peakRank, prevRank },
-        } satisfies SongRecord;
-      })
-      .filter(Boolean) as SongRecord[];
-
-    logger.info({ count: songs.length }, "Spotify CSV scrape complete");
-    return songs;
+    return mappedSongs;
   } catch (err: any) {
-    logger.warn({ err: err.message }, "Spotify CSV scrape failed — skipping source");
+    logger.warn(
+      { err: err.message },
+      "Spotify official API scrape failed — skipping source",
+    );
     return [];
   }
 }
@@ -160,8 +165,8 @@ export async function scrapeSpotify(): Promise<SongRecord[]> {
 export async function scrapeJioSaavn(): Promise<SongRecord[]> {
   // Try 3 endpoints in order — first success wins
   return (
-    (await _jiosaavnTrending())     ||
-    (await _jiosaavnTopCharts())    ||
+    (await _jiosaavnTrending()) ||
+    (await _jiosaavnTopCharts()) ||
     (await _jiosaavnSearchFallback()) ||
     []
   );
@@ -173,20 +178,25 @@ async function _jiosaavnTrending(): Promise<SongRecord[] | null> {
     logger.info("JioSaavn: trying trending songs endpoint...");
     const { data } = await axios.get("https://www.jiosaavn.com/api.php", {
       params: {
-        __call:   "song.getTrending",
-        _format:  "json",
-        _marker:  "0",
-        ctx:      "web6dot0",
+        __call: "song.getTrending",
+        _format: "json",
+        _marker: "0",
+        ctx: "web6dot0",
         entity_type: "song",
         entity_language: "hindi,english,punjabi",
-        n:        50,
-        p:        1,
+        n: 50,
+        p: 1,
       },
-      headers: { "User-Agent": "Mozilla/5.0", Referer: "https://www.jiosaavn.com/" },
+      headers: {
+        "User-Agent": "Mozilla/5.0",
+        Referer: "https://www.jiosaavn.com/",
+      },
       timeout: 12000,
     });
 
-    const rawSongs: any[] = Array.isArray(data) ? data : (data?.results || data?.songs || []);
+    const rawSongs: any[] = Array.isArray(data)
+      ? data
+      : data?.results || data?.songs || [];
     if (!rawSongs.length) return null;
 
     return _mapJioSaavnSongs(rawSongs, 40);
@@ -201,16 +211,19 @@ async function _jiosaavnTopCharts(): Promise<SongRecord[] | null> {
     logger.info("JioSaavn: trying top songs fallback...");
     const { data } = await axios.get("https://www.jiosaavn.com/api.php", {
       params: {
-        __call:  "webapi.get",
+        __call: "webapi.get",
         _format: "json",
         _marker: "0",
-        ctx:     "web6dot0",
-        token:   "ze2Qe7oCVGTF4J4w",  // JioSaavn India Top 50 — stable public token
-        type:    "playlist",
-        n:       50,
-        p:       1,
+        ctx: "web6dot0",
+        token: "ze2Qe7oCVGTF4J4w", // JioSaavn India Top 50 — stable public token
+        type: "playlist",
+        n: 50,
+        p: 1,
       },
-      headers: { "User-Agent": "Mozilla/5.0", Referer: "https://www.jiosaavn.com/" },
+      headers: {
+        "User-Agent": "Mozilla/5.0",
+        Referer: "https://www.jiosaavn.com/",
+      },
       timeout: 12000,
     });
 
@@ -229,15 +242,18 @@ async function _jiosaavnSearchFallback(): Promise<SongRecord[] | null> {
     logger.info("JioSaavn: trying search fallback...");
     const { data } = await axios.get("https://www.jiosaavn.com/api.php", {
       params: {
-        __call:  "search.getResults",
+        __call: "search.getResults",
         _format: "json",
         _marker: "0",
-        ctx:     "web6dot0",
-        query:   "trending hindi 2025",
-        n:       40,
-        p:       1,
+        ctx: "web6dot0",
+        query: "trending hindi 2025",
+        n: 40,
+        p: 1,
       },
-      headers: { "User-Agent": "Mozilla/5.0", Referer: "https://www.jiosaavn.com/" },
+      headers: {
+        "User-Agent": "Mozilla/5.0",
+        Referer: "https://www.jiosaavn.com/",
+      },
       timeout: 10000,
     });
 
@@ -255,23 +271,27 @@ function _mapJioSaavnSongs(rawSongs: any[], limit: number): SongRecord[] {
   return rawSongs
     .slice(0, limit)
     .map((song: any, i: number) => {
-      const title  = song.title || song.song || "Unknown";
-      const artist = song.primary_artists || song.more_info?.primary_artists || song.subtitle || "Unknown";
-      const lang   = song.language || detectLanguage(title, artist);
-      const moodTags  = inferMoodTags(title);
+      const title = song.title || song.song || "Unknown";
+      const artist =
+        song.primary_artists ||
+        song.more_info?.primary_artists ||
+        song.subtitle ||
+        "Unknown";
+      const lang = song.language || detectLanguage(title, artist);
+      const moodTags = inferMoodTags(title);
       const nicheTags = inferNicheTags(moodTags, lang);
 
       return {
-        source:         "jiosaavn",
-        title:          decodeHtmlEntities(title.trim()),
-        artist:         decodeHtmlEntities(artist.trim()),
+        source: "jiosaavn",
+        title: decodeHtmlEntities(title.trim()),
+        artist: decodeHtmlEntities(artist.trim()),
         chart_position: i + 1,
-        chart_change:   0,
-        streams_today:  BigInt(song.play_count || 0),
-        language:       capitaliseFirst(lang),
-        mood_tags:      moodTags,
-        niche_tags:     nicheTags,
-        raw_data:       { songId: song.id, language: song.language },
+        chart_change: 0,
+        streams_today: BigInt(song.play_count || 0),
+        language: capitaliseFirst(lang),
+        mood_tags: moodTags,
+        niche_tags: nicheTags,
+        raw_data: { songId: song.id, language: song.language },
       } satisfies SongRecord;
     })
     .filter((s) => s.title !== "Unknown");
@@ -294,13 +314,13 @@ export async function scrapeYouTubeMusic(): Promise<SongRecord[]> {
       "https://www.googleapis.com/youtube/v3/videos",
       {
         params: {
-          key:             YT_KEY,
-          part:            "snippet,statistics",
-          chart:           "mostPopular",
-          regionCode:      "IN",
+          key: YT_KEY,
+          part: "snippet,statistics",
+          chart: "mostPopular",
+          regionCode: "IN",
           videoCategoryId: "10",
-          maxResults:      50,
-          hl:              "hi",
+          maxResults: 50,
+          hl: "hi",
         },
         timeout: 12000,
       },
@@ -310,26 +330,30 @@ export async function scrapeYouTubeMusic(): Promise<SongRecord[]> {
 
     const songs: SongRecord[] = items
       .map((item: any, i: number) => {
-        const snippet    = item.snippet || {};
-        const stats      = item.statistics || {};
-        const title      = snippet.title || "Unknown";
-        const artist     = snippet.channelTitle || "Unknown";
-        const language   = detectLanguage(title, artist, snippet.description || "");
-        const moodTags   = inferMoodTags(title);
-        const nicheTags  = inferNicheTags(moodTags, language);
-        const views      = BigInt(stats.viewCount || 0);
+        const snippet = item.snippet || {};
+        const stats = item.statistics || {};
+        const title = snippet.title || "Unknown";
+        const artist = snippet.channelTitle || "Unknown";
+        const language = detectLanguage(
+          title,
+          artist,
+          snippet.description || "",
+        );
+        const moodTags = inferMoodTags(title);
+        const nicheTags = inferNicheTags(moodTags, language);
+        const views = BigInt(stats.viewCount || 0);
 
         return {
-          source:         "youtube",
-          title:          title.trim(),
-          artist:         artist.trim(),
+          source: "youtube",
+          title: title.trim(),
+          artist: artist.trim(),
           chart_position: i + 1,
-          chart_change:   0,
-          streams_today:  views,
+          chart_change: 0,
+          streams_today: views,
           language,
-          mood_tags:      moodTags,
-          niche_tags:     nicheTags,
-          raw_data:       {
+          mood_tags: moodTags,
+          niche_tags: nicheTags,
+          raw_data: {
             videoId: item.id,
             viewCount: stats.viewCount,
             likeCount: stats.likeCount,
@@ -342,7 +366,10 @@ export async function scrapeYouTubeMusic(): Promise<SongRecord[]> {
     logger.info({ count: songs.length }, "YouTube Music scrape complete");
     return songs;
   } catch (err: any) {
-    logger.warn({ err: err.message }, "YouTube Music scrape failed — skipping source");
+    logger.warn(
+      { err: err.message },
+      "YouTube Music scrape failed — skipping source",
+    );
     return [];
   }
 }
@@ -353,22 +380,32 @@ export async function scrapeAllSources(): Promise<{
   songs: SongRecord[];
   diagnostics: Record<string, string>;
 }> {
-  const [spotifyResult, jiosaavnResult, youtubeResult] = await Promise.allSettled([
-    scrapeSpotify(),
-    scrapeJioSaavn(),
-    scrapeYouTubeMusic(),
-  ]);
+  const [spotifyResult, jiosaavnResult, youtubeResult] =
+    await Promise.allSettled([
+      scrapeSpotify(),
+      scrapeJioSaavn(),
+      scrapeYouTubeMusic(),
+    ]);
 
   const diagnostics: Record<string, string> = {
-    spotify:   spotifyResult.status  === "fulfilled" ? `ok (${spotifyResult.value.length})` : `failed: ${(spotifyResult as any).reason?.message}`,
-    jiosaavn:  jiosaavnResult.status === "fulfilled" ? `ok (${jiosaavnResult.value.length})` : `failed: ${(jiosaavnResult as any).reason?.message}`,
-    youtube:   youtubeResult.status  === "fulfilled" ? `ok (${youtubeResult.value.length})` : `failed: ${(youtubeResult as any).reason?.message}`,
+    spotify:
+      spotifyResult.status === "fulfilled"
+        ? `ok (${spotifyResult.value.length})`
+        : `failed: ${(spotifyResult as any).reason?.message}`,
+    jiosaavn:
+      jiosaavnResult.status === "fulfilled"
+        ? `ok (${jiosaavnResult.value.length})`
+        : `failed: ${(jiosaavnResult as any).reason?.message}`,
+    youtube:
+      youtubeResult.status === "fulfilled"
+        ? `ok (${youtubeResult.value.length})`
+        : `failed: ${(youtubeResult as any).reason?.message}`,
   };
 
   const allSongs: SongRecord[] = [
-    ...(spotifyResult.status  === "fulfilled" ? spotifyResult.value  : []),
+    ...(spotifyResult.status === "fulfilled" ? spotifyResult.value : []),
     ...(jiosaavnResult.status === "fulfilled" ? jiosaavnResult.value : []),
-    ...(youtubeResult.status  === "fulfilled" ? youtubeResult.value  : []),
+    ...(youtubeResult.status === "fulfilled" ? youtubeResult.value : []),
   ];
 
   // De-duplicate by normalised title+artist — keep the entry with more streams

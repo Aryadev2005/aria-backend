@@ -16,24 +16,39 @@ import type { SongRecord } from "./song.scraper.service";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-export type Lifecycle = "RISING" | "PEAKING" | "DECLINING" | "DEAD" | "CYCLICAL";
-export type Signal    = "postNow" | "wait" | "tooLate";
+export type Lifecycle =
+  | "RISING"
+  | "PEAKING"
+  | "DECLINING"
+  | "DEAD"
+  | "CYCLICAL";
+export type Signal = "postNow" | "wait" | "tooLate";
 
 export interface RankHistoryEntry {
-  date:     string;   // ISO date "2025-01-15"
-  rank:     number;
-  streams:  string;   // BigInt as string to survive JSON
-  source:   string;
+  date: string; // ISO date "2025-01-15"
+  rank: number;
+  streams: string; // BigInt as string to survive JSON
+  source: string;
 }
 
 // ── Lifecycle calculation ─────────────────────────────────────────────────────
 
-export function computeLifecycle(history: RankHistoryEntry[]): Lifecycle {
-  if (history.length < 2) return "RISING";
+export function computeLifecycle(
+  history: RankHistoryEntry[],
+  currentRank?: number,
+): Lifecycle {
+  // NEW SONG (< 2 days): use chart_position + popularity to guess initial state
+  if (history.length < 2) {
+    const rank = currentRank || (history[0]?.rank ?? 50);
+    if (rank <= 5) return "PEAKING"; // Top 5 is peaking
+    if (rank <= 15) return "RISING"; // Top 15 is rising
+    if (rank <= 50) return "RISING"; // 16-50 still rising
+    return "DECLINING"; // 51+ is declining
+  }
 
-  const recent   = history.slice(-6);
-  const ranks    = recent.map((h) => h.rank);
-  const latest   = ranks[ranks.length - 1];
+  const recent = history.slice(-6);
+  const ranks = recent.map((h) => h.rank);
+  const latest = ranks[ranks.length - 1];
   const previous = ranks[ranks.length - 2];
   const earliest = ranks[0];
 
@@ -45,7 +60,7 @@ export function computeLifecycle(history: RankHistoryEntry[]): Lifecycle {
     let changes = 0;
     for (let i = 2; i < ranks.length; i++) {
       const dir1 = Math.sign(ranks[i - 1] - ranks[i - 2]);
-      const dir2 = Math.sign(ranks[i]     - ranks[i - 1]);
+      const dir2 = Math.sign(ranks[i] - ranks[i - 1]);
       if (dir1 !== 0 && dir2 !== 0 && dir1 !== dir2) changes++;
     }
     if (changes >= 3) return "CYCLICAL";
@@ -65,19 +80,19 @@ export function computeLifecycle(history: RankHistoryEntry[]): Lifecycle {
 }
 
 export function computeSignal(lifecycle: Lifecycle, rank: number): Signal {
-  if (lifecycle === "DEAD")                      return "tooLate";
-  if (lifecycle === "DECLINING" && rank > 50)    return "tooLate";
-  if (lifecycle === "PEAKING")                   return "postNow";
-  if (lifecycle === "RISING"    && rank <= 30)   return "postNow";
-  if (lifecycle === "RISING"    && rank <= 60)   return "postNow";
-  if (lifecycle === "CYCLICAL")                  return "wait";
-  if (lifecycle === "DECLINING")                 return "wait";
+  if (lifecycle === "DEAD") return "tooLate";
+  if (lifecycle === "DECLINING" && rank > 50) return "tooLate";
+  if (lifecycle === "PEAKING") return "postNow";
+  if (lifecycle === "RISING" && rank <= 30) return "postNow";
+  if (lifecycle === "RISING" && rank <= 60) return "postNow";
+  if (lifecycle === "CYCLICAL") return "wait";
+  if (lifecycle === "DECLINING") return "wait";
   return "postNow";
 }
 
 function computeGrowthLabel(chartChange: number): string {
-  if (chartChange > 5)  return `+${chartChange} ↑`;
-  if (chartChange > 0)  return `↑${chartChange}`;
+  if (chartChange > 5) return `+${chartChange} ↑`;
+  if (chartChange > 0) return `↑${chartChange}`;
   if (chartChange === 0) return "stable";
   return `${chartChange} ↓`;
 }
@@ -88,17 +103,17 @@ export async function upsertSongs(songs: SongRecord[]): Promise<number> {
   if (!songs.length) return 0;
 
   const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
-  const dateStr   = new Date().toISOString().split("T")[0];
-  let upserted    = 0;
+  const dateStr = new Date().toISOString().split("T")[0];
+  let upserted = 0;
 
   for (const song of songs) {
     try {
       // Fetch existing to maintain rank_history
       const existing = await (prisma as any).live_songs.findFirst({
         where: {
-          title:    { equals: song.title,  mode: "insensitive" },
-          artist:   { equals: song.artist, mode: "insensitive" },
-          source:   song.source,
+          title: { equals: song.title, mode: "insensitive" },
+          artist: { equals: song.artist, mode: "insensitive" },
+          source: song.source,
         },
         select: { id: true, rank_history: true, peak_rank: true },
       });
@@ -108,10 +123,10 @@ export async function upsertSongs(songs: SongRecord[]): Promise<number> {
         (existing?.rank_history as RankHistoryEntry[]) || [];
 
       const todayEntry: RankHistoryEntry = {
-        date:    dateStr,
-        rank:    song.chart_position,
+        date: dateStr,
+        rank: song.chart_position,
         streams: song.streams_today.toString(),
-        source:  song.source,
+        source: song.source,
       };
 
       // Avoid duplicate entries on same date
@@ -120,9 +135,9 @@ export async function upsertSongs(songs: SongRecord[]): Promise<number> {
       // Keep last 30 days only
       const trimmedHistory = history.slice(-30);
 
-      const lifecycle = computeLifecycle(trimmedHistory);
-      const signal    = computeSignal(lifecycle, song.chart_position);
-      const growth    = computeGrowthLabel(song.chart_change);
+      const lifecycle = computeLifecycle(trimmedHistory, song.chart_position);
+      const signal = computeSignal(lifecycle, song.chart_position);
+      const growth = computeGrowthLabel(song.chart_change);
 
       const peakRank = Math.min(
         song.chart_position,
@@ -134,52 +149,58 @@ export async function upsertSongs(songs: SongRecord[]): Promise<number> {
           where: { id: existing.id },
           data: {
             chart_position: song.chart_position,
-            chart_change:   song.chart_change,
-            streams_today:  song.streams_today,
-            language:       song.language,
+            chart_change: song.chart_change,
+            streams_today: song.streams_today,
+            language: song.language,
             lifecycle,
             signal,
             growth,
-            niche_tags:     song.niche_tags,
-            mood_tags:      song.mood_tags,
-            rank_history:   trimmedHistory as any,
-            peak_rank:      peakRank,
-            raw_data:       song.raw_data as any,
-            fetched_at:     new Date(),
-            expires_at:     expiresAt,
+            niche_tags: song.niche_tags,
+            mood_tags: song.mood_tags,
+            rank_history: trimmedHistory as any,
+            peak_rank: peakRank,
+            raw_data: song.raw_data as any,
+            fetched_at: new Date(),
+            expires_at: expiresAt,
           },
         });
       } else {
         await (prisma as any).live_songs.create({
           data: {
-            source:         song.source,
-            title:          song.title,
-            artist:         song.artist,
+            source: song.source,
+            title: song.title,
+            artist: song.artist,
             chart_position: song.chart_position,
-            chart_change:   song.chart_change,
-            streams_today:  song.streams_today,
-            language:       song.language,
+            chart_change: song.chart_change,
+            streams_today: song.streams_today,
+            language: song.language,
             lifecycle,
             signal,
             growth,
-            niche_tags:     song.niche_tags,
-            mood_tags:      song.mood_tags,
-            rank_history:   [todayEntry] as any,
-            peak_rank:      song.chart_position,
-            raw_data:       song.raw_data as any,
-            fetched_at:     new Date(),
-            expires_at:     expiresAt,
+            niche_tags: song.niche_tags,
+            mood_tags: song.mood_tags,
+            rank_history: [todayEntry] as any,
+            peak_rank: song.chart_position,
+            raw_data: song.raw_data as any,
+            fetched_at: new Date(),
+            expires_at: expiresAt,
           },
         });
       }
 
       upserted++;
     } catch (err: any) {
-      logger.warn({ err: err.message, title: song.title }, "Song upsert failed");
+      logger.warn(
+        { err: err.message, title: song.title },
+        "Song upsert failed",
+      );
     }
   }
 
-  logger.info({ upserted, total: songs.length }, "Songs upserted into live_songs");
+  logger.info(
+    { upserted, total: songs.length },
+    "Songs upserted into live_songs",
+  );
   return upserted;
 }
 
@@ -189,14 +210,14 @@ export async function updateSongTrajectories(): Promise<number> {
   const songs = await (prisma as any).live_songs.findMany({
     where: { expires_at: { gt: new Date() } },
     select: {
-      title:          true,
-      artist:         true,
-      language:       true,
-      lifecycle:      true,
+      title: true,
+      artist: true,
+      language: true,
+      lifecycle: true,
       chart_position: true,
-      rank_history:   true,
-      niche_tags:     true,
-      source:         true,
+      rank_history: true,
+      niche_tags: true,
+      source: true,
     },
   });
 
@@ -205,42 +226,43 @@ export async function updateSongTrajectories(): Promise<number> {
   for (const song of songs) {
     try {
       const history = (song.rank_history as RankHistoryEntry[]) || [];
-      const lifecycle = computeLifecycle(history);
-      const ranks    = history.map((h) => h.rank);
+      const lifecycle = computeLifecycle(history, song.chart_position);
+      const ranks = history.map((h) => h.rank);
       const peakRank = ranks.length ? Math.min(...ranks) : song.chart_position;
       const peakEntry = history.find((h) => h.rank === peakRank);
 
       const existing = await (prisma as any).song_trajectories.findFirst({
         where: {
-          song_title: { equals: song.title,    mode: "insensitive" },
-          language:   { equals: song.language, mode: "insensitive" },
+          song_title: { equals: song.title, mode: "insensitive" },
+          language: { equals: song.language, mode: "insensitive" },
         },
         select: { id: true, first_seen: true, confidence: true },
       });
 
       const confidence = Math.min(
         0.99,
-        (Number(existing?.confidence || 0.5)) + (history.length >= 5 ? 0.1 : 0.02),
+        Number(existing?.confidence || 0.5) +
+          (history.length >= 5 ? 0.1 : 0.02),
       );
 
       const payload = {
-        song_title:  song.title,
-        artist:      song.artist,
-        language:    song.language || "unknown",
+        song_title: song.title,
+        artist: song.artist,
+        language: song.language || "unknown",
         lifecycle,
         rank_history: history as any,
-        peak_rank:   peakRank,
-        peak_at:     peakEntry ? new Date(peakEntry.date) : null,
-        niche_tags:  song.niche_tags || [],
-        source:      song.source,
+        peak_rank: peakRank,
+        peak_at: peakEntry ? new Date(peakEntry.date) : null,
+        niche_tags: song.niche_tags || [],
+        source: song.source,
         confidence,
-        updated_at:  new Date(),
+        updated_at: new Date(),
       };
 
       if (existing) {
         await (prisma as any).song_trajectories.update({
           where: { id: existing.id },
-          data:  payload,
+          data: payload,
         });
       } else {
         await (prisma as any).song_trajectories.create({
@@ -250,7 +272,10 @@ export async function updateSongTrajectories(): Promise<number> {
 
       updated++;
     } catch (err: any) {
-      logger.warn({ err: err.message, title: song.title }, "Trajectory update failed");
+      logger.warn(
+        { err: err.message, title: song.title },
+        "Trajectory update failed",
+      );
     }
   }
 

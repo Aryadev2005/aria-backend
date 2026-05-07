@@ -18,6 +18,7 @@ const EMBED_MODEL = process.env.EMBED_MODEL || "text-embedding-3-small";
 const BATCH_SIZE = 128;
 
 let _openai: OpenAI | null = null;
+let _hasSongEmbeddingColumn: boolean | null = null;
 
 function getOpenAI(): OpenAI {
   if (!_openai) {
@@ -27,6 +28,31 @@ function getOpenAI(): OpenAI {
     _openai = new OpenAI({ apiKey });
   }
   return _openai;
+}
+
+async function hasSongEmbeddingColumn(): Promise<boolean> {
+  if (_hasSongEmbeddingColumn !== null) return _hasSongEmbeddingColumn;
+
+  try {
+    const rows = (await prisma.$queryRawUnsafe(
+      `SELECT 1
+       FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND table_name = 'song_embeddings'
+         AND column_name = 'embedding'
+       LIMIT 1`,
+    )) as Array<{ "?column?": number }>;
+
+    _hasSongEmbeddingColumn = rows.length > 0;
+  } catch (err: any) {
+    logger.warn(
+      { err: err.message },
+      "Failed to inspect song_embeddings columns; assuming no vector column",
+    );
+    _hasSongEmbeddingColumn = false;
+  }
+
+  return _hasSongEmbeddingColumn;
 }
 
 // ── Build rich embed text from a song row ─────────────────────────────────────
@@ -104,8 +130,10 @@ export async function embedSongs(songIds: string[]): Promise<number> {
 
   if (!songs.length) return 0;
 
+  const canStoreVector = await hasSongEmbeddingColumn();
+
   const texts = songs.map(buildSongEmbedText);
-  const embeddings = await generateEmbeddingsBatch(texts);
+  const embeddings = canStoreVector ? await generateEmbeddingsBatch(texts) : [];
 
   let upserted = 0;
 
@@ -115,22 +143,39 @@ export async function embedSongs(songIds: string[]): Promise<number> {
     const embedText = texts[i];
 
     try {
-      await prisma.$queryRawUnsafe(
-        `INSERT INTO song_embeddings (song_id, embedding, embed_text, language, niche_tags, updated_at)
-         VALUES ($1, $2::vector, $3, $4, $5, NOW())
-         ON CONFLICT (song_id)
-         DO UPDATE SET
-           embedding  = $2::vector,
-           embed_text = $3,
-           language   = $4,
-           niche_tags = $5,
-           updated_at = NOW()`,
-        song.id,
-        `[${embedding.join(",")}]`,
-        embedText,
-        song.language || null,
-        `{${(song.niche_tags || []).join(",")}}`,
-      );
+      if (canStoreVector) {
+        await prisma.$queryRawUnsafe(
+          `INSERT INTO song_embeddings (song_id, embedding, embed_text, language, niche_tags, updated_at)
+           VALUES ($1, $2::vector, $3, $4, $5, NOW())
+           ON CONFLICT (song_id)
+           DO UPDATE SET
+             embedding  = $2::vector,
+             embed_text = $3,
+             language   = $4,
+             niche_tags = $5,
+             updated_at = NOW()`,
+          song.id,
+          `[${embedding.join(",")}]`,
+          embedText,
+          song.language || null,
+          `{${(song.niche_tags || []).join(",")}}`,
+        );
+      } else {
+        await prisma.$queryRawUnsafe(
+          `INSERT INTO song_embeddings (song_id, embed_text, language, niche_tags, updated_at)
+           VALUES ($1, $2, $3, $4, NOW())
+           ON CONFLICT (song_id)
+           DO UPDATE SET
+             embed_text = $2,
+             language   = $3,
+             niche_tags = $4,
+             updated_at = NOW()`,
+          song.id,
+          embedText,
+          song.language || null,
+          `{${(song.niche_tags || []).join(",")}}`,
+        );
+      }
       upserted++;
     } catch (err: any) {
       logger.warn(
@@ -179,9 +224,72 @@ export async function findSimilarSongs(
 ): Promise<SimilarSongResult[]> {
   const { limit = 8, language, nicheTags, minSimilarity = 0.25 } = options;
 
+  const hasVectorColumn = await hasSongEmbeddingColumn();
+
   const cacheKey = `svsearch:${query}:${language || "all"}:${nicheTags?.join(",") || "all"}:${limit}`;
   const cached = (await cache.get(cacheKey)) as SimilarSongResult[] | null;
   if (cached) return cached;
+
+  if (!hasVectorColumn) {
+    const conditions: string[] = [
+      `ls.expires_at > NOW()`,
+      `(se.embed_text ILIKE $1 OR ls.title ILIKE $1 OR ls.artist ILIKE $1)`,
+    ];
+    const params: any[] = [`%${query}%`];
+
+    if (language) {
+      params.push(language);
+      conditions.push(`se.language = $${params.length}`);
+    }
+
+    if (nicheTags?.length) {
+      params.push(`{${nicheTags.join(",")}}`);
+      conditions.push(`se.niche_tags && $${params.length}::text[]`);
+    }
+
+    params.push(limit);
+    const limitParam = `$${params.length}`;
+
+    const sql = `
+      SELECT
+        se.id,
+        se.song_id AS "songId",
+        ls.title,
+        ls.artist,
+        se.language,
+        se.embed_text AS "embedText",
+        CASE
+          WHEN ls.title ILIKE $1 THEN 0.95
+          WHEN ls.artist ILIKE $1 THEN 0.85
+          ELSE 0.7
+        END AS similarity
+      FROM song_embeddings se
+      JOIN live_songs ls ON ls.id = se.song_id
+      WHERE ${conditions.join(" AND ")}
+      ORDER BY similarity DESC, se.updated_at DESC
+      LIMIT ${limitParam}
+    `;
+
+    try {
+      const results = (await prisma.$queryRawUnsafe(sql, ...params)) as any[];
+
+      const mapped: SimilarSongResult[] = results.map((r) => ({
+        id: r.id,
+        songId: r.songId,
+        title: r.title,
+        artist: r.artist,
+        language: r.language,
+        similarity: parseFloat(r.similarity),
+        embedText: r.embedText,
+      }));
+
+      await cache.set(cacheKey, mapped, 180);
+      return mapped;
+    } catch (err: any) {
+      logger.warn({ err: err.message, query }, "Song fallback search failed");
+      return [];
+    }
+  }
 
   let queryEmbedding: number[];
   try {
