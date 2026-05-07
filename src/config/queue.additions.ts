@@ -60,7 +60,7 @@ export async function scheduleSongJobs(): Promise<void> {
 }
 
 // ── Discovery scrape schedule ─────────────────────────────────────────────────
-// Global TikTok + Pinterest + Google Trends scrape every 3 hours
+// Global TikTok + Pinterest + Google Trends scrape every 12 hours
 
 export async function scheduleDiscoveryJobs(): Promise<void> {
   try {
@@ -68,11 +68,11 @@ export async function scheduleDiscoveryJobs(): Promise<void> {
 
     await discoveryQueue.upsertJobScheduler(
       "discovery-global-scheduled",
-      { every: 3 * 60 * 60 * 1000 },  // every 3 hours
+      { every: 12 * 60 * 60 * 1000 },  // every 12 hours
       { name: "discovery-global", data: {} },
     );
 
-    logger.info("Discovery jobs scheduled (every 3h)");
+    logger.info("Discovery jobs scheduled (every 12h)");
     await discoveryQueue.close();
   } catch (err: any) {
     logger.warn({ err: err.message }, "Failed to schedule discovery jobs");
