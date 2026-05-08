@@ -10,10 +10,10 @@
 //  5. Refresh race condition fixed: returns result before resetting state
 // ══════════════════════════════════════════════════════════════════════════════
 
+import OpenAI from 'openai';
 import { prisma }          from '../config/database';
 import { cache }           from '../config/redis';
 import { logger }          from '../utils/logger';
-import { _callGroq }       from './ai/groq.service';
 import { getVoicePortrait } from './voice.service';
 import { getMemory }       from './aria_memory.service';
 
@@ -66,6 +66,67 @@ interface GrowthProjection {
   conservative:   string;
   optimistic:     string;
   keyAssumption:  string;
+}
+
+// ── Direct OpenAI call — bypasses LangChain overhead entirely ────────────────
+// Every other service in this codebase uses this pattern. The roadmap was
+// the only outlier using LangChain ChatOpenAI which adds 500ms–2s of overhead.
+
+let _openai: OpenAI | null = null;
+const getOpenAI = (): OpenAI => {
+  if (!_openai) {
+    const apiKey = process.env.OPENAI_API_KEY?.trim();
+    if (!apiKey) throw new Error('OPENAI_API_KEY is required');
+    _openai = new OpenAI({ apiKey });
+  }
+  return _openai;
+};
+
+async function callAI(prompt: string): Promise<any> {
+  const model   = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+  const openai  = getOpenAI();
+  let   lastErr: any = null;
+
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const systemPrompt = attempt === 1
+        ? "You are ARIA — India's creator growth strategist. Respond ONLY with valid JSON. No markdown, no preamble, no explanation."
+        : "CRITICAL: Respond ONLY with a raw JSON object. Start with { and end with }. No text outside the JSON.";
+
+      const res = await openai.chat.completions.create({
+        model,
+        max_tokens:  1600,
+        temperature: 0,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user',   content: prompt },
+        ],
+      });
+
+      const content = res.choices[0]?.message?.content;
+      if (!content) throw new Error('Empty response from OpenAI');
+
+      // Strip markdown fences if model adds them despite instructions
+      const clean = content
+        .replace(/```json\n?/g, '')
+        .replace(/```\n?/g, '')
+        .trim();
+
+      return JSON.parse(clean);
+
+    } catch (err: any) {
+      logger.warn({ err: err.message, attempt, model }, 'roadmap AI call failed');
+      lastErr = err;
+
+      // Don't retry auth errors
+      if (err.status === 401 || err.status === 403) break;
+
+      // Wait 1s before retry
+      if (attempt < 2) await new Promise(r => setTimeout(r, 1000));
+    }
+  }
+
+  throw lastErr || new Error('Roadmap AI call failed after retries');
 }
 
 // ── Strategic lenses — cycles on every fresh generation ──────────────────────
@@ -490,11 +551,7 @@ Respond ONLY with valid JSON (no markdown, no preamble):
   const t0 = Date.now();
   logger.info({ userId, promptChars: prompt.length, contextBlocks: contextBlocks.length }, 'roadmap: calling AI');
 
-  const roadmapRaw = await _callGroq(prompt, {
-    maxTokens: 1600,   // was 2200 — reduces generation time ~30%
-    useLlama:  false,
-    maxRetries: 2,     // was 3 — worst case now: 20s + 1s + 20s = 41s vs 75s before
-  });
+  const roadmapRaw = await callAI(prompt);
 
   logger.info({ userId, aiMs: Date.now() - t0 }, 'roadmap: AI call complete');
 

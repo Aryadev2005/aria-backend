@@ -382,6 +382,8 @@ model users {
   trend_interactions      trend_interactions[]
 
   creator_analytics       creator_analytics[]
+  video_dna_analyses      video_dna_analyses[]
+  competitor_analyses     competitor_analyses[]
 
   @@index([archetype], map: "idx_users_archetype")
   @@index([firebase_uid], map: "idx_users_firebase_uid")
@@ -696,6 +698,51 @@ model studio_scripts {
 
   @@index([user_id])
   @@index([user_id, pinned])
+}
+
+model video_dna_analyses {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id           String    @db.Uuid
+  video_id          String
+  video_title       String?
+  channel_name      String?
+  result_data       Json      @default("{}")
+  heatmap_data      Json      @default("{}")
+  streams_data      Json      @default("{}")
+  shorts_timestamps Json      @default("[]")
+  competitor_gap    Json      @default("{}")
+  analysis_version  String    @default("v1")
+  processing_ms     Int       @default(0)
+  analysed_at       DateTime  @default(now()) @db.Timestamptz(6)
+  created_at        DateTime  @default(now()) @db.Timestamptz(6)
+  users             users     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([user_id, video_id], name: "user_id_video_id")
+  @@index([user_id], map: "idx_video_dna_user")
+  @@index([analysed_at(sort: Desc)], map: "idx_video_dna_analysed_at")
+}
+
+model competitor_analyses {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id     String    @db.Uuid
+  niche       String
+  video_ids   String[]  @default([])
+  gap_report  Json      @default("{}")
+  created_at  DateTime? @default(now()) @db.Timestamptz(6)
+  expires_at  DateTime  @db.Timestamptz(6)
+  users       users     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id], map: "idx_competitor_analyses_user")
+  @@index([niche],   map: "idx_competitor_analyses_niche")
+}
+
+model video_heatmaps {
+  video_id    String    @id
+  heatmap_data Json     @default("{}")
+  scraped_at  DateTime  @default(now()) @db.Timestamptz(6)
+  expires_at  DateTime  @db.Timestamptz(6)
+
+  @@index([expires_at], map: "idx_video_heatmaps_expiry")
 }
 
 model creator_analytics {
