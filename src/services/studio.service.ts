@@ -38,7 +38,7 @@ const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
 const groq = () => {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) throw new Error("OPENAI_API_KEY is required");
-  if (!_openai) _openai = new OpenAI({ apiKey });
+  if (!_openai) _openai = new OpenAI({ apiKey, timeout: 25_000 }); // 25s hard limit
   return _openai;
 };
 
@@ -73,11 +73,14 @@ export const generateScriptStructure = async ({
   const isYouTube = platform?.toLowerCase() === "youtube";
   // const isShortForm = !isYouTube || format?.includes('Short');
 
-  // Load voice portrait for personalization
-  const voicePortrait = await getVoicePortrait(userId).catch(() => null);
-
-  // Pull learned preferences from ARIA memory
-  const learnedPreferences = await getStudioLearnings(userId);
+  // Load voice portrait and learned preferences in parallel with proper error handling
+  const [voicePortrait, learnedPreferences] = await Promise.allSettled([
+    getVoicePortrait(userId),
+    getStudioLearnings(userId),
+  ]).then(([vp, lp]) => [
+    vp.status === 'fulfilled' ? vp.value : null,
+    lp.status === 'fulfilled' ? lp.value : '',
+  ]);
 
   const voiceRulesCtx = voicePortrait ? `
 
@@ -166,7 +169,7 @@ Respond ONLY with valid JSON:
 
   const res = await groq().chat.completions.create({
     model: OPENAI_MODEL,
-    max_tokens: 1400,
+    max_tokens: 1800,
     temperature: 0.7,
     messages: [{ role: "user", content: prompt }],
   });
@@ -272,7 +275,10 @@ export const matchBGM = async ({
   const voicePortrait = await getVoicePortrait(userId).catch(() => null);
 
   // ── Pull live songs from Tier 1 hot window ────────────────────────────────
-  const liveSongs = await getSongsForBGM({ niche, language, limit: 15 });
+  const liveSongs = await Promise.race([
+    getSongsForBGM({ niche, language, limit: 15 }),
+    new Promise<any[]>((resolve) => setTimeout(() => resolve([]), 4000)),
+  ]).catch(() => []);
 
   const liveContext =
     liveSongs.length > 0

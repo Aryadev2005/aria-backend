@@ -77,14 +77,20 @@ const start = async () => {
   logger.info({ port: PORT, env: process.env.NODE_ENV, pid: process.pid }, 'ARIA Backend is live')
 }
 
-process.on('unhandledRejection', (reason) => {
-  logger.error({ reason }, 'Unhandled Rejection — exiting')
-  process.exit(1)
-})
+process.on('unhandledRejection', (reason: any) => {
+  // Log it but do NOT exit — unhandled rejections in background tasks 
+  // (fire-and-forget DB saves, background AI calls) should not kill the server.
+  // Fatal infrastructure errors (DB down, Redis down) are handled in start().
+  logger.error({ reason: reason?.message || reason }, 'Unhandled Rejection — continuing');
+});
 
 process.on('uncaughtException', (err) => {
-  logger.error({ err }, 'Uncaught Exception')
-  process.exit(1)
-})
+  logger.error({ err }, 'Uncaught Exception — continuing');
+  // Only exit for truly fatal errors, not logic errors
+  if (err.message?.includes('EADDRINUSE') || err.message?.includes('Cannot read')) {
+    logger.fatal('Fatal error — exiting');
+    process.exit(1);
+  }
+});
 
 start()
