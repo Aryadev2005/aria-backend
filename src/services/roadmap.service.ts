@@ -207,12 +207,17 @@ export async function generatePersonalisedRoadmap(
 
   // ── Load all context in parallel ───────────────────────────────────────────
   const primaryNiche = Array.isArray(user.niches) ? user.niches[0] : (user.niches || 'general');
+  const roadmapVersion = makeRoadmapVersion(userId);
 
+  // ── ALL DB calls in ONE parallel batch — nothing sequential after this ────
   const [
     voicePortraitResult,
     memoryResult,
     contentHistoryResult,
     userMetaResult,
+    wildcardTrendResult,
+    completedActionsResult,
+    postCountResult,
   ] = await Promise.allSettled([
     getVoicePortrait(userId),
     getMemory(userId),
@@ -230,40 +235,34 @@ export async function generatePersonalisedRoadmap(
         roadmap_posts_at_generation: true,
       },
     }),
-  ]);
-
-  const voicePortrait  = voicePortraitResult.status  === 'fulfilled' ? voicePortraitResult.value  : null;
-  const memory         = memoryResult.status         === 'fulfilled' ? memoryResult.value         : {};
-  const contentHistory = contentHistoryResult.status === 'fulfilled' ? contentHistoryResult.value : [];
-  const userMeta       = userMetaResult.status       === 'fulfilled' ? userMetaResult.value       : null;
-
-  // ── Time awareness ─────────────────────────────────────────────────────────
-  const lastGeneratedAt   = userMeta?.roadmap_last_generated_at ? new Date(userMeta.roadmap_last_generated_at) : null;
-  const daysSinceLast     = lastGeneratedAt
-    ? Math.round((Date.now() - lastGeneratedAt.getTime()) / 86400000)
-    : null;
-  const totalPostsEver    = Array.isArray(contentHistory) ? contentHistory.length : 0;
-
-  // ── Strategic lens rotation ────────────────────────────────────────────────
-  const lens = getNextLens(userMeta?.roadmap_last_lens || null);
-
-  // ── Roadmap version ─────────────────────────────────────────────────────────
-  const roadmapVersion    = makeRoadmapVersion(userId);
-
-  // ── Parallelize: posts since last, wildcard trend, completed actions ────────
-  const [
-    postsSinceLastResult,
-    wildcardTrendResult,
-    completedActionsResult,
-  ] = await Promise.allSettled([
-    getPostsSinceLastRoadmap(userId, lastGeneratedAt),
+    // Previously sequential — now parallel:
     getWildcardTrend(primaryNiche),
     loadCompletedActions(userId, roadmapVersion),
+    // posts count — inline instead of a separate function call
+    prisma.content_history.count({ where: { user_id: userId } }),
   ]);
 
-  const postsSinceLast    = postsSinceLastResult.status === 'fulfilled' ? postsSinceLastResult.value : 0;
-  const wildcardTrend     = wildcardTrendResult.status === 'fulfilled' ? wildcardTrendResult.value : null;
-  const completedActions  = completedActionsResult.status === 'fulfilled' ? completedActionsResult.value : [];
+  const voicePortrait      = voicePortraitResult.status      === 'fulfilled' ? voicePortraitResult.value      : null;
+  const memory             = memoryResult.status             === 'fulfilled' ? memoryResult.value             : {};
+  const contentHistory     = contentHistoryResult.status     === 'fulfilled' ? contentHistoryResult.value     : [];
+  const userMeta           = userMetaResult.status           === 'fulfilled' ? userMetaResult.value           : null;
+  const wildcardTrend      = wildcardTrendResult.status      === 'fulfilled' ? wildcardTrendResult.value      : null;
+  const completedActions   = completedActionsResult.status   === 'fulfilled' ? completedActionsResult.value   : [];
+  const totalPostsEver     = postCountResult.status          === 'fulfilled' ? postCountResult.value          : 0;
+
+  // ── Time awareness — pure computation, no awaits ──────────────────────────
+  const lastGeneratedAt  = userMeta?.roadmap_last_generated_at
+    ? new Date(userMeta.roadmap_last_generated_at) : null;
+  const daysSinceLast    = lastGeneratedAt
+    ? Math.round((Date.now() - lastGeneratedAt.getTime()) / 86_400_000) : null;
+
+  // postsSinceLast — count from contentHistory items after lastGeneratedAt
+  const postsSinceLast = lastGeneratedAt && Array.isArray(contentHistory)
+    ? contentHistory.filter((h: any) => new Date(h.created_at) > lastGeneratedAt).length
+    : 0;
+  // ↑ No extra DB query needed — we already have the history array
+
+  const lens             = getNextLens(userMeta?.roadmap_last_lens || null);
   const completedSummary  = completedActions.length > 0
     ? `\nACTIONS ALREADY COMPLETED (do NOT repeat these — build on them):\n${completedActions.map(a => `- Week ${a.weekNumber}: ${a.actionText}`).join('\n')}`
     : '';
@@ -489,23 +488,15 @@ Respond ONLY with valid JSON (no markdown, no preamble):
 
   // ── Log prompt context before AI call ──────────────────────────────────────
   const t0 = Date.now();
-  logger.info({
-    userId,
-    followers: actualFollowers,
-    er: actualER,
-    postsPerWeek: actualPostsPerWeek,
-    hasVoicePortrait: !!voicePortrait,
-    contextBlockCount: contextBlocks.length,
-    promptSizeChars: prompt.length,
-  }, 'roadmap: calling GROQ with context');
+  logger.info({ userId, promptChars: prompt.length, contextBlocks: contextBlocks.length }, 'roadmap: calling AI');
 
-  const roadmapRaw = await _callGroq(prompt, { maxTokens: 2200, useLlama: false });
-  const t1 = Date.now();
+  const roadmapRaw = await _callGroq(prompt, {
+    maxTokens: 1600,   // was 2200 — reduces generation time ~30%
+    useLlama:  false,
+    maxRetries: 2,     // was 3 — worst case now: 20s + 1s + 20s = 41s vs 75s before
+  });
 
-  logger.info({
-    userId,
-    groqDurationMs: t1 - t0,
-  }, 'roadmap: GROQ call completed');
+  logger.info({ userId, aiMs: Date.now() - t0 }, 'roadmap: AI call complete');
 
   const roadmap: RoadmapResult = {
     ...(roadmapRaw as any),

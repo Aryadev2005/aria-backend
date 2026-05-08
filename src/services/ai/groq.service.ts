@@ -33,24 +33,38 @@ export interface GroqCallOptions {
  * Retries 3x with exponential backoff
  * Uses stricter system prompt on retry to fix JSON hallucinations
  */
-export const _callGroq = async (prompt: string, { maxTokens = 1000, useLlama = false, maxRetries = 3 }: GroqCallOptions = {}): Promise<any> => {
+export const _callGroq = async (
+  prompt: string,
+  { maxTokens = 1000, useLlama = false, maxRetries = 3 }: GroqCallOptions = {},
+): Promise<any> => {
   if (!process.env.OPENAI_API_KEY?.trim()) {
     throw new Error('OPENAI_API_KEY is required for AI analysis')
   }
+
+  // ── Create client ONCE outside the retry loop ─────────────────────────────
+  // Previously this was inside the loop — wasteful on every retry attempt.
+  const llm = new ChatOpenAI({
+    apiKey:    process.env.OPENAI_API_KEY,
+    model:     useLlama
+      ? (process.env.OPENAI_REASONING_MODEL || process.env.OPENAI_MODEL || 'gpt-4o')
+      : (process.env.OPENAI_MODEL || 'gpt-4o-mini'),
+    temperature: 0,
+    maxTokens,
+    timeout:   20000,  // reduced from 25s → 20s; fail fast and retry sooner
+  });
+
   const model = useLlama
     ? (process.env.OPENAI_REASONING_MODEL || process.env.OPENAI_MODEL || 'gpt-4o')
-    : (process.env.OPENAI_MODEL || 'gpt-4o-mini')
+    : (process.env.OPENAI_MODEL || 'gpt-4o-mini');
 
   let lastErr: any = null
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      // Use stricter system prompt on retries — LLM may have added markdown on first attempt
       const systemContent = attempt === 1
         ? "You are ARIA — India's creator intelligence engine. Always respond with valid JSON only. No preamble, no markdown fences."
         : 'CRITICAL: Respond ONLY with a raw JSON object. No text before or after. No ```json. No explanation. Start your response with { and end with }.'
 
-      const llm = createOpenAIClient(useLlama, maxTokens)
       const completion = await llm.invoke([
         { role: 'system', content: systemContent },
         { role: 'user', content: prompt },
@@ -65,22 +79,18 @@ export const _callGroq = async (prompt: string, { maxTokens = 1000, useLlama = f
       try {
         return parseJSON(content)
       } catch (jsonErr) {
-        logger.warn({ jsonErr, attempt, content: content.slice(0, 200) }, 'OpenAI JSON parse failed — will retry with stricter prompt')
+        logger.warn({ jsonErr, attempt, content: content.slice(0, 200) }, 'OpenAI JSON parse failed — retrying')
         lastErr = jsonErr
-        // Don't break — retry with stricter system prompt above
       }
-
     } catch (err: any) {
       logger.warn({ err: err.message, attempt, model }, 'OpenAI call failed')
       lastErr = err
-
-      // Don't retry on auth errors — they won't resolve
       if (err.status === 401 || err.status === 403 || err.code === 'invalid_api_key') break
     }
 
     if (attempt < maxRetries) {
-      // Exponential backoff: 2s, 4s
-      await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000))
+      // Reduced backoff: 1s, 2s (was 2s, 4s)
+      await new Promise(resolve => setTimeout(resolve, attempt * 1000))
     }
   }
 
