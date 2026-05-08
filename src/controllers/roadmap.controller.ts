@@ -10,6 +10,7 @@ import {
   generatePersonalisedRoadmap,
   markRoadmapActionComplete,
   dismissRoadmapAction,
+  loadActionStates,
 } from '../services/roadmap.service';
 
 const USER_SELECT = {
@@ -19,21 +20,27 @@ const USER_SELECT = {
   niches: true,
 };
 
-// GET /api/v1/analytics/roadmap
+// ── GET /api/v1/analytics/roadmap ─────────────────────────────────────────────
 export const getPersonalisedRoadmap = async (req: FastifyRequest, reply: FastifyReply) => {
   const user  = req.user as User;
+  // ?force=true bypasses BOTH the controller-level cache check AND
+  // the service-level cache check — guarantees a fresh AI generation
   const force = (req.query as any)?.force === 'true';
 
   try {
+    // Controller-level cache check (only for non-forced requests)
     if (!force) {
       const cached = await cache.get(`roadmap:${user.id}`);
-      if (cached) return success(reply, { ...cached, fromCache: true });
+      if (cached) {
+        return success(reply, { ...(cached as object), fromCache: true });
+      }
     }
 
     const fullUser = await prisma.users.findUnique({ where: { id: user.id }, select: USER_SELECT });
     if (!fullUser) return errors.notFound(reply, 'User not found');
 
-    const roadmap = await generatePersonalisedRoadmap(user.id, { ...user, ...fullUser });
+    // Pass force=true into service so it also skips its own internal cache
+    const roadmap = await generatePersonalisedRoadmap(user.id, { ...user, ...fullUser }, force);
     return success(reply, { ...roadmap, fromCache: false });
   } catch (err: any) {
     logger.error({ err: err.message, userId: user.id }, 'Get roadmap failed');
@@ -41,22 +48,48 @@ export const getPersonalisedRoadmap = async (req: FastifyRequest, reply: Fastify
   }
 };
 
-// GET /api/v1/analytics/roadmap/refresh
+// ── GET /api/v1/analytics/roadmap/refresh ─────────────────────────────────────
+// Dedicated refresh endpoint: deletes cache key then regenerates with force=true
 export const refreshRoadmap = async (req: FastifyRequest, reply: FastifyReply) => {
   const user = req.user as User;
   try {
+    // Explicit cache delete first (belt + suspenders alongside force=true)
     await cache.del(`roadmap:${user.id}`);
+
     const fullUser = await prisma.users.findUnique({ where: { id: user.id }, select: USER_SELECT });
     if (!fullUser) return errors.notFound(reply, 'User not found');
-    const roadmap = await generatePersonalisedRoadmap(user.id, { ...user, ...fullUser });
-    return success(reply, { ...roadmap, refreshed: true });
+
+    const roadmap = await generatePersonalisedRoadmap(
+      user.id,
+      { ...user, ...fullUser },
+      true, // always force on dedicated refresh
+    );
+    return success(reply, { ...roadmap, refreshed: true, fromCache: false });
   } catch (err: any) {
     logger.error({ err: err.message, userId: user.id }, 'Refresh roadmap failed');
     return errors.internal(reply, 'Failed to refresh roadmap');
   }
 };
 
-// POST /api/v1/analytics/roadmap/action/complete
+// ── GET /api/v1/analytics/roadmap/action-states?version=xxx ──────────────────
+// Returns the completed/dismissed state of every action for a roadmap version.
+// The frontend calls this on mount to restore persisted checkboxes.
+export const getActionStates = async (req: FastifyRequest, reply: FastifyReply) => {
+  const user    = req.user as User;
+  const version = (req.query as any)?.version as string | undefined;
+
+  if (!version) return errors.validation(reply, 'version query param is required');
+
+  try {
+    const states = await loadActionStates(user.id, version);
+    return success(reply, { states, version });
+  } catch (err: any) {
+    logger.error({ err: err.message, userId: user.id }, 'getActionStates failed');
+    return errors.internal(reply, 'Failed to load action states');
+  }
+};
+
+// ── POST /api/v1/analytics/roadmap/action/complete ───────────────────────────
 export const completeRoadmapAction = async (
   req: FastifyRequest<{
     Body: { roadmapVersion: string; weekNumber: number; actionIndex: number; actionText: string };
@@ -65,16 +98,23 @@ export const completeRoadmapAction = async (
 ) => {
   const user = req.user as User;
   const { roadmapVersion, weekNumber, actionIndex, actionText } = req.body;
+
+  // Basic validation
+  if (!roadmapVersion || weekNumber == null || actionIndex == null || !actionText) {
+    return errors.validation(reply, 'roadmapVersion, weekNumber, actionIndex, actionText are required');
+  }
+
   try {
     await markRoadmapActionComplete(user.id, roadmapVersion, weekNumber, actionIndex, actionText);
     return success(reply, { completed: true });
   } catch (err: any) {
     logger.warn({ err: err.message, userId: user.id }, 'completeRoadmapAction failed');
-    return success(reply, { completed: false }); // non-fatal — never block UI
+    // Non-fatal — never block UI
+    return success(reply, { completed: false });
   }
 };
 
-// POST /api/v1/analytics/roadmap/action/dismiss
+// ── POST /api/v1/analytics/roadmap/action/dismiss ────────────────────────────
 export const dismissRoadmapActionHandler = async (
   req: FastifyRequest<{
     Body: { roadmapVersion: string; weekNumber: number; actionIndex: number; actionText: string };
@@ -83,6 +123,11 @@ export const dismissRoadmapActionHandler = async (
 ) => {
   const user = req.user as User;
   const { roadmapVersion, weekNumber, actionIndex, actionText } = req.body;
+
+  if (!roadmapVersion || weekNumber == null || actionIndex == null || !actionText) {
+    return errors.validation(reply, 'roadmapVersion, weekNumber, actionIndex, actionText are required');
+  }
+
   try {
     await dismissRoadmapAction(user.id, roadmapVersion, weekNumber, actionIndex, actionText);
     return success(reply, { dismissed: true });

@@ -7,82 +7,85 @@ import {
   requirePro,
 } from "../middleware/auth.middleware";
 
+const auth    = { preHandler: [authenticateFirebase] };
+const authPro = { preHandler: [authenticateFirebase, requirePro] };
+
 export default async function analyticsRoutes(app: FastifyInstance) {
-  app.get(
-    "/dashboard",
-    {
-      preHandler: [authenticateFirebase],
-    },
-    analyticsController.getDashboard,
-  );
 
-  app.get(
-    "/growth",
-    {
-      preHandler: [authenticateFirebase, requirePro],
-    },
-    analyticsController.getGrowthPrediction,
-  );
+  // ── Existing analytics routes ───────────────────────────────────────────
+  app.get('/dashboard',      auth,    analyticsController.getDashboard);
+  app.get('/growth',         authPro, analyticsController.getGrowthPrediction);
+  app.get('/best-times',     auth,    analyticsController.getBestPostingTimes);
+  app.get('/competitors',    authPro, analyticsController.getCompetitorInsights);
+  app.get('/weekly-report',  authPro, analyticsController.getWeeklyReport);
+  app.get('/archetype',      auth,    analyticsController.getArchetype);
 
-  app.get(
-    "/best-times",
-    {
-      preHandler: [authenticateFirebase],
-    },
-    analyticsController.getBestPostingTimes,
-  );
+  // ── Roadmap ─────────────────────────────────────────────────────────────
 
-  app.get(
-    "/competitors",
-    {
-      preHandler: [authenticateFirebase, requirePro],
-    },
-    analyticsController.getCompetitorInsights,
-  );
+  // GET /api/v1/analytics/roadmap          → serve (cached or fresh)
+  // GET /api/v1/analytics/roadmap?force=true → bypass cache + regenerate
+  app.get('/roadmap', auth, roadmapController.getPersonalisedRoadmap);
 
-  app.get(
-    "/weekly-report",
-    {
-      preHandler: [authenticateFirebase, requirePro],
-    },
-    analyticsController.getWeeklyReport,
-  );
+  // GET /api/v1/analytics/roadmap/refresh  → explicit refresh endpoint
+  app.get('/roadmap/refresh', auth, roadmapController.refreshRoadmap);
 
-  app.get(
-    "/archetype",
-    {
-      preHandler: [authenticateFirebase],
-    },
-    analyticsController.getArchetype,
-  );
+  // GET /api/v1/analytics/roadmap/action-states?version=xxx
+  app.get('/roadmap/action-states', auth, roadmapController.getActionStates);
 
-  app.get(
-    "/roadmap",
+  // POST /api/v1/analytics/roadmap/action/complete
+  app.post<{ Body: { roadmapVersion: string; weekNumber: number; actionIndex: number; actionText: string } }>(
+    '/roadmap/action/complete',
     {
-      preHandler: [authenticateFirebase],
-    },
-    roadmapController.getPersonalisedRoadmap,
-  );
-
-  app.get(
-    "/roadmap/refresh",
-    {
-      preHandler: [authenticateFirebase],
-    },
-    roadmapController.refreshRoadmap,
-  );
-
-  app.post<{ Body: TriggerScrapeBody }>(
-    "/scrape",
-    {
-      preHandler: [authenticateFirebase],
+      ...auth,
       schema: {
         body: {
-          type: "object",
-          required: ["handle", "platform"],
+          type: 'object',
+          required: ['roadmapVersion', 'weekNumber', 'actionIndex', 'actionText'],
           properties: {
-            handle: { type: "string", minLength: 1 },
-            platform: { type: "string", enum: ["instagram", "youtube"] },
+            roadmapVersion: { type: 'string', minLength: 1 },
+            weekNumber:     { type: 'integer', minimum: 1, maximum: 4 },
+            actionIndex:    { type: 'integer', minimum: 0 },
+            actionText:     { type: 'string', minLength: 1, maxLength: 300 },
+          },
+        },
+      },
+    },
+    roadmapController.completeRoadmapAction,
+  );
+
+  // POST /api/v1/analytics/roadmap/action/dismiss
+  app.post<{ Body: { roadmapVersion: string; weekNumber: number; actionIndex: number; actionText: string } }>(
+    '/roadmap/action/dismiss',
+    {
+      ...auth,
+      schema: {
+        body: {
+          type: 'object',
+          required: ['roadmapVersion', 'weekNumber', 'actionIndex', 'actionText'],
+          properties: {
+            roadmapVersion: { type: 'string', minLength: 1 },
+            weekNumber:     { type: 'integer', minimum: 1, maximum: 4 },
+            actionIndex:    { type: 'integer', minimum: 0 },
+            actionText:     { type: 'string', minLength: 1, maxLength: 300 },
+          },
+        },
+      },
+    },
+    roadmapController.dismissRoadmapActionHandler,
+  );
+
+  // ── Scrape ──────────────────────────────────────────────────────────────
+  app.post<{ Body: TriggerScrapeBody }>(
+    '/scrape',
+    {
+      ...auth,
+      schema: {
+        body: {
+          type: 'object',
+          required: ['handle', 'platform'],
+          properties: {
+            handle:   { type: 'string', minLength: 1 },
+            platform: { type: 'string', enum: ['instagram', 'youtube'] },
           },
         },
       },

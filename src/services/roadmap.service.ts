@@ -171,17 +171,38 @@ async function getPostsSinceLastRoadmap(
 
 // ── Main roadmap generator ────────────────────────────────────────────────────
 
+/**
+ * generatePersonalisedRoadmap
+ *
+ * @param userId   - authenticated user's ID
+ * @param user     - merged user object from req.user + DB fields
+ * @param force    - when true, SKIPS the internal Redis cache entirely and
+ *                   calls the AI fresh. Always pass true on refresh flows.
+ */
 export async function generatePersonalisedRoadmap(
   userId: string,
   user: any,
+  force = false,
 ): Promise<RoadmapResult> {
   const cacheKey = `roadmap:${userId}`;
 
-  // Cache check
-  try {
-    const cached = await cache.get(cacheKey) as RoadmapResult | null;
-    if (cached) return { ...cached, fromCache: true } as any;
-  } catch (_) {}
+  // ── Cache check — skipped when force=true ─────────────────────────────────
+  if (!force) {
+    try {
+      const cached = await cache.get(cacheKey) as RoadmapResult | null;
+      if (cached) {
+        logger.debug({ userId }, 'roadmap: serving from cache');
+        return { ...cached, fromCache: true } as any;
+      }
+    } catch (err: any) {
+      logger.warn({ err: err.message }, 'roadmap: Redis read failed — proceeding to generate');
+    }
+  } else {
+    // Explicitly evict stale cache so any parallel request also gets fresh data
+    try {
+      await cache.del(cacheKey);
+    } catch { /* non-fatal */ }
+  }
 
   // ── Load all context in parallel ───────────────────────────────────────────
   const primaryNiche = Array.isArray(user.niches) ? user.niches[0] : (user.niches || 'general');
@@ -470,5 +491,30 @@ export async function dismissRoadmapAction(
     });
   } catch (err: any) {
     logger.warn({ err: err.message, userId }, 'dismissRoadmapAction failed — non-fatal');
+  }
+}
+
+/**
+ * Load action states for a given roadmap version.
+ * Returns a map: `${weekNumber}-${actionIndex}` → 'completed' | 'dismissed'
+ */
+export async function loadActionStates(
+  userId:  string,
+  version: string,
+): Promise<Record<string, 'completed' | 'dismissed'>> {
+  try {
+    const rows = await (prisma as any).roadmap_actions.findMany({
+      where:  { user_id: userId, roadmap_version: version },
+      select: { week_number: true, action_index: true, completed_at: true, dismissed_at: true },
+    });
+    const map: Record<string, 'completed' | 'dismissed'> = {};
+    for (const r of rows) {
+      const key = `${r.week_number}-${r.action_index}`;
+      if (r.completed_at) map[key] = 'completed';
+      else if (r.dismissed_at) map[key] = 'dismissed';
+    }
+    return map;
+  } catch {
+    return {};
   }
 }
