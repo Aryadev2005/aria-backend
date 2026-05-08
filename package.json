@@ -13,7 +13,7 @@
     "postinstall": "prisma generate",
     "predev": "prisma generate",
     "start": "node dist/server.js",
-    "dev": "tsx watch src/server.ts",
+    "dev": "tsx watch --ignore './node_modules/**' --ignore './prisma/generated/**' --ignore './.git/**' --ignore './dist/**' src/server.ts",
     "worker:all": "tsx src/workers/index.ts",
     "build": "tsc",
     "mcp:health": "tsx src/agent/mcp_health_check.ts",
