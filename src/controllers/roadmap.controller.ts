@@ -13,11 +13,24 @@ import {
   loadActionStates,
 } from '../services/roadmap.service';
 
+// ── Pull EVERY field the AI needs to personalise the roadmap ──────────────────
+// Missing fields here = generic output. This is the full set.
 const USER_SELECT = {
-  archetype: true, archetype_label: true, primary_platform: true,
-  follower_range: true, engagement_rate: true, growth_stage: true,
-  creator_intent: true, scraped_summary: true, aria_last_analysis: true,
-  niches: true,
+  archetype:          true,
+  archetype_label:    true,
+  primary_platform:   true,
+  follower_range:     true,
+  follower_count:     true,   // ← was missing — actual number e.g. 7081
+  engagement_rate:    true,   // ← stored as Decimal — the 35.83 figure
+  growth_stage:       true,
+  creator_intent:     true,
+  scraped_summary:    true,   // ← full JSON blob from Apify scrape
+  aria_last_analysis: true,   // ← full onboarding analysis JSON
+  niches:             true,
+  instagram_handle:   true,   // ← so prompt can reference @handle
+  youtube_handle:     true,
+  tone_profile:       true,   // ← casual / educational / entertaining etc.
+  bio:                true,   // ← their actual IG bio
 };
 
 // ── GET /api/v1/analytics/roadmap ─────────────────────────────────────────────
@@ -36,11 +49,18 @@ export const getPersonalisedRoadmap = async (req: FastifyRequest, reply: Fastify
       }
     }
 
-    const fullUser = await prisma.users.findUnique({ where: { id: user.id }, select: USER_SELECT });
-    if (!fullUser) return errors.notFound(reply, 'User not found');
+    const fullUser = await prisma.users.findUnique({
+      where:  { id: user.id },
+      select: USER_SELECT,
+    });
+    if (!fullUser) return errors.notFound(reply, 'User');
 
     // Pass force=true into service so it also skips its own internal cache
-    const roadmap = await generatePersonalisedRoadmap(user.id, { ...user, ...fullUser }, force);
+    const roadmap = await generatePersonalisedRoadmap(
+      user.id,
+      { ...user, ...fullUser },
+      force,
+    );
     return success(reply, { ...roadmap, fromCache: false });
   } catch (err: any) {
     logger.error({ err: err.message, userId: user.id }, 'Get roadmap failed');
@@ -49,20 +69,22 @@ export const getPersonalisedRoadmap = async (req: FastifyRequest, reply: Fastify
 };
 
 // ── GET /api/v1/analytics/roadmap/refresh ─────────────────────────────────────
-// Dedicated refresh endpoint: deletes cache key then regenerates with force=true
 export const refreshRoadmap = async (req: FastifyRequest, reply: FastifyReply) => {
   const user = req.user as User;
   try {
     // Explicit cache delete first (belt + suspenders alongside force=true)
     await cache.del(`roadmap:${user.id}`);
 
-    const fullUser = await prisma.users.findUnique({ where: { id: user.id }, select: USER_SELECT });
-    if (!fullUser) return errors.notFound(reply, 'User not found');
+    const fullUser = await prisma.users.findUnique({
+      where:  { id: user.id },
+      select: USER_SELECT,
+    });
+    if (!fullUser) return errors.notFound(reply, 'User');
 
     const roadmap = await generatePersonalisedRoadmap(
       user.id,
       { ...user, ...fullUser },
-      true, // always force on dedicated refresh
+      true,
     );
     return success(reply, { ...roadmap, refreshed: true, fromCache: false });
   } catch (err: any) {

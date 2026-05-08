@@ -184,6 +184,7 @@ export async function generatePersonalisedRoadmap(
   user: any,
   force = false,
 ): Promise<RoadmapResult> {
+  const funcStartMs = Date.now();
   const cacheKey = `roadmap:${userId}`;
 
   // ── Cache check — skipped when force=true ─────────────────────────────────
@@ -241,18 +242,28 @@ export async function generatePersonalisedRoadmap(
   const daysSinceLast     = lastGeneratedAt
     ? Math.round((Date.now() - lastGeneratedAt.getTime()) / 86400000)
     : null;
-  const postsSinceLast    = await getPostsSinceLastRoadmap(userId, lastGeneratedAt);
   const totalPostsEver    = Array.isArray(contentHistory) ? contentHistory.length : 0;
 
   // ── Strategic lens rotation ────────────────────────────────────────────────
   const lens = getNextLens(userMeta?.roadmap_last_lens || null);
 
-  // ── Wildcard trend ─────────────────────────────────────────────────────────
-  const wildcardTrend = await getWildcardTrend(primaryNiche);
-
-  // ── Roadmap version + completed actions ───────────────────────────────────
+  // ── Roadmap version ─────────────────────────────────────────────────────────
   const roadmapVersion    = makeRoadmapVersion(userId);
-  const completedActions  = await loadCompletedActions(userId, roadmapVersion);
+
+  // ── Parallelize: posts since last, wildcard trend, completed actions ────────
+  const [
+    postsSinceLastResult,
+    wildcardTrendResult,
+    completedActionsResult,
+  ] = await Promise.allSettled([
+    getPostsSinceLastRoadmap(userId, lastGeneratedAt),
+    getWildcardTrend(primaryNiche),
+    loadCompletedActions(userId, roadmapVersion),
+  ]);
+
+  const postsSinceLast    = postsSinceLastResult.status === 'fulfilled' ? postsSinceLastResult.value : 0;
+  const wildcardTrend     = wildcardTrendResult.status === 'fulfilled' ? wildcardTrendResult.value : null;
+  const completedActions  = completedActionsResult.status === 'fulfilled' ? completedActionsResult.value : [];
   const completedSummary  = completedActions.length > 0
     ? `\nACTIONS ALREADY COMPLETED (do NOT repeat these — build on them):\n${completedActions.map(a => `- Week ${a.weekNumber}: ${a.actionText}`).join('\n')}`
     : '';
@@ -271,108 +282,182 @@ export async function generatePersonalisedRoadmap(
 
   const recentHistory = Array.isArray(contentHistory) ? contentHistory.slice(0, 10) : [];
 
-  // ── Build context blocks ───────────────────────────────────────────────────
+  // ── Build context blocks ──────────────────────────────────────────────────
+
+  // Unpack scraped_summary safely — this is the richest data source
+  const ss = (user.scraped_summary as any) || {};
+  const actualFollowers   = user.follower_count || ss.followerCount || null;
+  const actualER          = user.engagement_rate
+    ? parseFloat(user.engagement_rate.toString())
+    : null;
+  const actualPostsPerWeek = ss.postsPerWeek ?? null;
+  const avgLikes          = ss.avgLikes ?? null;
+  const avgComments       = ss.avgComments ?? null;
+  const avgViews          = ss.avgViews ?? null;
+  const topHashtags       = ss.topHashtags?.slice(0, 8) ?? [];
+  const postTypeMix       = ss.postTypeMix ?? null;
+  const bestPostType      = ss.bestPostType ?? null;
+  const handle            = user.instagram_handle || user.youtube_handle || null;
+
   const contextBlocks: string[] = [];
 
+  // ── Block 1: Creator identity with real numbers ───────────────────────────
   contextBlocks.push(`CREATOR IDENTITY:
-- Archetype: ${user.archetype} (${user.archetype_label})
-- Platform: ${user.primary_platform}
-- Follower range: ${user.follower_range}
-- Engagement rate: ${user.engagement_rate}%
-- Growth stage: ${user.growth_stage}
-- Creator intent: ${user.creator_intent}`);
+- Handle: ${handle ? `@${handle}` : 'not connected'}
+- Archetype: ${user.archetype || 'UNKNOWN'} (${user.archetype_label || 'Unknown'})
+- Platform: ${user.primary_platform || 'instagram'}
+- Follower count: ${actualFollowers ? actualFollowers.toLocaleString('en-IN') : user.follower_range || 'unknown'}
+- Follower range bucket: ${user.follower_range || 'unknown'}
+- Engagement rate: ${actualER !== null ? `${actualER}%` : 'unknown'} ${actualER && actualER > 5 ? '(SIGNIFICANTLY above average — this is a key asset)' : actualER && actualER > 2 ? '(above average)' : ''}
+- Posts per week: ${actualPostsPerWeek !== null ? actualPostsPerWeek : 'unknown'} ${actualPostsPerWeek !== null && actualPostsPerWeek < 1 ? '(⚠️ CRITICALLY LOW — less than 1 post/week)' : actualPostsPerWeek !== null && actualPostsPerWeek < 3 ? '(below ideal — should be 3-5/week)' : ''}
+- Growth stage: ${user.growth_stage || 'unknown'}
+- Creator intent: ${user.creator_intent || 'grow_organically'}
+- Tone: ${user.tone_profile || 'unknown'}
+- Bio: ${user.bio || 'not set'}`);
 
+  // ── Block 2: Raw performance numbers ─────────────────────────────────────
+  if (avgLikes !== null || avgComments !== null || avgViews !== null) {
+    contextBlocks.push(`REAL PERFORMANCE NUMBERS (from actual posts):
+- Avg likes per post: ${avgLikes?.toLocaleString('en-IN') ?? 'unknown'}
+- Avg comments per post: ${avgComments?.toLocaleString('en-IN') ?? 'unknown'}
+- Avg video views: ${avgViews?.toLocaleString('en-IN') ?? 'unknown'}
+- Post type mix: ${postTypeMix ?? 'unknown'}
+- Best performing format: ${bestPostType ?? 'unknown'}
+- Top hashtags: ${topHashtags.length > 0 ? topHashtags.join(', ') : 'none detected'}`);
+  }
+
+  // ── Block 3: Voice portrait ───────────────────────────────────────────────
   if (voicePortrait) {
-    contextBlocks.push(`VOICE PORTRAIT:
-- Content territory: ${voicePortrait.contentTerritory}
-- Primary topics: ${voicePortrait.primaryTopics?.join(', ')}
-- Audience: ${voicePortrait.audienceDescription}
-- Tone: ${voicePortrait.toneSignature}
-- Formats they use: ${voicePortrait.preferredFormats?.join(', ')}
-- Personal constraints: ${voicePortrait.personalConstraints?.join(', ')}
-- Performance insights: ${voicePortrait.performanceInsights || 'Data in progress'}`);
+    contextBlocks.push(`VOICE PORTRAIT (ARIA's deep understanding of this creator):
+- Content territory: ${(voicePortrait as any).contentTerritory}
+- Primary topics: ${(voicePortrait as any).primaryTopics?.join(', ')}
+- Audience: ${(voicePortrait as any).audienceDescription}
+- Tone signature: ${(voicePortrait as any).toneSignature}
+- Preferred formats: ${(voicePortrait as any).preferredFormats?.join(', ')}
+- Personal constraints: ${(voicePortrait as any).personalConstraints?.join(', ')}
+- Performance insights: ${(voicePortrait as any).performanceInsights || 'Data in progress'}`);
   }
 
+  // ── Block 4: ARIA memory ──────────────────────────────────────────────────
   if (topMemoryInsights.length > 0) {
-    contextBlocks.push(`ARIA MEMORY (observed over time):
-${topMemoryInsights.map(m => `- ${m.category}: ${m.key} = "${m.value}" (confidence: ${m.confidence}%)`).join('\n')}`);
+    contextBlocks.push(`ARIA MEMORY (observed patterns over time):
+${topMemoryInsights.map((m: any) => `- ${m.category}: ${m.key} = "${m.value}" (confidence: ${m.confidence}%)`).join('\n')}`);
   }
 
+  // ── Block 5: Content history ──────────────────────────────────────────────
   if (recentHistory.length > 0) {
-    contextBlocks.push(`CONTENT HISTORY (last ${recentHistory.length} pieces):
+    contextBlocks.push(`CONTENT HISTORY (last ${recentHistory.length} pieces created in-app):
 ${recentHistory.map((h: any) => `- ${h.trend_title} | ${h.content_format} | ${h.niche}`).join('\n')}`);
   }
 
+  // ── Block 6: ARIA analysis — read the actual shape correctly ──────────────
   if (user.aria_last_analysis) {
     const a = user.aria_last_analysis as any;
-    contextBlocks.push(`ARIA PROFILE ANALYSIS:
-Strengths: ${a.strengths?.slice(0,3).join(', ') || 'Being identified'}
-Gaps: ${a.gaps?.slice(0,3).join(', ')           || 'Being identified'}
-Opportunities: ${a.opportunities?.slice(0,2).join(', ') || 'Being identified'}`);
+
+    // The onboarding analysis stores different shapes depending on the path.
+    // Handle both gracefully.
+    const strengths     = a.strengths     || a.keyStrengths     || [];
+    const gaps          = a.gaps          || a.keyGaps          || a.weaknesses || [];
+    const opportunities = a.opportunities || a.keyOpportunities || [];
+    const ariaMsg       = a.ariaMessage   || a.summary          || null;
+    const archetypeLabel = a.archetypeLabel || a.archetype_label || null;
+
+    const hasRealAnalysis = strengths.length > 0 || gaps.length > 0 || opportunities.length > 0;
+
+    if (hasRealAnalysis) {
+      contextBlocks.push(`ARIA ONBOARDING ANALYSIS:
+${archetypeLabel ? `Archetype: ${archetypeLabel}` : ''}
+Strengths: ${strengths.slice(0, 3).join(', ') || 'Being identified'}
+Gaps: ${gaps.slice(0, 3).join(', ') || 'Being identified'}
+Opportunities: ${opportunities.slice(0, 2).join(', ') || 'Being identified'}
+${ariaMsg ? `ARIA said: "${ariaMsg.slice(0, 200)}"` : ''}`);
+    } else if (ariaMsg) {
+      // Fallback: at least inject the aria message if no structured data
+      contextBlocks.push(`ARIA ONBOARDING NOTE: "${ariaMsg.slice(0, 300)}"`);
+    }
   }
 
-  if (user.scraped_summary) {
-    contextBlocks.push(`REAL PLATFORM DATA:\n${JSON.stringify(user.scraped_summary).slice(0, 400)}`);
-  }
-
-  // ── Time context block ────────────────────────────────────────────────────
+  // ── Block 7: Time context ─────────────────────────────────────────────────
   const timeContext = daysSinceLast !== null
     ? `TIME CONTEXT:
 - Days since last roadmap: ${daysSinceLast}
 - Posts created since last roadmap: ${postsSinceLast}
-- Total content pieces ever: ${totalPostsEver}
+- Total content pieces ever created in-app: ${totalPostsEver}
 ${postsSinceLast === 0 && daysSinceLast > 7
-  ? '⚠️ Creator has NOT posted since last roadmap — consistency is the priority for Week 1'
+  ? '⚠️ Creator has NOT posted since last roadmap — consistency is the #1 priority for Week 1'
   : postsSinceLast >= 5
-    ? '✅ Creator has been active — build on momentum'
-    : '📊 Creator has posted a little — acknowledge the progress and push further'}`
-    : `TIME CONTEXT: This is the creator's first roadmap generation.`;
+    ? '✅ Creator has been active — build on their momentum'
+    : '📊 Creator has posted a little — acknowledge progress and push further'}`
+    : 'TIME CONTEXT: This is the creator\'s first roadmap generation.';
 
   contextBlocks.push(timeContext);
 
-  // ── Strategic lens block ──────────────────────────────────────────────────
+  // ── Block 8: Strategic lens ───────────────────────────────────────────────
   contextBlocks.push(`THIS MONTH'S STRATEGIC FOCUS: ${lens.name}
 ${lens.description}
 Weekly bias: ${lens.weekBias.join(' → ')}`);
 
-  // ── Wildcard trend block ──────────────────────────────────────────────────
+  // ── Block 9: Wildcard trend ───────────────────────────────────────────────
   if (wildcardTrend) {
     contextBlocks.push(`CURRENT WILDCARD TREND (inject into one week naturally):
 ${wildcardTrend}
-Use this as a "timeliness hook" — create a content idea that rides this trend while staying true to the creator's voice.`);
+Use as a timeliness hook — ride this while staying true to the creator's voice.`);
   }
 
-  // ── Build final prompt ────────────────────────────────────────────────────
+  // ── Critical diagnostic summary (injected last for emphasis) ─────────────
+  // This ensures the AI's opening awareness is anchored to the most important facts.
+  const diagnosticLines: string[] = [];
+
+  if (actualER !== null && actualER > 10) {
+    diagnosticLines.push(`This creator has an EXCEPTIONAL engagement rate of ${actualER}% — far above the 3% niche average. This is their single biggest asset.`);
+  } else if (actualER !== null && actualER > 5) {
+    diagnosticLines.push(`This creator has a strong engagement rate of ${actualER}% vs ~3% niche average.`);
+  }
+
+  if (actualPostsPerWeek !== null && actualPostsPerWeek < 1) {
+    diagnosticLines.push(`CRITICAL BOTTLENECK: They only post ${actualPostsPerWeek}x per week. The algorithm needs minimum 3–4 posts/week to distribute content. This is the #1 lever.`);
+  }
+
+  if (actualFollowers !== null && actualER !== null && actualER > 15 && actualFollowers < 10000) {
+    diagnosticLines.push(`This creator is in a rare position: high engagement but low follower count = algorithm hasn't discovered them yet. The growth opportunity is massive if they increase posting frequency.`);
+  }
+
+  if (diagnosticLines.length > 0) {
+    contextBlocks.push(`KEY DIAGNOSTIC (use this to anchor the roadmap):\n${diagnosticLines.map(l => `• ${l}`).join('\n')}`);
+  }
+
+  // ── Prompt ────────────────────────────────────────────────────────────────
   const prompt = `You are ARIA — India's creator growth strategist.
-Generate a PERSONALISED growth roadmap for this specific creator.
-This is NOT generic advice. Use every piece of data below to make this specific to them.
+Generate a HYPER-PERSONALISED growth roadmap for this specific creator.
+This is NOT generic advice. Every single action must reference their ACTUAL numbers, their ACTUAL content, their ACTUAL bottleneck.
 
 ${contextBlocks.join('\n\n')}
 ${completedSummary}
 
 ROADMAP RULES:
-1. Every action must be specific to THIS creator's voice, territory, and constraints
-2. Never suggest anything that violates their personal constraints
-3. Week 1 focus must align with "${lens.weekBias[0]}" (this month's lens)
-4. If the creator has not posted recently, Week 1 actions must be small and executable TODAY
-5. Format suggestions must match their preferred formats
-6. Topic suggestions must be in their content territory
-7. Never repeat a completed action — build on top of it instead
-8. If a wildcard trend was provided, weave it into one week naturally
+1. Reference the creator's actual follower count and engagement rate by number — never say "your followers"
+2. If posts/week < 1, Week 1's ENTIRE focus must be on posting frequency — nothing else
+3. If engagement rate > 10%, every action must leverage this asset explicitly
+4. Never suggest a format they don't use (check post type mix)
+5. Topic suggestions must be in their specific content territory — not generic
+6. Never repeat a completed action — build on it
+7. If a wildcard trend was provided, weave it into one week naturally
+8. Each week must have exactly 3 actions — no more, no less
+9. Every "howTo" must be executable with a phone, alone, in India
 
-Respond ONLY with valid JSON:
+Respond ONLY with valid JSON (no markdown, no preamble):
 {
-  "currentSituation": "2-3 sentences specific to this creator's exact situation — reference their actual numbers and what they've done recently",
-  "coreChallenge": "The ONE thing holding this specific creator back right now",
+  "currentSituation": "2-3 sentences referencing their ACTUAL numbers — e.g. 'With 7,081 followers and a 35.83% engagement rate, you are...'",
+  "coreChallenge": "One sentence — the single bottleneck shown by the data",
   "weeklyPlan": {
     "week1": {
-      "focus": "One sentence theme — must align with ${lens.weekBias[0]}",
+      "focus": "One sentence theme aligned with ${lens.weekBias[0]}",
       "actions": [
         {
-          "action": "Specific actionable task",
-          "why": "Why this matters for THIS creator specifically — reference their data",
-          "howTo": "Exactly how to do it given their constraints",
-          "expectedImpact": "What this should change"
+          "action": "Specific task referencing their actual content/numbers",
+          "why": "Why this matters — use their actual ER/follower data",
+          "howTo": "Step-by-step, phone-executable, India-specific",
+          "expectedImpact": "Concrete expected outcome"
         }
       ]
     },
@@ -382,27 +467,45 @@ Respond ONLY with valid JSON:
   },
   "milestones": [
     {
-      "target": "Specific goal e.g. 10K followers or 5% engagement",
+      "target": "Specific numeric goal relevant to their current ${actualFollowers ? actualFollowers.toLocaleString('en-IN') + ' followers' : 'stage'}",
       "eta": "Realistic timeline",
-      "unlocks": "What becomes possible at this milestone for an Indian creator",
-      "triggerAction": "The single most important thing to do to reach this milestone"
+      "unlocks": "What becomes possible — brand deals, monetisation, etc.",
+      "triggerAction": "The single most important action to reach this"
     }
   ],
   "contentStrategy": {
-    "formats": ["Format mix specific to this creator"],
-    "frequency": "Realistic posting frequency given their constraints",
-    "bestTimes": "Based on their niche and audience",
-    "topicPillars": ["3-4 topic pillars specific to their content territory"]
+    "formats": ["Formats they ALREADY use or can easily start"],
+    "frequency": "Specific target — e.g. '4 Reels per week'",
+    "bestTimes": "IST timing based on their niche audience",
+    "topicPillars": ["3-4 pillars from their ACTUAL content territory"]
   },
   "growthProjection": {
-    "conservative": "Realistic low estimate at 3 months",
-    "optimistic": "Realistic high estimate at 3 months",
-    "keyAssumption": "What has to be true for the optimistic scenario"
+    "conservative": "Follower count in 3 months if they post consistently",
+    "optimistic": "Follower count in 3 months if they follow the full plan",
+    "keyAssumption": "What must be true for optimistic scenario"
   },
-  "immediateAction": "The ONE thing to do in the next 24 hours — must be tiny and executable right now"
+  "immediateAction": "ONE thing executable in the next 24 hours — specific, tiny, no excuses"
 }`;
 
+  // ── Log prompt context before AI call ──────────────────────────────────────
+  const t0 = Date.now();
+  logger.info({
+    userId,
+    followers: actualFollowers,
+    er: actualER,
+    postsPerWeek: actualPostsPerWeek,
+    hasVoicePortrait: !!voicePortrait,
+    contextBlockCount: contextBlocks.length,
+    promptSizeChars: prompt.length,
+  }, 'roadmap: calling GROQ with context');
+
   const roadmapRaw = await _callGroq(prompt, { maxTokens: 2200, useLlama: false });
+  const t1 = Date.now();
+
+  logger.info({
+    userId,
+    groqDurationMs: t1 - t0,
+  }, 'roadmap: GROQ call completed');
 
   const roadmap: RoadmapResult = {
     ...(roadmapRaw as any),
@@ -428,6 +531,13 @@ Respond ONLY with valid JSON:
 
   // ── Cache for 6 hours ─────────────────────────────────────────────────────
   await cache.set(cacheKey, roadmap, 6 * 60 * 60);
+
+  const funcEndMs = Date.now();
+  logger.info({
+    userId,
+    totalDurationMs: funcEndMs - funcStartMs,
+    cacheWritten: true,
+  }, 'roadmap: generation complete');
 
   return roadmap;
 }
