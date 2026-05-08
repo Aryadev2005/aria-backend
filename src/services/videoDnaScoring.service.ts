@@ -56,6 +56,13 @@ export interface RawSignals {
   nextVideoReason:      string;
   benchmarkAnalysis:    string;
   benchmarkStats:       string[];
+  shortsOpportunities: Array<{
+    start:       number;
+    end:         number;
+    caption:     string;
+    viralScore:  number;
+    reason:      string;
+  }>;
 }
 
 export interface DerivedMetrics {
@@ -113,6 +120,13 @@ export interface VideoDNAReport {
   actionItems:          string[];
   nextVideoSuggestion:  string;
   nextVideoReason:      string;
+  shortsOpportunities: Array<{
+    start:      number;
+    end:        number;
+    caption:    string;
+    viralScore: number;
+    reason:     string;
+  }>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -145,6 +159,15 @@ const clampSignals = (raw: Partial<RawSignals>): RawSignals => ({
   nextVideoReason:     raw.nextVideoReason     ?? '',
   benchmarkAnalysis:   raw.benchmarkAnalysis   ?? '',
   benchmarkStats:      raw.benchmarkStats      ?? [],
+  shortsOpportunities: Array.isArray(raw.shortsOpportunities)
+    ? raw.shortsOpportunities.map(s => ({
+        start:      Math.max(0, Math.round(s.start ?? 0)),
+        end:        Math.max(1, Math.round(s.end   ?? 60)),
+        caption:    String(s.caption    ?? ''),
+        viralScore: Math.min(100, Math.max(1, Math.round(s.viralScore ?? 50))),
+        reason:     String(s.reason     ?? ''),
+      }))
+    : [],
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -467,5 +490,6 @@ export const computeVideoDNAReport = async (
     actionItems:         signals.actionItems,
     nextVideoSuggestion: signals.nextVideoSuggestion,
     nextVideoReason:     signals.nextVideoReason,
+    shortsOpportunities: signals.shortsOpportunities,
   };
 };

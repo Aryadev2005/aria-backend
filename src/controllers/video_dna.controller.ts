@@ -202,8 +202,24 @@ RESPOND ONLY with this exact JSON. ALL numeric fields MUST be integers within st
   "benchmarkStats":      [
     "<specific comparison stat 1>",
     "<specific comparison stat 2>"
+  ],
+  "shortsOpportunities": [
+    {
+      "start": <estimated start second — based on title topic structure and video duration>,
+      "end": <start + max 58 seconds>,
+      "caption": "<pre-written Shorts caption in Hinglish with 3 relevant hashtags>",
+      "viralScore": <integer 1-100: how viral this segment would be as a Short>,
+      "reason": "<one sentence: why this part of the video works as a standalone Short>"
+    }
   ]
-}`;
+}
+
+For "shortsOpportunities": suggest 3-5 segments based on the video topic and duration.
+Since you don't have the actual transcript, infer likely high-value moments from the title and description.
+For a tutorial: suggest the "key reveal" moment (approx 30-40% into video), the "before/after" moment, the "common mistake" moment.
+For a vlog: suggest the most emotionally charged implied moment, the funniest implied moment.
+For a finance/education video: suggest the "shocking stat" moment and the "actionable tip" moment.
+Keep viralScore realistic — most segments are 45-70, only truly viral hooks score 80+.`;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -214,7 +230,7 @@ RESPOND ONLY with this exact JSON. ALL numeric fields MUST be integers within st
 const extractSignals = async (prompt: string): Promise<Partial<RawSignals>> => {
   const response = await groq().chat.completions.create({
     model: MODEL,
-    max_tokens: 800,
+    max_tokens: 1100,
     temperature: 0,          // ← CRITICAL: temperature 0 for extraction tasks
     messages: [
       {
