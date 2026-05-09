@@ -384,6 +384,7 @@ model users {
   creator_analytics       creator_analytics[]
   video_dna_analyses      video_dna_analyses[]
   competitor_analyses     competitor_analyses[]
+  calendar_entries        calendar_entries[]
 
   @@index([archetype], map: "idx_users_archetype")
   @@index([firebase_uid], map: "idx_users_firebase_uid")
@@ -743,6 +744,53 @@ model video_heatmaps {
   expires_at  DateTime  @db.Timestamptz(6)
 
   @@index([expires_at], map: "idx_video_heatmaps_expiry")
+}
+
+// ── Calendar Entries (individual pieces of content) ───────────────────────────
+// Separate from content_calendars (which stores AI-generated month blobs).
+// This stores individual confirmed entries from the Studio→Launch→Calendar flow.
+model calendar_entries {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id        String    @db.Uuid
+
+  // Content
+  title          String
+  idea           String?
+  platform       String    @default("instagram")
+  niche          String?
+  format         String?   // Reel, Carousel, Story, Video
+
+  // Scheduling
+  scheduled_date String    // "YYYY-MM-DD"
+  scheduled_time String?   // "7:30 PM IST"
+
+  // Status pipeline: idea → script → ready → posted
+  status         String    @default("idea")
+
+  // Source references
+  studio_session_id String? // links to studio_scripts.id
+  source         String    @default("manual") // "manual" | "discovery" | "ai_generated"
+
+  // AI suggestion metadata
+  is_ai_suggested Boolean  @default(false)
+  ai_accepted     Boolean  @default(false)
+
+  // Rich data
+  hook           String?
+  caption        String?
+  hashtags       Json      @default("[]")
+  aria_tip       String?
+
+  // Timestamps
+  created_at     DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at     DateTime  @default(now()) @db.Timestamptz(6)
+  posted_at      DateTime? @db.Timestamptz(6)
+
+  users          users     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id], map: "idx_cal_entries_user")
+  @@index([user_id, scheduled_date], map: "idx_cal_entries_user_date")
+  @@index([user_id, status], map: "idx_cal_entries_user_status")
 }
 
 model creator_analytics {

@@ -26,6 +26,7 @@ import brainRoutes from "./routes/brain.routes";
 import videoDnaRoutes from "./routes/video_dna.routes";
 import dataDeletionRoutes from "./routes/dataDeletion.routes";
 import integrationRoutes from "./routes/integrations.routes";
+import calendarEntryRoutes from "./routes/calendarEntry.routes";
 
 export const buildApp = async (): Promise<FastifyInstance> => {
   const app = Fastify({
@@ -244,6 +245,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
   await app.register(integrationRoutes, {
     prefix: `${API_PREFIX}/integrations`,
   });
+  await app.register(calendarEntryRoutes, { prefix: `${API_PREFIX}/calendar` });
 
   // ── Lifecycle / error handlers ─────────────────────────────────────────────
   app.setNotFoundHandler((req, reply) => {
