@@ -1,34 +1,63 @@
-import { FastifyRequest, FastifyReply } from 'fastify'
+import { FastifyRequest, FastifyReply } from 'fastify';
 import * as launchSvc from '../services/launch.service';
 import { success, errors } from '../utils/response';
 import { logger } from '../utils/logger';
 import { getPlatformContext } from '../utils/platformRouter';
 
-/**
- * Generates full posting package — caption, hashtags, first comment, story copy
- */
-export const getPostingPackage = async (req: FastifyRequest<{ Body: { idea?: string, script?: string } }>, reply: FastifyReply) => {
+// ─────────────────────────────────────────────────────────────────────────────
+// GUARD — blocks incomplete profiles from getting silently wrong advice
+// ─────────────────────────────────────────────────────────────────────────────
+
+const requireArchetype = (archetype: string | null, reply: FastifyReply): boolean => {
+  if (!archetype) {
+    reply.code(422).send({
+      success: false,
+      error:   'INCOMPLETE_PROFILE',
+      message: 'Complete your profile setup to unlock Launch intelligence. ARIA needs your archetype to personalise timing and brand recommendations.',
+    });
+    return false;
+  }
+  return true;
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/v1/launch/package
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const getPostingPackage = async (
+  req: FastifyRequest<{ Body: { idea?: string; script?: string } }>,
+  reply: FastifyReply,
+) => {
   const user = req.user as any;
   const { idea, script } = req.body;
 
   try {
     const ctx = getPlatformContext(user);
+
+    if (!requireArchetype(ctx.archetype, reply)) return;
+
     let pkg: any;
     try {
       pkg = await launchSvc.generatePostingPackage({
         niche:         ctx.niche,
         platform:      ctx.platform,
-        archetype:     ctx.archetype,
+        archetype:     ctx.archetype!,
         followerRange: ctx.followerRange,
         idea,
         script,
       });
     } catch (e) {
-      logger.warn({ e }, "Groq posting package failed");
-      pkg = { caption: "", hashtags: { mega: [], mid: [], niche: [] }, storyCopy: "" };
+      logger.warn({ e }, 'Posting package LLM failed — returning empty shell');
+      pkg = {
+        caption:     '',
+        firstComment:'',
+        hashtags:    { mega: [], mid: [], niche: [] },
+        storyCopy:   '',
+        bestDayTime: '',
+      };
     }
 
-    // Save async — don't block the response
+    // Fire-and-forget DB save — never block the response
     launchSvc.saveLaunchPackage(user.id, { idea, pkg }).catch(() => {});
 
     return success(reply, pkg);
@@ -38,25 +67,37 @@ export const getPostingPackage = async (req: FastifyRequest<{ Body: { idea?: str
   }
 };
 
-/**
- * Returns optimal posting windows for this creator's archetype + niche
- */
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/v1/launch/timing
+// ─────────────────────────────────────────────────────────────────────────────
+
 export const getTimingIntelligence = async (req: FastifyRequest, reply: FastifyReply) => {
   const user = req.user as any;
 
   try {
     const ctx = getPlatformContext(user);
+
+    if (!requireArchetype(ctx.archetype, reply)) return;
+
     let timing: any;
     try {
       timing = await launchSvc.getTimingIntelligence({
-        archetype:     ctx.archetype,
+        archetype:     ctx.archetype!,
         niche:         ctx.niche,
         platform:      ctx.platform,
         followerRange: ctx.followerRange,
       });
     } catch (e) {
-      logger.warn({ e }, "Groq timing intelligence failed");
-      timing = { bestSlots: [] };
+      logger.warn({ e }, 'Timing intelligence LLM failed — returning empty shell');
+      timing = {
+        bestSlots:            [],
+        weeklyPattern:        '',
+        platformInsight:      '',
+        avoidWindows:         [],
+        nextBestSlot:         '',
+        nextBestSlotHoursAway: 0,
+        ariaReason:           '',
+      };
     }
 
     return success(reply, timing);
@@ -66,26 +107,34 @@ export const getTimingIntelligence = async (req: FastifyRequest, reply: FastifyR
   }
 };
 
-/**
- * Returns brand deal opportunities + ready-to-send pitch template
- */
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/v1/launch/brand-alert
+// ─────────────────────────────────────────────────────────────────────────────
+
 export const getBrandAlert = async (req: FastifyRequest, reply: FastifyReply) => {
   const user = req.user as any;
 
   try {
     const ctx = getPlatformContext(user);
+
+    if (!requireArchetype(ctx.archetype, reply)) return;
+
     let alert: any;
     try {
       alert = await launchSvc.generateBrandAlert({
         niche:          ctx.niche,
         platform:       ctx.platform,
-        archetype:      ctx.archetype,
+        archetype:      ctx.archetype!,
         followerRange:  ctx.followerRange,
         engagementRate: ctx.engagementRate,
       });
     } catch (e) {
-      logger.warn({ e }, "Groq brand alert failed");
-      alert = { brandOpportunities: [], pitchTemplate: { subject: "", body: "" } };
+      logger.warn({ e }, 'Brand alert LLM failed — returning empty shell');
+      alert = {
+        brandOpportunities: [],
+        pitchTemplate:      { subject: '', body: '', whatsappVersion: '' },
+        ariaAdvice:         '',
+      };
     }
 
     return success(reply, alert);

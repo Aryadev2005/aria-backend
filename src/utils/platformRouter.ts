@@ -1,9 +1,9 @@
 import { User } from '../types/user';
 
-/**
- * Get platform-aware context for any ARIA service call
- * Use this in every controller instead of raw user.primary_platform
- */
+// ─────────────────────────────────────────────────────────────────────────────
+// PLATFORM CONTEXT
+// ─────────────────────────────────────────────────────────────────────────────
+
 export const getPlatformContext = (user: User) => {
   const platform    = user.primary_platform || (user as any).primaryPlatform || 'instagram';
   const isInstagram = platform === 'instagram';
@@ -13,18 +13,18 @@ export const getPlatformContext = (user: User) => {
     platform,
     isInstagram,
     isYouTube,
-    handle:       isInstagram ? user.instagram_handle : user.youtube_handle,
-    niche:        (user.niches as any)?.[0] || 'general',
-    archetype:    user.archetype   || 'EDUCATOR',
-    followerRange: user.follower_range || (user as any).followerRange || '1K–10K',
+    handle:         isInstagram ? user.instagram_handle : user.youtube_handle,
+    niche:          (user.niches as any)?.[0] || 'general',
+    archetype:      user.archetype   || null,          // null = incomplete profile
+    followerRange:  user.follower_range || (user as any).followerRange || '1K–10K',
     engagementRate: (user as any).engagement_rate || (user as any).engagementRate || 4,
   };
 };
 
-/**
- * Build platform-specific Groq prompt context string
- * Inject this into any ARIA prompt that needs platform awareness
- */
+// ─────────────────────────────────────────────────────────────────────────────
+// PLATFORM PROMPT CONTEXT
+// ─────────────────────────────────────────────────────────────────────────────
+
 export const buildPlatformPromptContext = (user: User): string => {
   const ctx = getPlatformContext(user);
 
@@ -49,9 +49,11 @@ Audio: Trending Bollywood audio can be the content for dancers. Mood-matched for
 Brand deals: Reactive — pitch within 72hrs of a viral post. D2C brands, beauty, fashion.`;
 };
 
-/**
- * Platform-specific timing windows
- */
+// ─────────────────────────────────────────────────────────────────────────────
+// TIMING WINDOWS  (all times in IST)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Hardcoded IST posting windows keyed by archetype × platform */
 export const getPlatformTimingWindows = (archetype: string, platform: string): string[] => {
   const INSTAGRAM_WINDOWS: Record<string, string[]> = {
     TRENDSETTER:  ['Fri 7:30 PM', 'Sat 8:00 PM', 'Wed 7:00 PM'],
@@ -80,5 +82,95 @@ export const getPlatformTimingWindows = (archetype: string, platform: string): s
   };
 
   const windows = platform === 'youtube' ? YOUTUBE_WINDOWS : INSTAGRAM_WINDOWS;
-  return windows[archetype] || windows.EDUCATOR;
+  // Fallback: broad high-traffic windows instead of silently giving niche advice
+  return windows[archetype] || ['Fri 7:30 PM', 'Sun 6:00 PM', 'Wed 7:00 PM'];
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// IST → UTC SLOT CONVERSION  (server-side, deterministic)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const DAY_MAP: Record<string, number> = {
+  sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6,
+};
+
+/**
+ * Parse an IST slot string like "Fri 7:30 PM" and return the next UTC Date
+ * when that slot occurs (always in the future, within the next 7 days).
+ *
+ * IST = UTC+5:30, so we subtract 5h30m to convert to UTC.
+ */
+export const parseISTSlotToNextUTC = (slot: string): Date | null => {
+  try {
+    // e.g. "Fri 7:30 PM"  or  "Sat 12:00 PM"
+    const match = slot.match(/^(\w{3})\s+(\d{1,2}):(\d{2})\s+(AM|PM)$/i);
+    if (!match) return null;
+
+    const [, dayStr, hourStr, minStr, meridiem] = match;
+    const targetDay = DAY_MAP[dayStr.toLowerCase()];
+    if (targetDay === undefined) return null;
+
+    let hour = parseInt(hourStr, 10);
+    const min = parseInt(minStr, 10);
+    if (meridiem.toUpperCase() === 'PM' && hour !== 12) hour += 12;
+    if (meridiem.toUpperCase() === 'AM' && hour === 12) hour = 0;
+
+    // IST offset = +5h30m = 330 minutes ahead of UTC
+    // slot in UTC = slot_IST - 5h30m
+    const totalISTMinutes = hour * 60 + min;
+    const totalUTCMinutes = totalISTMinutes - 330; // may go negative (previous day)
+
+    let utcHour = Math.floor(((totalUTCMinutes % 1440) + 1440) % 1440 / 60);
+    let utcMin  = ((totalUTCMinutes % 1440) + 1440) % 1440 % 60;
+
+    // If IST time crosses midnight backwards, UTC day is one behind
+    const dayOffset = totalUTCMinutes < 0 ? -1 : 0;
+    let utcDay = (targetDay + dayOffset + 7) % 7;
+
+    const now = new Date();
+    const nowUTCDay = now.getUTCDay();
+    let daysUntil = (utcDay - nowUTCDay + 7) % 7;
+
+    // Build the candidate UTC date
+    const candidate = new Date(Date.UTC(
+      now.getUTCFullYear(),
+      now.getUTCMonth(),
+      now.getUTCDate() + daysUntil,
+      utcHour,
+      utcMin,
+      0,
+      0,
+    ));
+
+    // If the candidate is in the past (same day but earlier time), push 7 days forward
+    if (candidate.getTime() <= now.getTime()) {
+      candidate.setUTCDate(candidate.getUTCDate() + 7);
+    }
+
+    return candidate;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Given an IST slot string, returns how many hours until the next occurrence.
+ * Returns 0 on parse failure so the UI degrades gracefully.
+ */
+export const computeNextSlotHoursAway = (slot: string): number => {
+  const next = parseISTSlotToNextUTC(slot);
+  if (!next) return 0;
+  const diffMs = next.getTime() - Date.now();
+  return Math.max(0, Math.round(diffMs / (1000 * 60 * 60)));
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BANNED BRAND CATEGORIES  (injected into brand alert prompt)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const BANNED_BRAND_CATEGORIES = [
+  'gambling', 'betting', 'fantasy sports with real money',
+  'alcohol', 'tobacco', 'cryptocurrency trading platforms',
+  'loan sharks or predatory lending', 'adult content',
+  'MLM or pyramid schemes',
+] as const;
