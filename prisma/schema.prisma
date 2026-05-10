@@ -197,6 +197,23 @@ model studio_sessions {
   @@index([user_id, created_at(sort: Desc)], map: "idx_studio_sessions_user")
 }
 
+model creator_notes {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id     String   @db.Uuid
+  title       String   @default("")
+  content     String   @default("")
+  source      String   @default("manual")
+  source_meta Json?    @default("{}")
+  tags        String[] @default([])
+  is_pinned   Boolean  @default(false)
+  created_at  DateTime @default(now()) @db.Timestamptz(6)
+  updated_at  DateTime @default(now()) @db.Timestamptz(6)
+  users       users    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id], map: "idx_creator_notes_user_id")
+  @@index([user_id, source], map: "idx_creator_notes_user_source")
+}
+
 model launch_packages {
   id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   user_id      String?   @db.Uuid
@@ -391,6 +408,7 @@ model users {
   credit_wallet           credit_wallets?
   credit_transactions     credit_transactions[]
   credit_topups           credit_topups[]
+  creator_notes           creator_notes[]
 
   @@index([archetype], map: "idx_users_archetype")
   @@index([firebase_uid], map: "idx_users_firebase_uid")

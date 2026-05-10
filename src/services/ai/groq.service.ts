@@ -344,8 +344,10 @@ Tone: ${tone}, Language: ${language}
 
 Respond ONLY with valid JSON:
 {
+  "brief": "One sentence: what this reel is about and who it's for",
   "hook": "attention-grabbing first line using Indian context and ₹ for prices",
   "caption": "full caption with emojis, 3-4 sentences, culturally relevant",
+  "contentKeywords": ["keyword1", "keyword2", "keyword3", "keyword4", "keyword5"],
   "hashtags": ["#tag1","#tag2","#tag3","#tag4","#tag5","#tag6","#tag7","#tag8"],
   "bestTimeToPost": "Day · HH:MM PM IST",
   "contentFormat": "Reel|Carousel|Stories",

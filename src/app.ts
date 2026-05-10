@@ -28,6 +28,7 @@ import videoDnaRoutes from "./routes/video_dna.routes";
 import dataDeletionRoutes from "./routes/dataDeletion.routes";
 import integrationRoutes from "./routes/integrations.routes";
 import creditRoutes from "./routes/credits.routes";
+import notesRoutes from "./routes/notes.routes";
 
 export const buildApp = async (): Promise<FastifyInstance> => {
   const app = Fastify({
@@ -248,6 +249,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
     prefix: `${API_PREFIX}/integrations`,
   });
   await app.register(creditRoutes, { prefix: `${API_PREFIX}/credits` });
+  await app.register(notesRoutes, { prefix: `${API_PREFIX}/notes` });
 
   // ── Lifecycle / error handlers ─────────────────────────────────────────────
   app.setNotFoundHandler((req, reply) => {
