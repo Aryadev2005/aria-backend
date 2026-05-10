@@ -175,6 +175,7 @@ export const chat = async (
             primary_platform: true,
             niches: true,
             scraped_summary: true,
+            youtube_scraped_summary: true,
           },
         }),
       ],
@@ -249,7 +250,9 @@ export const chat = async (
 
       for (const toolCall of firstChoice.message.tool_calls as any[]) {
         const toolName = (toolCall as any).function.name;
-        const toolArgs = JSON.parse((toolCall as any).function.arguments || "{}");
+        const toolArgs = JSON.parse(
+          (toolCall as any).function.arguments || "{}",
+        );
 
         const nicheList = Array.isArray(resolvedUser.niches)
           ? resolvedUser.niches
@@ -351,6 +354,8 @@ export const greet = async (
           primary_platform: true,
           niches: true,
           name: true,
+          scraped_summary: true,
+          youtube_scraped_summary: true,
         },
       }),
     ]);

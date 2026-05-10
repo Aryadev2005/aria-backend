@@ -6,20 +6,20 @@ import { formatVoiceForPrompt } from "./voice.service";
 
 // Rough token estimator — 4 characters ≈ 1 token
 function estimateTokens(text: string): number {
-  return Math.ceil((text || '').length / 4);
+  return Math.ceil((text || "").length / 4);
 }
 
 // Apply a character limit to a block — returns the block if within limit, empty string if over budget
 function applyBudget(
-  block:         string,
+  block: string,
   currentTokens: number,
-  maxTokens:     number,
+  maxTokens: number,
 ): { text: string; tokens: number } {
   const blockTokens = estimateTokens(block);
   if (currentTokens + blockTokens <= maxTokens) {
     return { text: block, tokens: currentTokens + blockTokens };
   }
-  return { text: '', tokens: currentTokens };
+  return { text: "", tokens: currentTokens };
 }
 
 // ── Archetype hook strategies ────────────────────────────────────────────────
@@ -167,20 +167,41 @@ CREATOR ANALYTICS:
 - Growth stage: ${growthStage}`;
 
   // ── Bug fix #2: scraped_summary injection ──────────────────────────────
-  // This data was being fetched and passed through but silently discarded.
+  // Instagram scraped data (from Apify public scrape)
   const scrapedData = (user as any)?.scraped_summary;
-  const scrapedBlock = scrapedData
+  const igScrapedBlock = scrapedData
     ? `
 ══ CREATOR'S ACTUAL CONTENT DATA (from Instagram scrape) ══
-Top performing posts: ${Array.isArray(scrapedData.topPosts) ? scrapedData.topPosts.slice(0, 5).join(', ') : (scrapedData.topPosts || 'N/A')}
-Best posting time: ${scrapedData.bestPostingTime || 'Unknown'}
-Best days to post: ${Array.isArray(scrapedData.bestDays) ? scrapedData.bestDays.join(', ') : (scrapedData.bestDays || 'Unknown')}
-Top hashtags: ${Array.isArray(scrapedData.topHashtags) ? scrapedData.topHashtags.slice(0, 8).join(', ') : (scrapedData.topHashtags || 'N/A')}
+Top performing posts: ${Array.isArray(scrapedData.topPosts) ? scrapedData.topPosts.slice(0, 5).join(", ") : scrapedData.topPosts || "N/A"}
+Best posting time: ${scrapedData.bestPostingTime || "Unknown"}
+Best days to post: ${Array.isArray(scrapedData.bestDays) ? scrapedData.bestDays.join(", ") : scrapedData.bestDays || "Unknown"}
+Top hashtags: ${Array.isArray(scrapedData.topHashtags) ? scrapedData.topHashtags.slice(0, 8).join(", ") : scrapedData.topHashtags || "N/A"}
 Total posts analysed: ${scrapedData.totalPostsAnalyzed ?? scrapedData.totalPostsAnalysed ?? 0}
-${scrapedData.avgLikes ? `Avg likes: ${scrapedData.avgLikes}` : ''}
-${scrapedData.avgComments ? `Avg comments: ${scrapedData.avgComments}` : ''}
+${scrapedData.avgLikes ? `Avg likes: ${scrapedData.avgLikes}` : ""}
+${scrapedData.avgComments ? `Avg comments: ${scrapedData.avgComments}` : ""}
 Use this real data — do NOT guess or fabricate posting stats.`
-    : '';
+    : "";
+
+  // YouTube OAuth scraped data (from real channel analytics via stored token)
+  const ytScrapedData = (user as any)?.youtube_scraped_summary;
+  const ytScrapedBlock = ytScrapedData
+    ? `
+══ CREATOR'S ACTUAL YOUTUBE CHANNEL DATA (from OAuth analytics) ══
+Channel: ${ytScrapedData.channelName || ytScrapedData.handle}
+Subscribers: ${(ytScrapedData.subscriberCount || 0).toLocaleString("en-IN")}
+Total channel views: ${(ytScrapedData.totalViews || 0).toLocaleString("en-IN")}
+Avg views/video: ${(ytScrapedData.avgViewsPerVideo || 0).toLocaleString("en-IN")}
+Avg likes/video: ${(ytScrapedData.avgLikesPerVideo || 0).toLocaleString("en-IN")}
+Posts per week: ${ytScrapedData.postsPerWeek || 0}
+Videos analysed: ${ytScrapedData.totalPostsAnalyzed || 0}
+${ytScrapedData.topTags?.length ? `Top video tags: ${ytScrapedData.topTags.slice(0, 8).join(", ")}` : ""}
+${ytScrapedData.recentVideoTitles?.length ? `Recent videos: ${ytScrapedData.recentVideoTitles.slice(0, 5).join(" | ")}` : ""}
+${ytScrapedData.topVideos?.length ? `Top video: "${ytScrapedData.topVideos[0].title}" — ${(ytScrapedData.topVideos[0].views || 0).toLocaleString("en-IN")} views` : ""}
+Use this real data — do NOT guess or fabricate YouTube stats.`
+    : "";
+
+  // Use whichever platform has data; prefer Instagram if both exist (more signals)
+  const scrapedBlock = igScrapedBlock || ytScrapedBlock;
 
   // ── Bug fix #3: aria_last_analysis for ALL sessions ───────────────────
   // Previously this was only injected during the onboarding 'analysed' step.
@@ -188,21 +209,23 @@ Use this real data — do NOT guess or fabricate posting stats.`
   // reference real strengths/gaps/opportunities without guessing.
   const freshAnalysis = (user as any)?.aria_last_analysis;
   const isNewlyAnalysed =
-    (user as any)?.onboarding_step === 'analysed' && freshAnalysis;
+    (user as any)?.onboarding_step === "analysed" && freshAnalysis;
 
   // Compact background block shown in all sessions when analysis exists
-  const analysisBackgroundBlock = freshAnalysis && !isNewlyAnalysed
-    ? `
+  const analysisBackgroundBlock =
+    freshAnalysis && !isNewlyAnalysed
+      ? `
 ══ ARIA PROFILE ANALYSIS (background reference) ══
-${freshAnalysis.strengths?.length ? `Strengths: ${(freshAnalysis.strengths as string[]).slice(0, 3).join(' | ')}` : ''}
-${freshAnalysis.gaps?.length ? `Gaps to address: ${(freshAnalysis.gaps as string[]).slice(0, 2).join(' | ')}` : ''}
-${freshAnalysis.topOpportunity ? `Top opportunity: ${freshAnalysis.topOpportunity}` : ''}
-${freshAnalysis.estimatedMonthlyEarning ? `Estimated monthly earning: ${freshAnalysis.estimatedMonthlyEarning}` : ''}
-${freshAnalysis.monetisationReadiness ? `Monetisation readiness: ${freshAnalysis.monetisationReadiness}` : ''}
+${freshAnalysis.strengths?.length ? `Strengths: ${(freshAnalysis.strengths as string[]).slice(0, 3).join(" | ")}` : ""}
+${freshAnalysis.gaps?.length ? `Gaps to address: ${(freshAnalysis.gaps as string[]).slice(0, 2).join(" | ")}` : ""}
+${freshAnalysis.topOpportunity ? `Top opportunity: ${freshAnalysis.topOpportunity}` : ""}
+${freshAnalysis.estimatedMonthlyEarning ? `Estimated monthly earning: ${freshAnalysis.estimatedMonthlyEarning}` : ""}
+${freshAnalysis.monetisationReadiness ? `Monetisation readiness: ${freshAnalysis.monetisationReadiness}` : ""}
 Reference this silently when relevant — do NOT lead with it unless asked.`
-    : '';
+      : "";
 
-  const freshAnalysisBlock = isNewlyAnalysed ? `
+  const freshAnalysisBlock = isNewlyAnalysed
+    ? `
 
 CRITICAL FIRST MESSAGE INSTRUCTION:
 The user just connected their Instagram and ARIA has completed their profile analysis.
@@ -218,10 +241,11 @@ Present in this exact order:
 
 Data available:
 - Archetype: ${(user as any)?.archetype_label || (user as any)?.archetype}
-- Niches: ${Array.isArray((user as any)?.niches) ? (user as any).niches.join(', ') : (user as any)?.niches}
+- Niches: ${Array.isArray((user as any)?.niches) ? (user as any).niches.join(", ") : (user as any)?.niches}
 - Health Score: ${(user as any)?.health_score}
 - Analysis: ${JSON.stringify(freshAnalysis).slice(0, 800)}
-` : '';
+`
+    : "";
 
   // Memory block (persistent learnings)
   const memoryBlock = buildMemoryBlock(memory);
@@ -236,7 +260,7 @@ Data available:
   // Priority: voice > session > memory > follow-ups > scraped > analysis
   const CONTEXT_BUDGET = 2000;
   let usedTokens = 0;
-  let budgetedContext = '';
+  let budgetedContext = "";
 
   // Priority 1 — Voice portrait (always included, capped at 400 tokens)
   const voiceCapped = voiceBlock.substring(0, 1600); // 1600 chars ≈ 400 tokens
@@ -264,7 +288,11 @@ Data available:
   usedTokens = scrapedResult.tokens;
 
   // Priority 6 — ARIA analysis background (included if budget allows)
-  const analysisResult = applyBudget(analysisBackgroundBlock, usedTokens, CONTEXT_BUDGET);
+  const analysisResult = applyBudget(
+    analysisBackgroundBlock,
+    usedTokens,
+    CONTEXT_BUDGET,
+  );
   budgetedContext += analysisResult.text;
   usedTokens = analysisResult.tokens;
 

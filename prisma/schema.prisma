@@ -353,6 +353,8 @@ model users {
   follower_count          Int?
   scraped_summary         Json?
   scraped_at              DateTime?            @db.Timestamptz(6)
+  youtube_scraped_summary Json?
+  youtube_scraped_at      DateTime?            @db.Timestamptz(6)
   engagement_rate         Decimal?             @db.Decimal(5, 2)
   creator_intent          String?              @default("grow_organically")
   aria_last_analysis      Json?

@@ -143,24 +143,60 @@ export const getCreatorAnalytics = async (
     const stored = await creatorAnalyticsSvc.getStoredCreatorAnalytics(user.id);
     if (stored) return success(reply, stored);
 
-    // No data yet — check if they have a handle to trigger fresh analysis
+    // No stored data — check what accounts are connected
     const dbUser = await (prisma.users as any).findUnique({
       where: { id: user.id },
-      select: { instagram_handle: true, niches: true },
+      select: {
+        instagram_handle: true,
+        youtube_handle: true,
+        youtube_scraped_summary: true,
+        niches: true,
+        primary_platform: true,
+      },
     });
 
-    if (!dbUser?.instagram_handle) {
-      return success(reply, null); // frontend shows "connect Instagram" prompt
+    // Instagram path: full Apify analytics
+    if (dbUser?.instagram_handle) {
+      const niche = Array.isArray(dbUser.niches) ? dbUser.niches[0] : "general";
+      const data = await creatorAnalyticsSvc.buildAndSaveCreatorAnalytics(
+        user.id,
+        dbUser.instagram_handle,
+        niche || "general",
+        false,
+      );
+      return success(reply, data);
     }
 
-    const niche = Array.isArray(dbUser.niches) ? dbUser.niches[0] : "general";
-    const data = await creatorAnalyticsSvc.buildAndSaveCreatorAnalytics(
-      user.id,
-      dbUser.instagram_handle,
-      niche || "general",
-      false,
-    );
-    return success(reply, data);
+    // YouTube path: return the youtube_scraped_summary as lightweight analytics
+    if (dbUser?.youtube_scraped_summary) {
+      const yt = dbUser.youtube_scraped_summary as any;
+      return success(reply, {
+        platform: "youtube",
+        handle: yt.handle,
+        followerRange: yt.followerRange,
+        followers: yt.subscriberCount,
+        avgLikes: yt.avgLikesPerVideo,
+        avgComments: yt.avgCommentsPerVideo,
+        avgViews: yt.avgViewsPerVideo,
+        engagementRate: parseFloat(yt.engagementRate) || 0,
+        postsPerWeek: yt.postsPerWeek,
+        topPosts: (yt.topVideos || []).map((v: any) => ({
+          shortCode: v.videoId,
+          type: "video",
+          likes: v.likes,
+          comments: v.comments,
+          views: v.views,
+          caption: v.title,
+          url: `https://youtube.com/watch?v=${v.videoId}`,
+        })),
+        topHashtags: yt.topTags || [],
+        scrapedAt: yt.fetchedAt,
+        isFromCache: true,
+      });
+    }
+
+    // No accounts at all
+    return success(reply, null);
   } catch (err) {
     logger.error({ err, userId: user.id }, "getCreatorAnalytics failed");
     return errors.serviceDown(reply, "ARIA Creator Analytics");
@@ -178,23 +214,37 @@ export const refreshCreatorAnalytics = async (
 
     const dbUser = await (prisma.users as any).findUnique({
       where: { id: user.id },
-      select: { instagram_handle: true, niches: true },
+      select: {
+        instagram_handle: true,
+        youtube_handle: true,
+        niches: true,
+        primary_platform: true,
+      },
     });
 
-    if (!dbUser?.instagram_handle) {
-      return reply
-        .status(400)
-        .send({ success: false, error: "No Instagram account connected" });
+    // Instagram path
+    if (dbUser?.instagram_handle) {
+      const niche = Array.isArray(dbUser.niches) ? dbUser.niches[0] : "general";
+      const data = await creatorAnalyticsSvc.buildAndSaveCreatorAnalytics(
+        user.id,
+        dbUser.instagram_handle,
+        niche || "general",
+        true,
+      );
+      return success(reply, data);
     }
 
-    const niche = Array.isArray(dbUser.niches) ? dbUser.niches[0] : "general";
-    const data = await creatorAnalyticsSvc.buildAndSaveCreatorAnalytics(
-      user.id,
-      dbUser.instagram_handle,
-      niche || "general",
-      true,
-    );
-    return success(reply, data);
+    // YouTube path: re-run full fetch using stored OAuth token
+    if (dbUser?.youtube_handle) {
+      const { fetchAndSaveYouTubeAnalytics } =
+        await import("../services/youtube_analytics.service");
+      await fetchAndSaveYouTubeAnalytics(user.id);
+      return success(reply, { refreshed: true, platform: "youtube" });
+    }
+
+    return reply
+      .status(400)
+      .send({ success: false, error: "No account connected" });
   } catch (err) {
     logger.error({ err, userId: user.id }, "refreshCreatorAnalytics failed");
     return errors.serviceDown(reply, "ARIA Creator Analytics Refresh");
@@ -230,14 +280,9 @@ export const rebuildVoicePortrait = async (
     const modelToUse = req.creditCheck?.modelToUse ?? "gpt-4o-mini";
 
     // Debit AFTER successful voice portrait rebuild
-    await debitCredits(
-      user.id,
-      "voice_portrait",
-      modelToUse,
-      4000,
-      2000,
-      
-    ).catch((err) => logger.warn({ err }, "Debit failed — non-fatal"));
+    await debitCredits(user.id, "voice_portrait", modelToUse, 4000, 2000).catch(
+      (err) => logger.warn({ err }, "Debit failed — non-fatal"),
+    );
 
     return success(reply, {
       message: "Voice portrait rebuilt successfully",

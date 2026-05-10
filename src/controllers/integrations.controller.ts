@@ -6,8 +6,6 @@ import { success } from "../utils/response";
 import * as scraperService from "../services/scraper.service";
 import * as groqService from "../services/ai/groq.service";
 import axios from "axios";
-import crypto from "crypto";
-
 // ── Provider imports ──────────────────────────────────────────────────────
 // YouTube OAuth stays completely untouched
 import {
@@ -24,6 +22,9 @@ import {
   pickFrontendBaseFromOAuthState,
   resolveFrontendBaseForOAuth,
 } from "../utils/oauth-frontend";
+
+import { encryptToken, decryptToken } from "../utils/tokenCrypto";
+import { fetchAndSaveYouTubeAnalytics } from "../services/youtube_analytics.service";
 
 // ── Flow helpers (YouTube only — Instagram no longer uses OAuth) ──────────
 function youtubeFlowFromStatePayload(flowRaw: unknown): YouTubeOAuthClientFlow {
@@ -60,49 +61,9 @@ function youtubeErrorRedirectUrl(
   return `${frontendUrl}/dashboard/settings?oauth_error=${k}`;
 }
 
-// ── Encryption (YouTube tokens only — Instagram no longer stores tokens) ──
-function getEncryptionKey(): Buffer {
-  const key = process.env.TOKEN_ENCRYPTION_KEY || "";
-  if (key.length !== 64) {
-    throw new Error(
-      "TOKEN_ENCRYPTION_KEY must be a 64-character hex string (32 bytes)",
-    );
-  }
-  return Buffer.from(key, "hex");
-}
-
-function encryptToken(token: string): string {
-  const iv = crypto.randomBytes(16);
-  const cipher = crypto.createCipheriv("aes-256-cbc", getEncryptionKey(), iv);
-  const encrypted = Buffer.concat([
-    cipher.update(token, "utf8"),
-    cipher.final(),
-  ]);
-  return iv.toString("hex") + ":" + encrypted.toString("hex");
-}
-
-// Exported so other services can decrypt tokens when posting
-export function decryptToken(encryptedToken: string): string {
-  if (!encryptedToken) return "";
-  const [ivHex, encryptedHex] = encryptedToken.split(":");
-  if (!ivHex || !encryptedHex) return "";
-  try {
-    const iv = Buffer.from(ivHex, "hex");
-    const encrypted = Buffer.from(encryptedHex, "hex");
-    const decipher = crypto.createDecipheriv(
-      "aes-256-cbc",
-      getEncryptionKey(),
-      iv,
-    );
-    return Buffer.concat([
-      decipher.update(encrypted),
-      decipher.final(),
-    ]).toString("utf8");
-  } catch (err) {
-    logger.warn({ err }, "Token decryption failed");
-    return "";
-  }
-}
+// decryptToken and encryptToken are imported from ../utils/tokenCrypto
+// Re-export decryptToken so existing callers keep working without changes
+export { decryptToken } from "../utils/tokenCrypto";
 
 // ── POST /api/v1/integrations/instagram/connect-by-handle ─────────────────
 // New simplified flow: user provides username → Apify scrapes → niche detected
@@ -311,9 +272,11 @@ export const youtubeCallback = async (
 
     await cache.del(CacheKeys.user(userId));
 
-    // Fire-and-forget niche detection
-    triggerNicheDetection(userId, handle, "youtube").catch((err) =>
-      logger.warn({ err }, "Background niche detection failed"),
+    // Fire-and-forget: fetch full channel analytics using the real OAuth token.
+    // This replaces the weak public-API scrape and builds the youtube_scraped_summary
+    // used for ARIA personalisation everywhere in the app.
+    fetchAndSaveYouTubeAnalytics(userId).catch((err) =>
+      logger.warn({ err }, "Background YouTube analytics fetch failed"),
     );
 
     return reply.redirect(
@@ -336,6 +299,49 @@ export const youtubeCallback = async (
   }
 };
 
+// ── POST /api/v1/integrations/youtube/fetch-analytics ────────────────────
+// On-demand trigger: re-fetches YouTube analytics using stored OAuth token.
+// Called from Settings when the user wants to refresh or if they missed onboarding.
+export const fetchYouTubeAnalyticsHandler = async (
+  req: FastifyRequest,
+  reply: FastifyReply,
+) => {
+  const user = (req as any).user;
+
+  const conn = await (prisma as any).account_connections.findFirst({
+    where: { user_id: user.id, platform: "youtube" },
+    select: { handle: true },
+  });
+
+  if (!conn) {
+    return reply.status(400).send({
+      success: false,
+      error: "not_connected",
+      message: "YouTube is not connected. Please connect first.",
+    });
+  }
+
+  try {
+    // Run inline (not fire-and-forget) so the frontend gets a definitive result
+    await fetchAndSaveYouTubeAnalytics(user.id);
+    return success(reply, {
+      fetched: true,
+      message: "YouTube analytics fetched and saved. ARIA has been updated.",
+    });
+  } catch (err: any) {
+    logger.error(
+      { err, userId: user.id },
+      "fetchYouTubeAnalyticsHandler failed",
+    );
+    return reply.status(502).send({
+      success: false,
+      error: "fetch_failed",
+      message:
+        err.message || "Could not fetch YouTube analytics. Please try again.",
+    });
+  }
+};
+
 // ── GET /api/v1/integrations/status ──────────────────────────────────────
 export const getConnectionStatus = async (
   req: FastifyRequest,
@@ -354,6 +360,12 @@ export const getConnectionStatus = async (
     },
   });
 
+  // Also check if youtube_scraped_summary exists on the user
+  const dbUser = await (prisma as any).users.findUnique({
+    where: { id: user.id },
+    select: { youtube_scraped_summary: true, youtube_scraped_at: true },
+  });
+
   const statusMap = connections.reduce((acc: any, conn: any) => {
     const isExpired = conn.token_expires_at
       ? conn.token_expires_at < new Date()
@@ -364,6 +376,10 @@ export const getConnectionStatus = async (
       connectedAt: conn.connected_at,
       tokenExpired: isExpired,
       tokenExpiresAt: conn.token_expires_at,
+      ...(conn.platform === "youtube" && {
+        analyticsReady: !!dbUser?.youtube_scraped_summary,
+        analyticsScrapedAt: dbUser?.youtube_scraped_at ?? null,
+      }),
     };
     return acc;
   }, {});
@@ -414,7 +430,7 @@ export const disconnectPlatform = async (
     where: { user_id: user.id, platform },
   });
 
-  // For Instagram: also clear profile data from users table
+  // Clear platform-specific profile data from users table
   if (platform === "instagram") {
     await (prisma as any).users.update({
       where: { id: user.id },
@@ -428,6 +444,17 @@ export const disconnectPlatform = async (
         archetype_label: null,
         aria_last_analysis: null,
         onboarding_step: null,
+      },
+    });
+  }
+
+  if (platform === "youtube") {
+    await (prisma as any).users.update({
+      where: { id: user.id },
+      data: {
+        youtube_handle: null,
+        youtube_scraped_summary: null,
+        youtube_scraped_at: null,
       },
     });
   }
