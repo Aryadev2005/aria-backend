@@ -15,6 +15,7 @@ import songRoutes from "./routes/song.routes";
 import contentRoutes from "./routes/content.routes";
 import analyticsRoutes from "./routes/analytics.routes";
 import calendarRoutes from "./routes/calendar.routes";
+import calendarEntryRoutes from "./routes/calendarEntry.routes";
 import radarRoutes from "./routes/radar.routes";
 import onboardingRoutes from "./routes/onboarding.routes";
 import agentRoutes from "./routes/agent.routes";
@@ -26,7 +27,6 @@ import brainRoutes from "./routes/brain.routes";
 import videoDnaRoutes from "./routes/video_dna.routes";
 import dataDeletionRoutes from "./routes/dataDeletion.routes";
 import integrationRoutes from "./routes/integrations.routes";
-import calendarEntryRoutes from "./routes/calendarEntry.routes";
 import creditRoutes from "./routes/credits.routes";
 
 export const buildApp = async (): Promise<FastifyInstance> => {
@@ -235,6 +235,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
   await app.register(contentRoutes, { prefix: `${API_PREFIX}/content` });
   await app.register(analyticsRoutes, { prefix: `${API_PREFIX}/analytics` });
   await app.register(calendarRoutes, { prefix: `${API_PREFIX}/calendar` });
+  await app.register(calendarEntryRoutes, { prefix: `${API_PREFIX}/calendar` });
   await app.register(radarRoutes, { prefix: `${API_PREFIX}/discover` });
   await app.register(onboardingRoutes, { prefix: `${API_PREFIX}/onboarding` });
   await app.register(agentRoutes, { prefix: `${API_PREFIX}/agent` });
@@ -246,8 +247,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
   await app.register(integrationRoutes, {
     prefix: `${API_PREFIX}/integrations`,
   });
-  await app.register(calendarEntryRoutes, { prefix: `${API_PREFIX}/calendar` });
-  await app.register(creditRoutes, { prefix: "/api/v1/credits" });
+  await app.register(creditRoutes, { prefix: `${API_PREFIX}/credits` });
 
   // ── Lifecycle / error handlers ─────────────────────────────────────────────
   app.setNotFoundHandler((req, reply) => {
