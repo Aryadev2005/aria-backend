@@ -6,11 +6,15 @@ import { prisma } from "../config/database";
 import { success, errors } from "../utils/response";
 import { logger } from "../utils/logger";
 import { User } from "../types";
+import { debitCredits } from "../services/credits.service";
 
 /**
  * Get main analytics dashboard with ARIA persona growth map
  */
-export const getDashboard = async (req: FastifyRequest, reply: FastifyReply) => {
+export const getDashboard = async (
+  req: FastifyRequest,
+  reply: FastifyReply,
+) => {
   const user = req.user as User;
 
   try {
@@ -89,8 +93,12 @@ export const getDashboard = async (req: FastifyRequest, reply: FastifyReply) => 
 /**
  * Get growth predictions and milestones — AI generated
  */
-export const getGrowthPrediction = async (req: FastifyRequest, reply: FastifyReply) => {
+export const getGrowthPrediction = async (
+  req: FastifyRequest,
+  reply: FastifyReply,
+) => {
   const user = req.user as User;
+  const modelToUse = req.creditCheck?.modelToUse ?? "gpt-4o-mini";
 
   try {
     const cacheKey = `growth:${user.id}`;
@@ -127,12 +135,34 @@ Respond ONLY with valid JSON:
   ]
 }`;
 
-        return await groqService._callGroq(prompt, { useLlama: false, maxTokens: 600 });
+        return await groqService._callGroq(prompt, {
+          useLlama: false,
+          maxTokens: 600,
+          model: modelToUse,
+        });
       },
       TTL.DASHBOARD,
     );
 
-    return success(reply, prediction);
+    // Debit AFTER successful response (even for cached, middleware already checked)
+    await debitCredits(
+      user.id,
+      "growth_roadmap",
+      modelToUse,
+      1500, // approx input tokens
+      800, // approx output tokens
+      0.000063, // approx cost USD
+    ).catch((err) =>
+      logger.warn(
+        { err },
+        "Debit failed — non-fatal, prediction already returned",
+      ),
+    );
+
+    return success(reply, {
+      ...prediction,
+      creditsUsed: req.creditCheck?.cost ?? 0,
+    });
   } catch (err) {
     logger.error({ err }, "Growth prediction failed");
     return errors.internal(reply);
@@ -142,8 +172,12 @@ Respond ONLY with valid JSON:
 /**
  * Get optimal posting times — AI generated based on niche + platform
  */
-export const getBestPostingTimes = async (req: FastifyRequest, reply: FastifyReply) => {
+export const getBestPostingTimes = async (
+  req: FastifyRequest,
+  reply: FastifyReply,
+) => {
   const user = req.user as User;
+  const modelToUse = req.creditCheck?.modelToUse ?? "gpt-4o-mini";
 
   try {
     const cacheKey = `best-times:${user.id}`;
@@ -178,12 +212,31 @@ Respond ONLY with valid JSON:
   "note": "One sentence explaining why these times work for this niche in India"
 }`;
 
-        return await groqService._callGroq(prompt, { useLlama: false, maxTokens: 400 });
+        return await groqService._callGroq(prompt, {
+          useLlama: false,
+          maxTokens: 400,
+          model: modelToUse,
+        });
       },
       TTL.DASHBOARD,
     );
 
-    return success(reply, times);
+    // Debit AFTER successful response
+    await debitCredits(
+      user.id,
+      "posting_package",
+      modelToUse,
+      800, // approx input tokens
+      400, // approx output tokens
+      0.000031, // approx cost USD
+    ).catch((err) =>
+      logger.warn({ err }, "Debit failed — non-fatal, times already returned"),
+    );
+
+    return success(reply, {
+      ...times,
+      creditsUsed: req.creditCheck?.cost ?? 0,
+    });
   } catch (err) {
     logger.error({ err }, "Best times failed");
     return errors.internal(reply);
@@ -193,8 +246,12 @@ Respond ONLY with valid JSON:
 /**
  * Get competitor insights — AI generated
  */
-export const getCompetitorInsights = async (req: FastifyRequest, reply: FastifyReply) => {
+export const getCompetitorInsights = async (
+  req: FastifyRequest,
+  reply: FastifyReply,
+) => {
   const user = req.user as User;
+  const modelToUse = req.creditCheck?.modelToUse ?? "gpt-4o-mini";
 
   try {
     const cacheKey = `competitors:${user.id}`;
@@ -228,12 +285,34 @@ Respond ONLY with valid JSON:
   "yourAdvantage": "One sentence about what gives this creator an edge over competitors"
 }`;
 
-        return await groqService._callGroq(prompt, { useLlama: false, maxTokens: 500 });
+        return await groqService._callGroq(prompt, {
+          useLlama: false,
+          maxTokens: 500,
+          model: modelToUse,
+        });
       },
       TTL.DASHBOARD,
     );
 
-    return success(reply, insights);
+    // Debit AFTER successful response
+    await debitCredits(
+      user.id,
+      "competitor_gap",
+      modelToUse,
+      1200, // approx input tokens
+      600, // approx output tokens
+      0.000047, // approx cost USD
+    ).catch((err) =>
+      logger.warn(
+        { err },
+        "Debit failed — non-fatal, insights already returned",
+      ),
+    );
+
+    return success(reply, {
+      ...insights,
+      creditsUsed: req.creditCheck?.cost ?? 0,
+    });
   } catch (err) {
     logger.error({ err }, "Competitor insights failed");
     return errors.internal(reply);
@@ -243,8 +322,12 @@ Respond ONLY with valid JSON:
 /**
  * Get weekly performance report — AI generated
  */
-export const getWeeklyReport = async (req: FastifyRequest, reply: FastifyReply) => {
+export const getWeeklyReport = async (
+  req: FastifyRequest,
+  reply: FastifyReply,
+) => {
   const user = req.user as User;
+  const modelToUse = req.creditCheck?.modelToUse ?? "gpt-4o-mini";
 
   try {
     const cacheKey = `weekly-report:${user.id}`;
@@ -285,12 +368,31 @@ Respond ONLY with valid JSON:
   ]
 }`;
 
-        return await groqService._callGroq(prompt, { useLlama: false, maxTokens: 600 });
+        return await groqService._callGroq(prompt, {
+          useLlama: false,
+          maxTokens: 600,
+          model: modelToUse,
+        });
       },
       TTL.DASHBOARD,
     );
 
-    return success(reply, report);
+    // Debit AFTER successful response
+    await debitCredits(
+      user.id,
+      "weekly_report",
+      modelToUse,
+      1000, // approx input tokens
+      700, // approx output tokens
+      0.000055, // approx cost USD
+    ).catch((err) =>
+      logger.warn({ err }, "Debit failed — non-fatal, report already returned"),
+    );
+
+    return success(reply, {
+      ...report,
+      creditsUsed: req.creditCheck?.cost ?? 0,
+    });
   } catch (err) {
     logger.error({ err }, "Weekly report failed");
     return errors.internal(reply);
@@ -300,7 +402,10 @@ Respond ONLY with valid JSON:
 /**
  * Get detected creator archetype
  */
-export const getArchetype = async (req: FastifyRequest, reply: FastifyReply) => {
+export const getArchetype = async (
+  req: FastifyRequest,
+  reply: FastifyReply,
+) => {
   const user = req.user as User;
 
   try {
@@ -320,7 +425,8 @@ export const getArchetype = async (req: FastifyRequest, reply: FastifyReply) => 
       if (!dbUser?.archetype) {
         return reply.status(202).send({
           status: "analyzing",
-          message: "ARIA is detecting your archetype. Check back in 30 seconds.",
+          message:
+            "ARIA is detecting your archetype. Check back in 30 seconds.",
         });
       }
 
@@ -381,7 +487,10 @@ export const triggerScrape = async (
     scraperService
       .scrapeAndSaveProfile(user.id, handle, platform)
       .then(() => {
-        logger.info({ userId: user.id, handle, platform }, "Background scrape complete");
+        logger.info(
+          { userId: user.id, handle, platform },
+          "Background scrape complete",
+        );
         // Bust dashboard cache so next load gets fresh data
         cache.del(CacheKeys.dashboard(user.id)).catch(() => {});
         cache.del(CacheKeys.user(user.id)).catch(() => {});

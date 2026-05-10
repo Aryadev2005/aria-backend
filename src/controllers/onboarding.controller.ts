@@ -1,11 +1,12 @@
 import { FastifyRequest, FastifyReply } from "fastify";
+import axios from "axios";
+import * as scraperService from "../services/scraper.service";
+import { _callGroq } from "../services/ai/groq.service";
 import { prisma } from "../config/database";
 import { cache, CacheKeys } from "../config/redis";
 import { success, errors } from "../utils/response";
 import { logger } from "../utils/logger";
-import * as groqService from "../services/ai/groq.service";
-import * as scraperService from "../services/scraper.service";
-import axios from "axios";
+import { debitCredits } from "../services/credits.service";
 import { User } from "../types";
 
 export interface ConnectHandleBody {
@@ -90,6 +91,10 @@ export const connectHandle = async (
       }
     }
 
+    // ── Check if this is first-time archetype detection (FREE) ────────────
+    // If user already has an archetype, this is a RE-detection and costs credits
+    const isFirstTimeDetection = !user.archetype && !existingUser?.archetype;
+
     // ── ARIA analysis ─────────────────────────────────────────────────────
     const ariaAnalysis = await generateARIAProfileSummary({
       handle,
@@ -115,6 +120,24 @@ export const connectHandle = async (
 
     await cache.del(CacheKeys.user(user.id));
 
+    // ── Handle credits (FREE for first-time, charged for re-detection) ───
+    let creditsUsed = 0;
+    if (!isFirstTimeDetection) {
+      // This is a re-detection, charge credits
+      const modelToUse = req.creditCheck?.modelToUse ?? "gpt-4o-mini";
+      await debitCredits(
+        user.id,
+        "archetype_detection",
+        modelToUse,
+        1500, // approx input tokens
+        800, // approx output tokens
+        0.000063, // approx cost USD
+      ).catch((err) => logger.warn({ err }, "Debit failed — non-fatal"));
+      creditsUsed = req.creditCheck?.cost ?? 0;
+    } else {
+      logger.info({ userId: user.id }, "First-time archetype detection — FREE");
+    }
+
     return success(reply, {
       ariaAnalysis,
       scrapedData: scrapedData
@@ -127,6 +150,11 @@ export const connectHandle = async (
       scrapeError,
       handle,
       platform,
+      isFirstTimeDetection,
+      creditsUsed,
+      message: isFirstTimeDetection
+        ? "First-time archetype analysis complete — FREE"
+        : "Archetype re-detection complete",
     });
   } catch (err) {
     logger.error({ err, userId: user.id }, "connectHandle failed");
@@ -388,7 +416,7 @@ Respond ONLY with valid JSON:
 }`;
 
   try {
-    return await groqService._callGroq(prompt, {
+    return await _callGroq(prompt, {
       useLlama: true,
       maxTokens: 1200,
     });

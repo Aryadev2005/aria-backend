@@ -1,31 +1,34 @@
-import { ChatOpenAI } from '@langchain/openai'
-import { logger } from '../../utils/logger'
+import { ChatOpenAI } from "@langchain/openai";
+import { logger } from "../../utils/logger";
 
 const createOpenAIClient = (useLlama = false, maxTokens = 1000) =>
   new ChatOpenAI({
     apiKey: process.env.OPENAI_API_KEY,
     // Keep old "useLlama" toggle semantics by mapping to heavy/light OpenAI models.
     model: useLlama
-      ? (process.env.OPENAI_REASONING_MODEL || process.env.OPENAI_MODEL || 'gpt-4o')
-      : (process.env.OPENAI_MODEL || 'gpt-4o-mini'),
+      ? process.env.OPENAI_REASONING_MODEL ||
+        process.env.OPENAI_MODEL ||
+        "gpt-4o"
+      : process.env.OPENAI_MODEL || "gpt-4o-mini",
     temperature: 0,
     maxTokens,
     timeout: 25000,
-  })
+  });
 
 // ─── JSON parser — strips markdown fences if LLM adds them ────────────────
 const parseJSON = (text: string) => {
   const clean = text
-    .replace(/```json\n?/g, '')
-    .replace(/```\n?/g, '')
-    .trim()
-  return JSON.parse(clean)
-}
+    .replace(/```json\n?/g, "")
+    .replace(/```\n?/g, "")
+    .trim();
+  return JSON.parse(clean);
+};
 
 export interface GroqCallOptions {
   maxTokens?: number;
   useLlama?: boolean;
   maxRetries?: number;
+  model?: string;
 }
 
 /**
@@ -35,71 +38,96 @@ export interface GroqCallOptions {
  */
 export const _callGroq = async (
   prompt: string,
-  { maxTokens = 1000, useLlama = false, maxRetries = 3 }: GroqCallOptions = {},
+  {
+    maxTokens = 1000,
+    useLlama = false,
+    maxRetries = 3,
+    model: modelOverride,
+  }: GroqCallOptions = {},
 ): Promise<any> => {
   if (!process.env.OPENAI_API_KEY?.trim()) {
-    throw new Error('OPENAI_API_KEY is required for AI analysis')
+    throw new Error("OPENAI_API_KEY is required for AI analysis");
   }
+
+  // ── Determine model ─────────────────────────────────────────────────────────
+  // Explicit model override takes precedence, then useLlama logic, then defaults
+  const model =
+    modelOverride ||
+    (useLlama
+      ? process.env.OPENAI_REASONING_MODEL ||
+        process.env.OPENAI_MODEL ||
+        "gpt-4o"
+      : process.env.OPENAI_MODEL || "gpt-4o-mini");
 
   // ── Create client ONCE outside the retry loop ─────────────────────────────
   // Previously this was inside the loop — wasteful on every retry attempt.
   const llm = new ChatOpenAI({
-    apiKey:    process.env.OPENAI_API_KEY,
-    model:     useLlama
-      ? (process.env.OPENAI_REASONING_MODEL || process.env.OPENAI_MODEL || 'gpt-4o')
-      : (process.env.OPENAI_MODEL || 'gpt-4o-mini'),
+    apiKey: process.env.OPENAI_API_KEY,
+    model,
     temperature: 0,
     maxTokens,
-    timeout:   20000,  // reduced from 25s → 20s; fail fast and retry sooner
+    timeout: 20000, // reduced from 25s → 20s; fail fast and retry sooner
   });
 
-  const model = useLlama
-    ? (process.env.OPENAI_REASONING_MODEL || process.env.OPENAI_MODEL || 'gpt-4o')
-    : (process.env.OPENAI_MODEL || 'gpt-4o-mini');
-
-  let lastErr: any = null
+  let lastErr: any = null;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      const systemContent = attempt === 1
-        ? "You are ARIA — India's creator intelligence engine. Always respond with valid JSON only. No preamble, no markdown fences."
-        : 'CRITICAL: Respond ONLY with a raw JSON object. No text before or after. No ```json. No explanation. Start your response with { and end with }.'
+      const systemContent =
+        attempt === 1
+          ? "You are ARIA — India's creator intelligence engine. Always respond with valid JSON only. No preamble, no markdown fences."
+          : "CRITICAL: Respond ONLY with a raw JSON object. No text before or after. No ```json. No explanation. Start your response with { and end with }.";
 
       const completion = await llm.invoke([
-        { role: 'system', content: systemContent },
-        { role: 'user', content: prompt },
-      ])
+        { role: "system", content: systemContent },
+        { role: "user", content: prompt },
+      ]);
 
-      const rawContent = completion.content
+      const rawContent = completion.content;
       const content = Array.isArray(rawContent)
-        ? rawContent.map((part: any) => (typeof part === 'string' ? part : (part?.text || ''))).join('')
-        : String(rawContent || '')
-      if (!content) throw new Error('Empty response from OpenAI')
+        ? rawContent
+            .map((part: any) =>
+              typeof part === "string" ? part : part?.text || "",
+            )
+            .join("")
+        : String(rawContent || "");
+      if (!content) throw new Error("Empty response from OpenAI");
 
       try {
-        return parseJSON(content)
+        return parseJSON(content);
       } catch (jsonErr) {
-        logger.warn({ jsonErr, attempt, content: content.slice(0, 200) }, 'OpenAI JSON parse failed — retrying')
-        lastErr = jsonErr
+        logger.warn(
+          { jsonErr, attempt, content: content.slice(0, 200) },
+          "OpenAI JSON parse failed — retrying",
+        );
+        lastErr = jsonErr;
       }
     } catch (err: any) {
-      logger.warn({ err: err.message, attempt, model }, 'OpenAI call failed')
-      lastErr = err
-      if (err.status === 401 || err.status === 403 || err.code === 'invalid_api_key') break
+      logger.warn({ err: err.message, attempt, model }, "OpenAI call failed");
+      lastErr = err;
+      if (
+        err.status === 401 ||
+        err.status === 403 ||
+        err.code === "invalid_api_key"
+      )
+        break;
     }
 
     if (attempt < maxRetries) {
       // Reduced backoff: 1s, 2s (was 2s, 4s)
-      await new Promise(resolve => setTimeout(resolve, attempt * 1000))
+      await new Promise((resolve) => setTimeout(resolve, attempt * 1000));
     }
   }
 
-  logger.error({ err: lastErr, prompt: prompt.slice(0, 100) }, 'OpenAI exhausted all retries')
-  throw lastErr || new Error('OpenAI call failed after retries')
-}
+  logger.error(
+    { err: lastErr, prompt: prompt.slice(0, 100) },
+    "OpenAI exhausted all retries",
+  );
+  throw lastErr || new Error("OpenAI call failed after retries");
+};
 
 // Alias used by ariaService.js (older service)
-export const callARIA = _callGroq
+export const callARIA = _callGroq;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ARIA FUNCTIONS
@@ -115,7 +143,13 @@ export interface ArchetypeParams {
   scrapedData?: any;
 }
 
-export const detectArchetype = async ({ niche, platform, followerRange, creatorIntent, scrapedData }: ArchetypeParams) => {
+export const detectArchetype = async ({
+  niche,
+  platform,
+  followerRange,
+  creatorIntent,
+  scrapedData,
+}: ArchetypeParams) => {
   const prompt = `You are ARIA - an AI creator intelligence system. Analyze this creator profile and detect their archetype.
 
 Creator Profile:
@@ -123,7 +157,7 @@ Creator Profile:
 - Platform: ${platform}
 - Follower Range: ${followerRange}
 - Intent: ${creatorIntent}
-${scrapedData ? `- Bio/Data: ${JSON.stringify(scrapedData)}` : ''}
+${scrapedData ? `- Bio/Data: ${JSON.stringify(scrapedData)}` : ""}
 
 Archetypes in India's creator economy:
 - THE EDUCATOR: teaches skills, builds authority
@@ -140,11 +174,11 @@ Respond ONLY with valid JSON:
   "archetypeConfidence": 85,
   "growthStage": "DISCOVERY|GROWTH|MONETIZATION|SCALE",
   "toneProfile": "casual|professional|humorous|inspirational|educational"
-}`
+}`;
 
   // Llama 70B — archetype detection needs nuanced reasoning
-  return _callGroq(prompt, { maxTokens: 500, useLlama: true })
-}
+  return _callGroq(prompt, { maxTokens: 500, useLlama: true });
+};
 
 export interface GapParams {
   archetype: string;
@@ -155,13 +189,20 @@ export interface GapParams {
   engagementRate: number;
 }
 
-export const analyzeGaps = async ({ archetype, niche, platform, followerRange, scrapedData, engagementRate }: GapParams) => {
+export const analyzeGaps = async ({
+  archetype,
+  niche,
+  platform,
+  followerRange,
+  scrapedData,
+  engagementRate,
+}: GapParams) => {
   const prompt = `You are ARIA. Analyze content gaps for a ${archetype} creator in ${niche} on ${platform}.
 
 Current Data:
 - Follower Range: ${followerRange}
 - Engagement Rate: ${engagementRate}%
-${scrapedData ? `- Creator Data: ${JSON.stringify(scrapedData)}` : ''}
+${scrapedData ? `- Creator Data: ${JSON.stringify(scrapedData)}` : ""}
 
 Respond ONLY with valid JSON:
 {
@@ -173,10 +214,10 @@ Respond ONLY with valid JSON:
   "topicClusters": ["Fashion", "Lifestyle"],
   "estimatedMissingFollowers": 5000,
   "gapScore": 72
-}`
+}`;
 
-  return _callGroq(prompt, { maxTokens: 800, useLlama: true })
-}
+  return _callGroq(prompt, { maxTokens: 800, useLlama: true });
+};
 
 export interface ViralBlueprintParams {
   archetype: string;
@@ -187,7 +228,14 @@ export interface ViralBlueprintParams {
   toneProfile?: string;
 }
 
-export const generateViralBlueprint = async ({ archetype, niche, platform, followerRange, gaps, toneProfile }: ViralBlueprintParams) => {
+export const generateViralBlueprint = async ({
+  archetype,
+  niche,
+  platform,
+  followerRange,
+  gaps,
+  toneProfile,
+}: ViralBlueprintParams) => {
   const prompt = `You are ARIA. Generate a viral growth blueprint for a ${archetype} ${niche} creator on ${platform}.
 
 Blueprint parameters:
@@ -208,10 +256,10 @@ Respond ONLY with valid JSON:
   "bestTimeToPost": "7:00 PM IST Wed-Sat",
   "recommendedFrequency": "5x per week",
   "expectedGrowthIn30Days": "15-25%"
-}`
+}`;
 
-  return _callGroq(prompt, { maxTokens: 1000, useLlama: true })
-}
+  return _callGroq(prompt, { maxTokens: 1000, useLlama: true });
+};
 
 export interface PersonaParams {
   niche: string;
@@ -222,7 +270,14 @@ export interface PersonaParams {
   engagementRate: number;
 }
 
-export const fullPersonaGrowthMap = async ({ niche, platform, followerRange, creatorIntent, scrapedData, engagementRate }: PersonaParams) => {
+export const fullPersonaGrowthMap = async ({
+  niche,
+  platform,
+  followerRange,
+  creatorIntent,
+  scrapedData,
+  engagementRate,
+}: PersonaParams) => {
   const prompt = `You are ARIA - India's top AI creator intelligence. Generate a complete persona growth map.
 
 Creator:
@@ -251,11 +306,11 @@ Respond ONLY with valid JSON:
   "opportunityWindows": ["Opportunity 1"],
   "monetizationReadiness": 65,
   "nextSteps": ["Step 1", "Step 2"]
-}`
+}`;
 
   // Llama 70B — flagship analysis needs max intelligence
-  return _callGroq(prompt, { maxTokens: 1500, useLlama: true })
-}
+  return _callGroq(prompt, { maxTokens: 1500, useLlama: true });
+};
 
 export interface ContentParams {
   trendTitle: string;
@@ -266,14 +321,25 @@ export interface ContentParams {
   tone?: string | null;
   language?: string | null;
   archetype?: string | null;
+  model?: string;
 }
 
-export const generateContent = async ({ trendTitle, platform, niche, followerRange, songTitle, tone = 'casual', language = 'hinglish', archetype }: ContentParams) => {
-  const prompt = `You are India's top social media content strategist for ${archetype || 'creator'}.
+export const generateContent = async ({
+  trendTitle,
+  platform,
+  niche,
+  followerRange,
+  songTitle,
+  tone = "casual",
+  language = "hinglish",
+  archetype,
+  model,
+}: ContentParams) => {
+  const prompt = `You are India's top social media content strategist for ${archetype || "creator"}.
 
 Creator: ${niche} niche, ${platform}, ${followerRange} followers
 Topic: "${trendTitle}"
-${songTitle ? `Song: "${songTitle}"` : ''}
+${songTitle ? `Song: "${songTitle}"` : ""}
 Tone: ${tone}, Language: ${language}
 
 Respond ONLY with valid JSON:
@@ -286,11 +352,11 @@ Respond ONLY with valid JSON:
   "expectedEngagement": "High saves, Medium comments",
   "thumbnailText": "bold thumbnail text",
   "cta": "call to action"
-}`
+}`;
 
   // Llama 70B — content generation benefits from creativity
-  return _callGroq(prompt, { maxTokens: 1000, useLlama: true })
-}
+  return _callGroq(prompt, { maxTokens: 1000, useLlama: true, model });
+};
 
 export interface HookParams {
   topic: string;
@@ -298,10 +364,18 @@ export interface HookParams {
   niche: string;
   followerRange: string | null;
   archetype?: string | null;
+  model?: string;
 }
 
-export const generateHooks = async ({ topic, platform, niche, followerRange, archetype }: HookParams) => {
-  const prompt = `Generate 5 hooks for Indian ${niche} ${archetype || 'creator'} on ${platform} (${followerRange} followers).
+export const generateHooks = async ({
+  topic,
+  platform,
+  niche,
+  followerRange,
+  archetype,
+  model,
+}: HookParams) => {
+  const prompt = `Generate 5 hooks for Indian ${niche} ${archetype || "creator"} on ${platform} (${followerRange} followers).
 Topic: "${topic}"
 
 Respond ONLY with valid JSON:
@@ -309,21 +383,28 @@ Respond ONLY with valid JSON:
   "hooks": [
     { "text": "hook text", "trigger": "curiosity|controversy|relatability|fear|aspiration", "rating": 85 }
   ]
-}`
+}`;
 
   // Mixtral — fast enough, hooks are pattern-based
-  return _callGroq(prompt, { maxTokens: 800, useLlama: false })
-}
+  return _callGroq(prompt, { maxTokens: 800, useLlama: false, model });
+};
 
 export interface RewriteHookParams {
   hook: string;
   platform: string;
   niche: string | null;
   archetype?: string | null;
+  model?: string;
 }
 
-export const rewriteHook = async ({ hook, platform, niche, archetype }: RewriteHookParams) => {
-  const prompt = `Rewrite this hook 5 stronger ways for Indian ${niche} ${archetype || 'creator'} on ${platform}:
+export const rewriteHook = async ({
+  hook,
+  platform,
+  niche,
+  archetype,
+  model,
+}: RewriteHookParams) => {
+  const prompt = `Rewrite this hook 5 stronger ways for Indian ${niche} ${archetype || "creator"} on ${platform}:
 "${hook}"
 
 Respond ONLY with valid JSON:
@@ -331,20 +412,26 @@ Respond ONLY with valid JSON:
   "rewrites": [
     { "text": "rewritten hook", "improvement": "why this is better", "rating": 90 }
   ]
-}`
+}`;
 
   // Mixtral — fast, pattern-based task
-  return _callGroq(prompt, { maxTokens: 800, useLlama: false })
-}
+  return _callGroq(prompt, { maxTokens: 800, useLlama: false, model });
+};
 
 export interface RepurposeParams {
   content: string;
   sourcePlatform: string;
   targetPlatforms: string[];
+  model?: string;
 }
 
-export const repurposeContent = async ({ content, sourcePlatform, targetPlatforms }: RepurposeParams) => {
-  const prompt = `Repurpose this ${sourcePlatform} content for: ${targetPlatforms.join(', ')}
+export const repurposeContent = async ({
+  content,
+  sourcePlatform,
+  targetPlatforms,
+  model,
+}: RepurposeParams) => {
+  const prompt = `Repurpose this ${sourcePlatform} content for: ${targetPlatforms.join(", ")}
 "${content}"
 
 Respond ONLY with valid JSON:
@@ -354,20 +441,27 @@ Respond ONLY with valid JSON:
     "youtube":   { "title": "", "description": "", "tags": [] },
     "twitter":   { "tweet": "", "thread": [] }
   }
-}`
+}`;
 
-  return _callGroq(prompt, { maxTokens: 1000, useLlama: false })
-}
+  return _callGroq(prompt, { maxTokens: 1000, useLlama: false, model });
+};
 
 export interface AnalyseContentParams {
   caption: string;
   platform: string;
   niche: string | null;
   archetype?: string | null;
+  model?: string;
 }
 
-export const analyseContent = async ({ caption, platform, niche, archetype }: AnalyseContentParams) => {
-  const prompt = `Analyze this ${platform} content for a ${niche} ${archetype || 'creator'}:
+export const analyseContent = async ({
+  caption,
+  platform,
+  niche,
+  archetype,
+  model,
+}: AnalyseContentParams) => {
+  const prompt = `Analyze this ${platform} content for a ${niche} ${archetype || "creator"}:
 "${caption}"
 
 Respond ONLY with valid JSON:
@@ -378,11 +472,11 @@ Respond ONLY with valid JSON:
   "estimatedReach": "High",
   "recommendations": ["Specific recommendation 1"],
   "score": 82
-}`
+}`;
 
   // Mixtral — fast analysis
-  return _callGroq(prompt, { maxTokens: 600, useLlama: false })
-}
+  return _callGroq(prompt, { maxTokens: 600, useLlama: false, model });
+};
 
 export interface TrendInsightParams {
   niche: string;
@@ -393,14 +487,21 @@ export interface TrendInsightParams {
   imputationContext?: any;
 }
 
-export const generateTrendInsights = async ({ niche, platform, followerRange, archetype, liveTrendsContext, imputationContext }: TrendInsightParams) => {
+export const generateTrendInsights = async ({
+  niche,
+  platform,
+  followerRange,
+  archetype,
+  liveTrendsContext,
+  imputationContext,
+}: TrendInsightParams) => {
   // If we have early signals, tell ARIA to be honest about uncertainty
   const uncertaintyNote = imputationContext?.hasEarlySignals
     ? '\nNOTE: Some signals are under 6 hours old. For those, say "ARIA is monitoring" instead of a confident peak window. Never invent engagement numbers for early signals.'
-    : ''
+    : "";
 
-  const prompt = `You are ARIA. Generate trend insights for a ${niche} ${archetype || 'creator'} on ${platform} (${followerRange} followers).
-${liveTrendsContext ? `Live market context: ${liveTrendsContext}` : ''}
+  const prompt = `You are ARIA. Generate trend insights for a ${niche} ${archetype || "creator"} on ${platform} (${followerRange} followers).
+${liveTrendsContext ? `Live market context: ${liveTrendsContext}` : ""}
 ${uncertaintyNote}
 
 Respond ONLY with valid JSON:
@@ -419,10 +520,10 @@ Respond ONLY with valid JSON:
       "caution": null
     }
   ]
-}`
+}`;
 
-  return _callGroq(prompt, { maxTokens: 1200, useLlama: true })
-}
+  return _callGroq(prompt, { maxTokens: 1200, useLlama: true });
+};
 
 export interface SongInsightParams {
   niche: string;
@@ -430,9 +531,13 @@ export interface SongInsightParams {
   archetype?: string;
 }
 
-export const generateSongInsights = async ({ niche, platform, archetype }: SongInsightParams) => {
+export const generateSongInsights = async ({
+  niche,
+  platform,
+  archetype,
+}: SongInsightParams) => {
   const prompt = `You are ARIA. Generate song insights for trending audio clips for ${niche} creators on ${platform}.
-Archetype: ${archetype || 'general'}
+Archetype: ${archetype || "general"}
 
 Respond ONLY with valid JSON:
 {
@@ -447,10 +552,10 @@ Respond ONLY with valid JSON:
       "recommendation": "How and when to use this"
     }
   ]
-}`
+}`;
 
-  return _callGroq(prompt, { maxTokens: 1000, useLlama: false })
-}
+  return _callGroq(prompt, { maxTokens: 1000, useLlama: false });
+};
 
 export interface RateCardParams {
   followers: string | number;
@@ -460,8 +565,14 @@ export interface RateCardParams {
   archetype?: string;
 }
 
-export const generateRateCard = async ({ followers, engagement, niche, platform, archetype }: RateCardParams) => {
-  const prompt = `You are ARIA. Generate a sponsorship rate card for a ${niche} ${archetype || 'creator'}.
+export const generateRateCard = async ({
+  followers,
+  engagement,
+  niche,
+  platform,
+  archetype,
+}: RateCardParams) => {
+  const prompt = `You are ARIA. Generate a sponsorship rate card for a ${niche} ${archetype || "creator"}.
 
 Stats:
 - Followers: ${followers}
@@ -477,8 +588,8 @@ Respond ONLY with valid JSON:
     "benchmarkAgainstPeers": "20th percentile (higher is better)"
   },
   "recommendation": "Your rate is competitive for your niche"
-}`
+}`;
 
   // Llama 70B — pricing needs reasoning about Indian market rates
-  return _callGroq(prompt, { maxTokens: 500, useLlama: true })
-}
+  return _callGroq(prompt, { maxTokens: 500, useLlama: true });
+};

@@ -1,19 +1,24 @@
-import { FastifyRequest, FastifyReply } from 'fastify';
-import * as launchSvc from '../services/launch.service';
-import { success, errors } from '../utils/response';
-import { logger } from '../utils/logger';
-import { getPlatformContext } from '../utils/platformRouter';
+import { FastifyRequest, FastifyReply } from "fastify";
+import * as launchSvc from "../services/launch.service";
+import { success, errors } from "../utils/response";
+import { logger } from "../utils/logger";
+import { debitCredits } from "../services/credits.service";
+import { getPlatformContext } from "../utils/platformRouter";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GUARD — blocks incomplete profiles from getting silently wrong advice
 // ─────────────────────────────────────────────────────────────────────────────
 
-const requireArchetype = (archetype: string | null, reply: FastifyReply): boolean => {
+const requireArchetype = (
+  archetype: string | null,
+  reply: FastifyReply,
+): boolean => {
   if (!archetype) {
     reply.code(422).send({
       success: false,
-      error:   'INCOMPLETE_PROFILE',
-      message: 'Complete your profile setup to unlock Launch intelligence. ARIA needs your archetype to personalise timing and brand recommendations.',
+      error: "INCOMPLETE_PROFILE",
+      message:
+        "Complete your profile setup to unlock Launch intelligence. ARIA needs your archetype to personalise timing and brand recommendations.",
     });
     return false;
   }
@@ -39,31 +44,43 @@ export const getPostingPackage = async (
     let pkg: any;
     try {
       pkg = await launchSvc.generatePostingPackage({
-        niche:         ctx.niche,
-        platform:      ctx.platform,
-        archetype:     ctx.archetype!,
+        niche: ctx.niche,
+        platform: ctx.platform,
+        archetype: ctx.archetype!,
         followerRange: ctx.followerRange,
         idea,
         script,
       });
     } catch (e) {
-      logger.warn({ e }, 'Posting package LLM failed — returning empty shell');
+      logger.warn({ e }, "Posting package LLM failed — returning empty shell");
       pkg = {
-        caption:     '',
-        firstComment:'',
-        hashtags:    { mega: [], mid: [], niche: [] },
-        storyCopy:   '',
-        bestDayTime: '',
+        caption: "",
+        firstComment: "",
+        hashtags: { mega: [], mid: [], niche: [] },
+        storyCopy: "",
+        bestDayTime: "",
       };
     }
 
     // Fire-and-forget DB save — never block the response
     launchSvc.saveLaunchPackage(user.id, { idea, pkg }).catch(() => {});
 
-    return success(reply, pkg);
+    const modelToUse = req.creditCheck?.modelToUse ?? "gpt-4o-mini";
+
+    // Debit AFTER successful response
+    await debitCredits(
+      user.id,
+      "posting_package",
+      modelToUse,
+      1500,
+      800,
+      0.000078,
+    ).catch((err) => logger.warn({ err }, "Debit failed — non-fatal"));
+
+    return success(reply, { ...pkg, creditsUsed: req.creditCheck?.cost ?? 0 });
   } catch (err) {
-    logger.error({ err, userId: user.id }, 'getPostingPackage failed');
-    return errors.serviceDown(reply, 'ARIA Launch');
+    logger.error({ err, userId: user.id }, "getPostingPackage failed");
+    return errors.serviceDown(reply, "ARIA Launch");
   }
 };
 
@@ -71,7 +88,10 @@ export const getPostingPackage = async (
 // GET /api/v1/launch/timing
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const getTimingIntelligence = async (req: FastifyRequest, reply: FastifyReply) => {
+export const getTimingIntelligence = async (
+  req: FastifyRequest,
+  reply: FastifyReply,
+) => {
   const user = req.user as any;
 
   try {
@@ -82,28 +102,46 @@ export const getTimingIntelligence = async (req: FastifyRequest, reply: FastifyR
     let timing: any;
     try {
       timing = await launchSvc.getTimingIntelligence({
-        archetype:     ctx.archetype!,
-        niche:         ctx.niche,
-        platform:      ctx.platform,
+        archetype: ctx.archetype!,
+        niche: ctx.niche,
+        platform: ctx.platform,
         followerRange: ctx.followerRange,
       });
     } catch (e) {
-      logger.warn({ e }, 'Timing intelligence LLM failed — returning empty shell');
+      logger.warn(
+        { e },
+        "Timing intelligence LLM failed — returning empty shell",
+      );
       timing = {
-        bestSlots:            [],
-        weeklyPattern:        '',
-        platformInsight:      '',
-        avoidWindows:         [],
-        nextBestSlot:         '',
+        bestSlots: [],
+        weeklyPattern: "",
+        platformInsight: "",
+        avoidWindows: [],
+        nextBestSlot: "",
         nextBestSlotHoursAway: 0,
-        ariaReason:           '',
+        ariaReason: "",
       };
     }
 
-    return success(reply, timing);
+    const modelToUse = req.creditCheck?.modelToUse ?? "gpt-4o-mini";
+
+    // Debit AFTER successful response
+    await debitCredits(
+      user.id,
+      "posting_package",
+      modelToUse,
+      1000,
+      600,
+      0.000055,
+    ).catch((err) => logger.warn({ err }, "Debit failed — non-fatal"));
+
+    return success(reply, {
+      ...timing,
+      creditsUsed: req.creditCheck?.cost ?? 0,
+    });
   } catch (err) {
-    logger.error({ err, userId: user.id }, 'getTimingIntelligence failed');
-    return errors.serviceDown(reply, 'ARIA Timing');
+    logger.error({ err, userId: user.id }, "getTimingIntelligence failed");
+    return errors.serviceDown(reply, "ARIA Timing");
   }
 };
 
@@ -111,7 +149,10 @@ export const getTimingIntelligence = async (req: FastifyRequest, reply: FastifyR
 // GET /api/v1/launch/brand-alert
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const getBrandAlert = async (req: FastifyRequest, reply: FastifyReply) => {
+export const getBrandAlert = async (
+  req: FastifyRequest,
+  reply: FastifyReply,
+) => {
   const user = req.user as any;
 
   try {
@@ -122,24 +163,39 @@ export const getBrandAlert = async (req: FastifyRequest, reply: FastifyReply) =>
     let alert: any;
     try {
       alert = await launchSvc.generateBrandAlert({
-        niche:          ctx.niche,
-        platform:       ctx.platform,
-        archetype:      ctx.archetype!,
-        followerRange:  ctx.followerRange,
+        niche: ctx.niche,
+        platform: ctx.platform,
+        archetype: ctx.archetype!,
+        followerRange: ctx.followerRange,
         engagementRate: ctx.engagementRate,
       });
     } catch (e) {
-      logger.warn({ e }, 'Brand alert LLM failed — returning empty shell');
+      logger.warn({ e }, "Brand alert LLM failed — returning empty shell");
       alert = {
         brandOpportunities: [],
-        pitchTemplate:      { subject: '', body: '', whatsappVersion: '' },
-        ariaAdvice:         '',
+        pitchTemplate: { subject: "", body: "", whatsappVersion: "" },
+        ariaAdvice: "",
       };
     }
 
-    return success(reply, alert);
+    const modelToUse = req.creditCheck?.modelToUse ?? "gpt-4o-mini";
+
+    // Debit AFTER successful response
+    await debitCredits(
+      user.id,
+      "brand_alert",
+      modelToUse,
+      1200,
+      700,
+      0.000063,
+    ).catch((err) => logger.warn({ err }, "Debit failed — non-fatal"));
+
+    return success(reply, {
+      ...alert,
+      creditsUsed: req.creditCheck?.cost ?? 0,
+    });
   } catch (err) {
-    logger.error({ err, userId: user.id }, 'getBrandAlert failed');
-    return errors.serviceDown(reply, 'ARIA Brand Alert');
+    logger.error({ err, userId: user.id }, "getBrandAlert failed");
+    return errors.serviceDown(reply, "ARIA Brand Alert");
   }
 };

@@ -9,6 +9,7 @@
 import { FastifyRequest, FastifyReply } from "fastify";
 import { success, errors } from "../utils/response";
 import { logger } from "../utils/logger";
+import { debitCredits } from "../services/credits.service";
 import {
   retrieveSongs,
   getSongsForBGM,

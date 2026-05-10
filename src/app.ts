@@ -27,6 +27,7 @@ import videoDnaRoutes from "./routes/video_dna.routes";
 import dataDeletionRoutes from "./routes/dataDeletion.routes";
 import integrationRoutes from "./routes/integrations.routes";
 import calendarEntryRoutes from "./routes/calendarEntry.routes";
+import creditRoutes from "./routes/credits.routes";
 
 export const buildApp = async (): Promise<FastifyInstance> => {
   const app = Fastify({
@@ -35,13 +36,13 @@ export const buildApp = async (): Promise<FastifyInstance> => {
       transport:
         process.env.NODE_ENV !== "production"
           ? {
-            target: "pino-pretty",
-            options: {
-              colorize: true,
-              translateTime: "SYS:HH:MM:ss",
-              ignore: "pid,hostname",
-            },
-          }
+              target: "pino-pretty",
+              options: {
+                colorize: true,
+                translateTime: "SYS:HH:MM:ss",
+                ignore: "pid,hostname",
+              },
+            }
           : undefined,
     },
     genReqId: (req) => {
@@ -73,11 +74,11 @@ export const buildApp = async (): Promise<FastifyInstance> => {
     "*.ngrok-free.app",
     "*.ngrok-free.dev",
     "*.ngrok.io",
-    "*.devtunnels.ms",      // VS Code dev tunnels (all regions)
+    "*.devtunnels.ms", // VS Code dev tunnels (all regions)
     "*.inc1.devtunnels.ms", // India Central region
     "*.asse.devtunnels.ms", // Asia SE region
-    "*.euw.devtunnels.ms",  // Europe West
-    "*.use.devtunnels.ms",  // US East
+    "*.euw.devtunnels.ms", // Europe West
+    "*.use.devtunnels.ms", // US East
   ];
 
   const allowedOrigins = (process.env.ALLOWED_ORIGINS?.split(",") || [])
@@ -246,15 +247,19 @@ export const buildApp = async (): Promise<FastifyInstance> => {
     prefix: `${API_PREFIX}/integrations`,
   });
   await app.register(calendarEntryRoutes, { prefix: `${API_PREFIX}/calendar` });
+  await app.register(creditRoutes, { prefix: "/api/v1/credits" });
 
   // ── Lifecycle / error handlers ─────────────────────────────────────────────
   app.setNotFoundHandler((req, reply) => {
     // Log details about 404 for debugging
-    app.log.warn({
-      method: req.method,
-      url: req.url,
-      headers: req.headers
-    }, "404 Not Found");
+    app.log.warn(
+      {
+        method: req.method,
+        url: req.url,
+        headers: req.headers,
+      },
+      "404 Not Found",
+    );
 
     reply.code(404).send({
       success: false,

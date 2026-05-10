@@ -5,6 +5,7 @@ import type {
   FeedbackBody,
 } from "../controllers/trend.controller";
 import { authenticateFirebase } from "../middleware/auth.middleware";
+import { requireCredits } from "../middleware/credits.middleware";
 
 export default async function trendRoutes(app: FastifyInstance) {
   app.get<{ Querystring: GetTrendsQuery }>(
@@ -96,45 +97,50 @@ export default async function trendRoutes(app: FastifyInstance) {
     trendController.submitFeedback,
   );
 
-  // GET /api/v1/trends/viral-ideas
+  // GET /api/v1/trends/viral-ideas (AI-powered)
   app.get<{ Querystring: { force?: string; browseNiche?: string } }>(
     "/viral-ideas",
     {
-      preHandler: [authenticateFirebase],
+      preHandler: [authenticateFirebase, requireCredits("viral_ideas")],
       schema: {
         querystring: {
           type: "object",
           properties: {
-            force:       { type: "string", enum: ["true", "false"] },
+            force: { type: "string", enum: ["true", "false"] },
             browseNiche: { type: "string", maxLength: 100 },
           },
         },
       },
     },
-    trendController.getViralIdeas
+    trendController.getViralIdeas,
   );
 
   // POST /api/v1/trends/interaction
   app.post<{
     Body: {
-      trendId?: string; trendTitle: string;
-      source?: string; niche?: string;
-      action: string;
-    }
+      trendId?: string;
+      trendTitle: string;
+      source?: string;
+      niche?: string;
+      action: "viewed" | "saved" | "created" | "dismissed";
+    };
   }>(
-    '/interaction',
+    "/interaction",
     {
       preHandler: [authenticateFirebase],
       schema: {
         body: {
-          type: 'object',
-          required: ['trendTitle', 'action'],
+          type: "object",
+          required: ["trendTitle", "action"],
           properties: {
-            trendId:    { type: 'string' },
-            trendTitle: { type: 'string', maxLength: 200 },
-            source:     { type: 'string' },
-            niche:      { type: 'string' },
-            action:     { type: 'string', enum: ['viewed', 'saved', 'created', 'dismissed'] },
+            trendId: { type: "string" },
+            trendTitle: { type: "string", maxLength: 200 },
+            source: { type: "string" },
+            niche: { type: "string" },
+            action: {
+              type: "string",
+              enum: ["viewed", "saved", "created", "dismissed"],
+            },
           },
         },
       },

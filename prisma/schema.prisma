@@ -386,6 +386,10 @@ model users {
   competitor_analyses     competitor_analyses[]
   calendar_entries        calendar_entries[]
 
+  credit_wallet           credit_wallets?
+  credit_transactions     credit_transactions[]
+  credit_topups           credit_topups[]
+
   @@index([archetype], map: "idx_users_archetype")
   @@index([firebase_uid], map: "idx_users_firebase_uid")
   @@index([deletion_confirmation_code], map: "idx_users_deletion_code", where: raw("(deletion_confirmation_code IS NOT NULL)"))
@@ -839,4 +843,79 @@ model creator_analytics {
 
   @@unique([user_id, platform], map: "creator_analytics_user_platform_key")
   @@index([user_id], map: "idx_creator_analytics_user")
+}
+
+
+// Credit System
+
+model credit_config {
+  id                  String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  action_key          String   @unique
+  display_name        String
+  credits_cost        Int      @default(10)
+  model_mini          String   @default("gpt-4o-mini")
+  model_heavy         String   @default("gpt-4o")
+  use_heavy           Boolean  @default(false)
+  max_per_day         Int?
+  max_per_month       Int?
+  free_tier_allowed   Boolean  @default(false)
+  pro_tier_allowed    Boolean  @default(true)
+  max_tier_allowed    Boolean  @default(true)
+  active              Boolean  @default(true)
+  notes               String?
+  updated_at          DateTime @default(now()) @db.Timestamptz(6)
+}
+
+model credit_wallets {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id          String   @unique @db.Uuid
+  balance          Int      @default(0)
+  total_granted    Int      @default(0)
+  total_spent      Int      @default(0)
+  plan_credits     Int      @default(50)
+  rollover_credits Int      @default(0)
+  topup_credits    Int      @default(0)
+  last_reset_at    DateTime @default(now()) @db.Timestamptz(6)
+  next_reset_at    DateTime @default(dbgenerated("NOW() + INTERVAL '30 days'")) @db.Timestamptz(6)
+  created_at       DateTime @default(now()) @db.Timestamptz(6)
+  updated_at       DateTime @default(now()) @db.Timestamptz(6)
+  users            users    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
+  @@index([next_reset_at])
+}
+
+model credit_transactions {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id       String   @db.Uuid
+  type          String   // 'debit' | 'grant' | 'topup' | 'rollover' | 'refund'
+  amount        Int      // positive = in, negative = out
+  balance_after Int
+  action_key    String?
+  model_used    String?
+  tokens_input  Int?
+  tokens_output Int?
+  cost_usd      Decimal? @db.Decimal(10, 6)
+  description   String?
+  metadata      Json     @default("{}")
+  created_at    DateTime @default(now()) @db.Timestamptz(6)
+  users         users    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
+  @@index([user_id, created_at(sort: Desc)])
+  @@index([action_key])
+}
+
+model credit_topups {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id        String   @db.Uuid
+  credits        Int
+  amount_inr     Int      // in paise
+  payment_id     String?
+  payment_status String   @default("pending")
+  pack_id        String?
+  created_at     DateTime @default(now()) @db.Timestamptz(6)
+  users          users    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
 }

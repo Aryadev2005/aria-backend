@@ -4,6 +4,7 @@ import { prisma } from "../config/database";
 import { success, errors, paginated } from "../utils/response";
 import { logger } from "../utils/logger";
 import { User } from "../types";
+import { debitCredits } from "../services/credits.service";
 
 export interface GenerateContentBody {
   trendTitle: string;
@@ -23,6 +24,7 @@ export const generateContent = async (
 ) => {
   const { trendTitle, platform, niche, songTitle, tone, language } = req.body;
   const user = req.user as User;
+  const modelToUse = req.creditCheck?.modelToUse ?? "gpt-4o-mini";
 
   try {
     const content = await groqService.generateContent({
@@ -34,7 +36,23 @@ export const generateContent = async (
       tone,
       language,
       archetype: user.archetype,
+      model: modelToUse,
     });
+
+    // Debit AFTER successful response
+    await debitCredits(
+      user.id,
+      "content_generation",
+      modelToUse,
+      2000, // approx input tokens
+      1000, // approx output tokens
+      0.000078, // approx cost USD
+    ).catch((err) =>
+      logger.warn(
+        { err },
+        "Debit failed — non-fatal, content already returned",
+      ),
+    );
 
     // Save to history async — don't block response
     prisma.content_history
@@ -56,7 +74,10 @@ export const generateContent = async (
       })
       .catch((err) => logger.error({ err }, "Save content history failed"));
 
-    return success(reply, content);
+    return success(reply, {
+      ...content,
+      creditsUsed: req.creditCheck?.cost ?? 0,
+    });
   } catch (err) {
     logger.error({ err }, "Content generation failed");
     return errors.serviceDown(reply, "AI content generator");
@@ -78,6 +99,7 @@ export const generateHooks = async (
 ) => {
   const { topic, platform, niche } = req.body;
   const user = req.user as User;
+  const modelToUse = req.creditCheck?.modelToUse ?? "gpt-4o-mini";
 
   try {
     const result = await groqService.generateHooks({
@@ -86,8 +108,25 @@ export const generateHooks = async (
       niche: niche || user.niches?.[0] || "fashion",
       followerRange: user.follower_range || "10K–50K",
       archetype: user.archetype,
+      model: modelToUse,
     });
-    return success(reply, result);
+
+    // Debit AFTER successful response
+    await debitCredits(
+      user.id,
+      "hook_rewrite",
+      modelToUse,
+      800, // approx input tokens
+      400, // approx output tokens
+      0.000031, // approx cost USD
+    ).catch((err) =>
+      logger.warn({ err }, "Debit failed — non-fatal, hooks already returned"),
+    );
+
+    return success(reply, {
+      ...result,
+      creditsUsed: req.creditCheck?.cost ?? 0,
+    });
   } catch (err) {
     logger.error({ err }, "Hook generation failed");
     return errors.serviceDown(reply, "AI hook generator");
@@ -109,6 +148,7 @@ export const rewriteHook = async (
 ) => {
   const { hook, platform, niche } = req.body;
   const user = req.user as User;
+  const modelToUse = req.creditCheck?.modelToUse ?? "gpt-4o-mini";
 
   try {
     const result = await groqService.rewriteHook({
@@ -116,8 +156,25 @@ export const rewriteHook = async (
       platform,
       niche: niche || user.niches?.[0] || "fashion",
       archetype: user.archetype,
+      model: modelToUse,
     });
-    return success(reply, result);
+
+    // Debit AFTER successful response
+    await debitCredits(
+      user.id,
+      "hook_rewrite",
+      modelToUse,
+      600, // approx input tokens
+      300, // approx output tokens
+      0.000024, // approx cost USD
+    ).catch((err) =>
+      logger.warn({ err }, "Debit failed — non-fatal, hook already returned"),
+    );
+
+    return success(reply, {
+      ...result,
+      creditsUsed: req.creditCheck?.cost ?? 0,
+    });
   } catch (err) {
     logger.error({ err }, "Hook rewrite failed");
     return errors.serviceDown(reply, "AI rewriter");
@@ -138,14 +195,36 @@ export const repurposeContent = async (
   reply: FastifyReply,
 ) => {
   const { content, sourcePlatform, targetPlatforms } = req.body;
+  const user = req.user as User;
+  const modelToUse = req.creditCheck?.modelToUse ?? "gpt-4o-mini";
 
   try {
     const result = await groqService.repurposeContent({
       content,
       sourcePlatform,
       targetPlatforms,
+      model: modelToUse,
     });
-    return success(reply, result);
+
+    // Debit AFTER successful response
+    await debitCredits(
+      user.id,
+      "content_generation",
+      modelToUse,
+      2500, // approx input tokens (original content)
+      1500, // approx output tokens (repurposed content)
+      0.000093, // approx cost USD
+    ).catch((err) =>
+      logger.warn(
+        { err },
+        "Debit failed — non-fatal, content already returned",
+      ),
+    );
+
+    return success(reply, {
+      ...result,
+      creditsUsed: req.creditCheck?.cost ?? 0,
+    });
   } catch (err) {
     logger.error({ err }, "Repurpose failed");
     return errors.serviceDown(reply, "AI repurposer");
@@ -167,6 +246,7 @@ export const analyseContent = async (
 ) => {
   const { caption, platform, niche } = req.body;
   const user = req.user as User;
+  const modelToUse = req.creditCheck?.modelToUse ?? "gpt-4o-mini";
 
   try {
     const result = await groqService.analyseContent({
@@ -174,8 +254,28 @@ export const analyseContent = async (
       platform,
       niche: niche || user.niches?.[0] || "fashion",
       archetype: user.archetype,
+      model: modelToUse,
     });
-    return success(reply, result);
+
+    // Debit AFTER successful response
+    await debitCredits(
+      user.id,
+      "caption_analysis",
+      modelToUse,
+      1200, // approx input tokens (caption)
+      800, // approx output tokens (analysis)
+      0.000055, // approx cost USD
+    ).catch((err) =>
+      logger.warn(
+        { err },
+        "Debit failed — non-fatal, analysis already returned",
+      ),
+    );
+
+    return success(reply, {
+      ...result,
+      creditsUsed: req.creditCheck?.cost ?? 0,
+    });
   } catch (err) {
     logger.error({ err }, "Analysis failed");
     return errors.serviceDown(reply, "AI analyser");

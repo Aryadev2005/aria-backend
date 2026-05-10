@@ -5,6 +5,7 @@ import { prisma } from "../config/database";
 import { success, errors } from "../utils/response";
 import { logger } from "../utils/logger";
 import { User } from "../types";
+import { debitCredits } from "../services/credits.service";
 
 export interface GetTrendsQuery {
   niche?: string;
@@ -334,6 +335,7 @@ export const getViralIdeas = async (
   const user = req.user as User;
   const force = req.query.force === "true";
   const browseNiche = req.query.browseNiche?.trim().toLowerCase();
+  const modelToUse = req.creditCheck?.modelToUse ?? "gpt-4o-mini";
 
   const dbUser = await (prisma.users as any).findUnique({
     where: { id: user.id },
@@ -387,7 +389,7 @@ export const getViralIdeas = async (
       if (cached) {
         logger.info(
           { activeNiche, browseNiche, userId: user.id },
-          "Viral ideas cache hit"
+          "Viral ideas cache hit",
         );
         return success(reply, {
           ideas: cached,
@@ -409,11 +411,14 @@ export const getViralIdeas = async (
         userContext,
       }),
       new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("TIMEOUT")), 25000)
+        setTimeout(() => reject(new Error("TIMEOUT")), 25000),
       ),
     ]).catch((err) => {
       if (err.message === "TIMEOUT") {
-        logger.warn({ userId: user.id }, "getViralIdeas timed out — returning empty");
+        logger.warn(
+          { userId: user.id },
+          "getViralIdeas timed out — returning empty",
+        );
         return [];
       }
       throw err;
@@ -423,12 +428,25 @@ export const getViralIdeas = async (
     // Permanent niche cache: 2 hours
     await cache.set(cacheKey, ideas, browseNiche ? 1800 : 7200);
 
+    // Debit AFTER successful response
+    await debitCredits(
+      user.id,
+      "viral_ideas",
+      modelToUse,
+      1500, // approx input tokens
+      800, // approx output tokens
+      0.000055, // approx cost USD
+    ).catch((err) =>
+      logger.warn({ err }, "Debit failed — non-fatal, ideas already returned"),
+    );
+
     return success(reply, {
       ideas,
       cached: false,
       niche: activeNiche,
       isBrowsing: !!browseNiche,
       refreshedAt: new Date().toISOString(),
+      creditsUsed: req.creditCheck?.cost ?? 0,
     });
   } catch (err) {
     logger.error({ err }, "Viral ideas failed");
@@ -440,11 +458,11 @@ export const getViralIdeas = async (
 export const recordTrendInteraction = async (
   req: FastifyRequest<{
     Body: {
-      trendId?:    string;
-      trendTitle:  string;
-      source?:     string;
-      niche?:      string;
-      action:      'viewed' | 'saved' | 'created' | 'dismissed';
+      trendId?: string;
+      trendTitle: string;
+      source?: string;
+      niche?: string;
+      action: "viewed" | "saved" | "created" | "dismissed";
     };
   }>,
   reply: FastifyReply,
@@ -455,18 +473,18 @@ export const recordTrendInteraction = async (
   try {
     await (prisma as any).trend_interactions.create({
       data: {
-        user_id:     user.id,
-        trend_id:    trendId || null,
+        user_id: user.id,
+        trend_id: trendId || null,
         trend_title: trendTitle.substring(0, 200),
-        source:      source || null,
-        niche:       niche  || null,
+        source: source || null,
+        niche: niche || null,
         action,
       },
     });
     return success(reply, { recorded: true });
   } catch (err) {
     // Non-fatal — never block UI for analytics failure
-    logger.warn({ err }, 'recordTrendInteraction failed');
+    logger.warn({ err }, "recordTrendInteraction failed");
     return success(reply, { recorded: false });
   }
 };

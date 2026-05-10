@@ -9,6 +9,7 @@ import {
   authenticateFirebase,
   requirePro,
 } from "../middleware/auth.middleware";
+import { requireCredits } from "../middleware/credits.middleware";
 
 export default async function songRoutes(app: FastifyInstance) {
   // ── GET /songs ─────────────────────────────────────────────────────────────
@@ -80,7 +81,10 @@ export default async function songRoutes(app: FastifyInstance) {
   app.get(
     "/by-mood",
     {
-      preHandler: [authenticateFirebase],
+      preHandler: [
+        authenticateFirebase,
+        requireCredits("song_recommendations"),
+      ],
       schema: {
         querystring: {
           type: "object",

@@ -11,6 +11,7 @@ import {
   authenticateFirebase,
   requirePro,
 } from "../middleware/auth.middleware";
+import { requireCredits } from "../middleware/credits.middleware";
 
 const aiRateLimitConfig = {
   max: parseInt(process.env.RATE_LIMIT_AI_MAX || "10", 10),
@@ -27,7 +28,7 @@ export default async function contentRoutes(app: FastifyInstance) {
   app.post<{ Body: GenerateContentBody }>(
     "/generate",
     {
-      preHandler: [authenticateFirebase],
+      preHandler: [authenticateFirebase, requireCredits("content_generation")],
       config: { rateLimit: aiRateLimitConfig },
       schema: {
         body: {
@@ -61,7 +62,7 @@ export default async function contentRoutes(app: FastifyInstance) {
   app.post<{ Body: GenerateHooksBody }>(
     "/hooks",
     {
-      preHandler: [authenticateFirebase],
+      preHandler: [authenticateFirebase, requireCredits("hook_rewrite")],
       config: { rateLimit: aiRateLimitConfig },
       schema: {
         body: {
@@ -81,7 +82,11 @@ export default async function contentRoutes(app: FastifyInstance) {
   app.post<{ Body: RewriteHookBody }>(
     "/rewrite-hook",
     {
-      preHandler: [authenticateFirebase, requirePro],
+      preHandler: [
+        authenticateFirebase,
+        requirePro,
+        requireCredits("hook_rewrite"),
+      ],
       config: { rateLimit: aiRateLimitConfig },
       schema: {
         body: {
@@ -101,7 +106,11 @@ export default async function contentRoutes(app: FastifyInstance) {
   app.post<{ Body: RepurposeBody }>(
     "/repurpose",
     {
-      preHandler: [authenticateFirebase, requirePro],
+      preHandler: [
+        authenticateFirebase,
+        requirePro,
+        requireCredits("content_generation"),
+      ],
       config: { rateLimit: aiRateLimitConfig },
       schema: {
         body: {
@@ -125,7 +134,7 @@ export default async function contentRoutes(app: FastifyInstance) {
   app.post<{ Body: AnalyseBody }>(
     "/analyse",
     {
-      preHandler: [authenticateFirebase],
+      preHandler: [authenticateFirebase, requireCredits("caption_analysis")],
       config: { rateLimit: aiRateLimitConfig },
       schema: {
         body: {

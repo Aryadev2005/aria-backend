@@ -2,6 +2,7 @@ import { FastifyInstance } from "fastify";
 import * as ctrl from "../controllers/agent.controller";
 import type { SendMessageBody } from "../controllers/agent.controller";
 import { authenticateFirebase } from "../middleware/auth.middleware";
+import { requireCredits } from "../middleware/credits.middleware";
 
 const aiRateLimit = {
   max: 30,
@@ -16,11 +17,11 @@ const aiRateLimit = {
 export default async function agentRoutes(app: FastifyInstance) {
   // ── Messaging ──────────────────────────────────────────────────────────────
 
-  // POST /api/v1/agent/message  — full response (non-streaming)
+  // POST /api/v1/agent/message  — full response (non-streaming) (AI-powered)
   app.post<{ Body: SendMessageBody }>(
     "/message",
     {
-      preHandler: [authenticateFirebase],
+      preHandler: [authenticateFirebase, requireCredits("aria_chat")],
       config: { rateLimit: aiRateLimit },
       schema: {
         body: {
@@ -36,11 +37,11 @@ export default async function agentRoutes(app: FastifyInstance) {
     ctrl.sendMessage,
   );
 
-  // POST /api/v1/agent/stream  — SSE streaming
+  // POST /api/v1/agent/stream  — SSE streaming (AI-powered)
   app.post<{ Body: SendMessageBody }>(
     "/stream",
     {
-      preHandler: [authenticateFirebase],
+      preHandler: [authenticateFirebase, requireCredits("aria_chat")],
       config: { rateLimit: aiRateLimit },
     },
     ctrl.streamMessage,
@@ -49,7 +50,11 @@ export default async function agentRoutes(app: FastifyInstance) {
   // ── Sessions ───────────────────────────────────────────────────────────────
 
   // GET /api/v1/agent/sessions  — list all sessions for user
-  app.get("/sessions", { preHandler: [authenticateFirebase] }, ctrl.getSessions);
+  app.get(
+    "/sessions",
+    { preHandler: [authenticateFirebase] },
+    ctrl.getSessions,
+  );
 
   // GET /api/v1/agent/sessions/:sessionId/messages  — load a past session
   app.get<{ Params: { sessionId: string } }>(
@@ -67,7 +72,9 @@ export default async function agentRoutes(app: FastifyInstance) {
         body: {
           type: "object",
           required: ["title"],
-          properties: { title: { type: "string", minLength: 1, maxLength: 80 } },
+          properties: {
+            title: { type: "string", minLength: 1, maxLength: 80 },
+          },
         },
       },
     },
@@ -84,7 +91,11 @@ export default async function agentRoutes(app: FastifyInstance) {
   // ── Memory ─────────────────────────────────────────────────────────────────
 
   // GET /api/v1/agent/memory
-  app.get("/memory", { preHandler: [authenticateFirebase] }, ctrl.getMemoryHandler);
+  app.get(
+    "/memory",
+    { preHandler: [authenticateFirebase] },
+    ctrl.getMemoryHandler,
+  );
 
   // DELETE /api/v1/agent/memory/:key
   app.delete<{ Params: { key: string } }>(

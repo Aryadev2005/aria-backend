@@ -5,6 +5,7 @@ import type {
   GreetQuery,
 } from "../controllers/aria_agent.controller";
 import { authenticateFirebase } from "../middleware/auth.middleware";
+import { requireCredits } from "../middleware/credits.middleware";
 import { recordSuggestionFeedback } from "../services/suggestion.service";
 import { success, errors } from "../utils/response";
 import { logger } from "../utils/logger";
@@ -21,11 +22,11 @@ const aiRateLimit = {
 };
 
 export default async function brainRoutes(app: FastifyInstance) {
-  // POST /api/v1/brain/chat
+  // POST /api/v1/brain/chat (AI-powered)
   app.post<{ Body: ChatBody }>(
     "/chat",
     {
-      preHandler: [authenticateFirebase],
+      preHandler: [authenticateFirebase, requireCredits("aria_chat")],
       config: { rateLimit: aiRateLimit },
       schema: {
         body: {
@@ -67,11 +68,11 @@ export default async function brainRoutes(app: FastifyInstance) {
     chat,
   );
 
-  // POST /api/v1/brain/chat/stream
+  // POST /api/v1/brain/chat/stream (AI-powered)
   app.post<{ Body: ChatBody }>(
     "/chat/stream",
     {
-      preHandler: [authenticateFirebase],
+      preHandler: [authenticateFirebase, requireCredits("aria_chat")],
       config: { rateLimit: { max: 30, timeWindow: "1 minute" } },
     },
     chatStream,
@@ -107,7 +108,10 @@ export default async function brainRoutes(app: FastifyInstance) {
           required: ["suggestionId", "outcome"],
           properties: {
             suggestionId: { type: "string" },
-            outcome: { type: "string", enum: ["followed", "ignored", "partially"] },
+            outcome: {
+              type: "string",
+              enum: ["followed", "ignored", "partially"],
+            },
             notes: { type: "string", maxLength: 500 },
           },
         },
@@ -121,7 +125,10 @@ export default async function brainRoutes(app: FastifyInstance) {
         await recordSuggestionFeedback(suggestionId, user.id, outcome, notes);
         return success(reply, { recorded: true });
       } catch (err: any) {
-        logger.error({ err: err.message, userId: user.id }, "Record suggestion feedback failed");
+        logger.error(
+          { err: err.message, userId: user.id },
+          "Record suggestion feedback failed",
+        );
         return errors.internal(reply, "Failed to record feedback");
       }
     },

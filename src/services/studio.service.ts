@@ -2,7 +2,7 @@ import OpenAI from "openai";
 import { prisma } from "../config/database";
 import { logger } from "../utils/logger";
 import { getSongsForBGM } from "./songs/song.rag.service";
-import { getVoicePortrait } from "./voice.service";
+import { getVoicePortrait, VoicePortrait } from "./voice.service";
 
 // ── Fetch studio learnings for a user from aria_memory ────────────────────────
 const getStudioLearnings = async (userId: string): Promise<string> => {
@@ -10,12 +10,12 @@ const getStudioLearnings = async (userId: string): Promise<string> => {
     const rows = await (prisma as any).aria_memory.findMany({
       where: {
         user_id: userId,
-        category: { in: ['style', 'voice'] },
+        category: { in: ["style", "voice"] },
       },
       select: { category: true, key: true, value: true },
     });
 
-    if (!rows.length) return '';
+    if (!rows.length) return "";
 
     const lines: string[] = [];
     for (const row of rows) {
@@ -27,9 +27,9 @@ const getStudioLearnings = async (userId: string): Promise<string> => {
       }
     }
 
-    return `\nCREATOR VOICE PREFERENCES LEARNED FROM PAST SCRIPTS:\n${lines.join('\n')}\nApply these preferences silently — do not mention them in output.\n`;
+    return `\nCREATOR VOICE PREFERENCES LEARNED FROM PAST SCRIPTS:\n${lines.join("\n")}\nApply these preferences silently — do not mention them in output.\n`;
   } catch (err) {
-    return '';
+    return "";
   }
 };
 
@@ -74,15 +74,17 @@ export const generateScriptStructure = async ({
   // const isShortForm = !isYouTube || format?.includes('Short');
 
   // Load voice portrait and learned preferences in parallel with proper error handling
-  const [voicePortrait, learnedPreferences] = await Promise.allSettled([
+  const [vpResult, lpResult] = await Promise.allSettled([
     getVoicePortrait(userId),
     getStudioLearnings(userId),
-  ]).then(([vp, lp]) => [
-    vp.status === 'fulfilled' ? vp.value : null,
-    lp.status === 'fulfilled' ? lp.value : '',
   ]);
+  const voicePortrait: VoicePortrait | null =
+    vpResult.status === "fulfilled" ? vpResult.value : null;
+  const learnedPreferences: string =
+    lpResult.status === "fulfilled" ? (lpResult.value as string) : "";
 
-  const voiceRulesCtx = voicePortrait ? `
+  const voiceRulesCtx = voicePortrait
+    ? `
 
 CREATOR VOICE RULES (mandatory — override generic advice):
 - Write in this tone: ${voicePortrait.toneSignature}
@@ -97,7 +99,8 @@ The script MUST sound like this specific creator wrote it.
 If their tone is casual-humorous, make the hook funny.
 If they use Hinglish, mix Hindi and English naturally.
 If they are a faceless creator, every visual direction should not require showing a face.
-Write it as if you know this person and their audience personally.` : "";
+Write it as if you know this person and their audience personally.`
+    : "";
 
   const prompt = `You are ARIA — India's top content strategist.
 
@@ -251,14 +254,14 @@ Respond ONLY with valid JSON:
 };
 
 export interface BGMParams {
-  idea:      string;
-  mood?:     string;
-  niche:     string;
-  platform:  string;
+  idea: string;
+  mood?: string;
+  niche: string;
+  platform: string;
   archetype: string;
   duration?: string;
   language?: string;
-  userId:    string;
+  userId: string;
 }
 
 export const matchBGM = async ({
@@ -286,20 +289,27 @@ export const matchBGM = async ({
         liveSongs
           .slice(0, 10)
           .map((s) => {
-            const position = s.chart_position > 0 ? `#${s.chart_position}` : "N/A";
-            const change   = s.chart_change
+            const position =
+              s.chart_position > 0 ? `#${s.chart_position}` : "N/A";
+            const change = s.chart_change
               ? ` (Δ ${s.chart_change >= 0 ? "+" : ""}${s.chart_change})`
               : "";
-            const streams  = s.streams_today
+            const streams = s.streams_today
               ? `, ${Number(s.streams_today).toLocaleString("en-IN")} streams`
               : "";
-            const signal   = s.signal === "postNow" ? " ⚡ POST NOW" : s.signal === "tooLate" ? " 💀 TOO LATE" : "";
+            const signal =
+              s.signal === "postNow"
+                ? " ⚡ POST NOW"
+                : s.signal === "tooLate"
+                  ? " 💀 TOO LATE"
+                  : "";
             return `• "${s.title}" by ${s.artist} — position ${position}${change}${streams}${signal}`;
           })
           .join("\n")
       : "";
 
-  const energyProfileCtx = voicePortrait ? `
+  const energyProfileCtx = voicePortrait
+    ? `
 
 CREATOR ENERGY PROFILE:
 - Energy level: ${voicePortrait.energyLevel}
@@ -309,7 +319,8 @@ CREATOR ENERGY PROFILE:
 
 Match BGM to this energy profile specifically.
 A calm-educational creator needs different audio than a high-energy entertainer
-even when covering the same trend. Prioritise mood-match over trend-match for this creator.` : "";
+even when covering the same trend. Prioritise mood-match over trend-match for this creator.`
+    : "";
 
   const prompt = `You are ARIA — India's music curator for creators.
 

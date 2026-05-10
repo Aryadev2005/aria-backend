@@ -3,6 +3,7 @@ import * as ctrl from "../controllers/profile.controller";
 import * as identityCtrl from "../controllers/aria_identity.controller";
 import type { UpdatePlatformBody } from "../controllers/profile.controller";
 import { authenticateFirebase } from "../middleware/auth.middleware";
+import { requireCredits } from "../middleware/credits.middleware";
 
 export default async function profileRoutes(app: FastifyInstance) {
   const auth = { preHandler: [authenticateFirebase] };
@@ -83,6 +84,10 @@ export default async function profileRoutes(app: FastifyInstance) {
   // POST /api/v1/profile/creator-analytics/refresh
   app.post("/creator-analytics/refresh", auth, ctrl.refreshCreatorAnalytics);
 
-  // POST /api/v1/profile/voice-portrait/rebuild (Manual trigger for testing)
-  app.post("/voice-portrait/rebuild", auth, ctrl.rebuildVoicePortrait);
+  // POST /api/v1/profile/voice-portrait/rebuild (AI-powered)
+  app.post(
+    "/voice-portrait/rebuild",
+    { preHandler: [authenticateFirebase, requireCredits("voice_portrait")] },
+    ctrl.rebuildVoicePortrait,
+  );
 }

@@ -8,6 +8,7 @@ import {
 } from "../services/aria_memory.service";
 import { User } from "../types";
 import { ChatOpenAI } from "@langchain/openai";
+import { debitCredits } from "../services/credits.service";
 
 // Dynamic import for agent logic to avoid issues if they are not yet TS or have circular deps
 // But since we are switching to ES Modules/TS, we can use import.
@@ -62,6 +63,8 @@ export const chat = async (
       },
     });
 
+    const modelToUse = req.creditCheck?.modelToUse ?? "gpt-4o-mini";
+
     const result = await invokeARIAAgent({
       message,
       sessionId,
@@ -71,7 +74,25 @@ export const chat = async (
       sessionContext,
     });
 
-    return success(reply, result);
+    // Debit AFTER successful response
+    await debitCredits(
+      user.id,
+      "aria_chat",
+      modelToUse,
+      2000, // approx input tokens (with context)
+      800, // approx output tokens
+      0.000078, // approx cost USD
+    ).catch((err) =>
+      logger.warn(
+        { err },
+        "Debit failed — non-fatal, response already returned",
+      ),
+    );
+
+    return success(reply, {
+      ...result,
+      creditsUsed: req.creditCheck?.cost ?? 0,
+    });
   } catch (err) {
     logger.error({ err, userId: user.id }, "Agent chat controller failed");
     return errors.serviceDown(reply, "ARIA Brain");
@@ -116,7 +137,7 @@ export const greet = async (
     const firstName = (fullUser?.name || "yaar").split(" ")[0];
     const hasContext = sessionContext.idea || sessionContext.script;
 
-    const isFreshAnalysis = entryScreen === 'fresh_analysis';
+    const isFreshAnalysis = entryScreen === "fresh_analysis";
 
     const greetMessage = isFreshAnalysis
       ? [
@@ -125,14 +146,22 @@ export const greet = async (
           `Tell them their analysis is ready and ARIA is about to walk them through it.`,
           `Example tone: "Your profile analysis just came in, ${firstName}! Let me show you what ARIA found 🔥"`,
           `Do NOT list any data yet — just the opener.`,
-        ].join(' ')
+        ].join(" ")
       : [
           `Generate a SHORT warm greeting (2-3 sentences max) for ${firstName}.`,
-          entryScreen !== "direct" ? `They just came from the ${entryScreen} screen.` : "",
-          hasContext ? `They were working on: "${sessionContext.idea || sessionContext.trendTitle}"` : "",
-          pendingSuggestions.length > 0 ? `You have ${pendingSuggestions.length} pending follow-up to close.` : "",
+          entryScreen !== "direct"
+            ? `They just came from the ${entryScreen} screen.`
+            : "",
+          hasContext
+            ? `They were working on: "${sessionContext.idea || sessionContext.trendTitle}"`
+            : "",
+          pendingSuggestions.length > 0
+            ? `You have ${pendingSuggestions.length} pending follow-up to close.`
+            : "",
           `End with one specific question or offer to help. Use Hinglish naturally. DO NOT say "How can I help you today?".`,
-        ].filter(Boolean).join(" ");
+        ]
+          .filter(Boolean)
+          .join(" ");
 
     const llm = new ChatOpenAI({
       model: "gpt-5.4-mini",
@@ -197,6 +226,8 @@ export const chatStream = async (
     "X-Accel-Buffering": "no", // disable nginx buffering
   });
 
+  const modelToUse = req.creditCheck?.modelToUse ?? "gpt-4o-mini";
+
   try {
     for await (const event of streamARIAAgent({
       message,
@@ -206,7 +237,30 @@ export const chatStream = async (
     })) {
       reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
 
-      if (event.type === "done" || event.type === "error") {
+      if (event.type === "done") {
+        // Debit AFTER successful stream completion
+        await debitCredits(
+          user.id,
+          "aria_chat",
+          modelToUse,
+          2000, // approx input tokens (with context)
+          1200, // approx output tokens (streaming can be longer)
+          0.000109, // approx cost USD
+        ).catch((err) =>
+          logger.warn(
+            { err },
+            "Debit failed — non-fatal, stream already completed",
+          ),
+        );
+
+        reply.raw.write(
+          `data: ${JSON.stringify({ type: "creditsUsed", credits: req.creditCheck?.cost ?? 0 })}\n\n`,
+        );
+        reply.raw.end();
+        return;
+      }
+
+      if (event.type === "error") {
         reply.raw.end();
         return;
       }

@@ -6,46 +6,90 @@ import {
   authenticateFirebase,
   requirePro,
 } from "../middleware/auth.middleware";
+import { requireCredits } from "../middleware/credits.middleware";
 
-const auth    = { preHandler: [authenticateFirebase] };
+const auth = { preHandler: [authenticateFirebase] };
 const authPro = { preHandler: [authenticateFirebase, requirePro] };
 
-export default async function analyticsRoutes(app: FastifyInstance) {
+// Credit-protected auth variants
+const authArchetype = {
+  preHandler: [authenticateFirebase, requireCredits("archetype_detection")],
+};
+const authRoadmap = {
+  preHandler: [authenticateFirebase, requireCredits("growth_roadmap")],
+};
+const authWeeklyReport = {
+  preHandler: [
+    authenticateFirebase,
+    requirePro,
+    requireCredits("weekly_report"),
+  ],
+};
+const authCompetitorGap = {
+  preHandler: [
+    authenticateFirebase,
+    requirePro,
+    requireCredits("competitor_gap"),
+  ],
+};
 
+export default async function analyticsRoutes(app: FastifyInstance) {
   // ── Existing analytics routes ───────────────────────────────────────────
-  app.get('/dashboard',      auth,    analyticsController.getDashboard);
-  app.get('/growth',         authPro, analyticsController.getGrowthPrediction);
-  app.get('/best-times',     auth,    analyticsController.getBestPostingTimes);
-  app.get('/competitors',    authPro, analyticsController.getCompetitorInsights);
-  app.get('/weekly-report',  authPro, analyticsController.getWeeklyReport);
-  app.get('/archetype',      auth,    analyticsController.getArchetype);
+  // Dashboard archetype detection only charges on first detection (cached after)
+  // Note: archetype uses auth (no credits) - controller handles credit logic internally
+  app.get("/dashboard", auth, analyticsController.getDashboard);
+  app.get("/growth", authPro, analyticsController.getGrowthPrediction);
+  app.get("/best-times", auth, analyticsController.getBestPostingTimes);
+  app.get(
+    "/competitors",
+    authCompetitorGap,
+    analyticsController.getCompetitorInsights,
+  );
+  app.get(
+    "/weekly-report",
+    authWeeklyReport,
+    analyticsController.getWeeklyReport,
+  );
+  app.get("/archetype", auth, analyticsController.getArchetype);
 
   // ── Roadmap ─────────────────────────────────────────────────────────────
 
   // GET /api/v1/analytics/roadmap          → serve (cached or fresh)
   // GET /api/v1/analytics/roadmap?force=true → bypass cache + regenerate
-  app.get('/roadmap', auth, roadmapController.getPersonalisedRoadmap);
+  app.get("/roadmap", authRoadmap, roadmapController.getPersonalisedRoadmap);
 
   // GET /api/v1/analytics/roadmap/refresh  → explicit refresh endpoint
-  app.get('/roadmap/refresh', auth, roadmapController.refreshRoadmap);
+  app.get("/roadmap/refresh", authRoadmap, roadmapController.refreshRoadmap);
 
   // GET /api/v1/analytics/roadmap/action-states?version=xxx
-  app.get('/roadmap/action-states', auth, roadmapController.getActionStates);
+  app.get("/roadmap/action-states", auth, roadmapController.getActionStates);
 
   // POST /api/v1/analytics/roadmap/action/complete
-  app.post<{ Body: { roadmapVersion: string; weekNumber: number; actionIndex: number; actionText: string } }>(
-    '/roadmap/action/complete',
+  app.post<{
+    Body: {
+      roadmapVersion: string;
+      weekNumber: number;
+      actionIndex: number;
+      actionText: string;
+    };
+  }>(
+    "/roadmap/action/complete",
     {
       ...auth,
       schema: {
         body: {
-          type: 'object',
-          required: ['roadmapVersion', 'weekNumber', 'actionIndex', 'actionText'],
+          type: "object",
+          required: [
+            "roadmapVersion",
+            "weekNumber",
+            "actionIndex",
+            "actionText",
+          ],
           properties: {
-            roadmapVersion: { type: 'string', minLength: 1 },
-            weekNumber:     { type: 'integer', minimum: 1, maximum: 4 },
-            actionIndex:    { type: 'integer', minimum: 0 },
-            actionText:     { type: 'string', minLength: 1, maxLength: 300 },
+            roadmapVersion: { type: "string", minLength: 1 },
+            weekNumber: { type: "integer", minimum: 1, maximum: 4 },
+            actionIndex: { type: "integer", minimum: 0 },
+            actionText: { type: "string", minLength: 1, maxLength: 300 },
           },
         },
       },
@@ -54,19 +98,31 @@ export default async function analyticsRoutes(app: FastifyInstance) {
   );
 
   // POST /api/v1/analytics/roadmap/action/dismiss
-  app.post<{ Body: { roadmapVersion: string; weekNumber: number; actionIndex: number; actionText: string } }>(
-    '/roadmap/action/dismiss',
+  app.post<{
+    Body: {
+      roadmapVersion: string;
+      weekNumber: number;
+      actionIndex: number;
+      actionText: string;
+    };
+  }>(
+    "/roadmap/action/dismiss",
     {
       ...auth,
       schema: {
         body: {
-          type: 'object',
-          required: ['roadmapVersion', 'weekNumber', 'actionIndex', 'actionText'],
+          type: "object",
+          required: [
+            "roadmapVersion",
+            "weekNumber",
+            "actionIndex",
+            "actionText",
+          ],
           properties: {
-            roadmapVersion: { type: 'string', minLength: 1 },
-            weekNumber:     { type: 'integer', minimum: 1, maximum: 4 },
-            actionIndex:    { type: 'integer', minimum: 0 },
-            actionText:     { type: 'string', minLength: 1, maxLength: 300 },
+            roadmapVersion: { type: "string", minLength: 1 },
+            weekNumber: { type: "integer", minimum: 1, maximum: 4 },
+            actionIndex: { type: "integer", minimum: 0 },
+            actionText: { type: "string", minLength: 1, maxLength: 300 },
           },
         },
       },
@@ -76,16 +132,16 @@ export default async function analyticsRoutes(app: FastifyInstance) {
 
   // ── Scrape ──────────────────────────────────────────────────────────────
   app.post<{ Body: TriggerScrapeBody }>(
-    '/scrape',
+    "/scrape",
     {
       ...auth,
       schema: {
         body: {
-          type: 'object',
-          required: ['handle', 'platform'],
+          type: "object",
+          required: ["handle", "platform"],
           properties: {
-            handle:   { type: 'string', minLength: 1 },
-            platform: { type: 'string', enum: ['instagram', 'youtube'] },
+            handle: { type: "string", minLength: 1 },
+            platform: { type: "string", enum: ["instagram", "youtube"] },
           },
         },
       },

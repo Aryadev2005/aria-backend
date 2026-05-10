@@ -5,6 +5,7 @@ import { success, errors, created, noContent } from "../utils/response";
 import { logger } from "../utils/logger";
 import { prisma } from "../config/database";
 import { User } from "../types";
+import { debitCredits } from "../services/credits.service";
 import {
   listSessions,
   getSession,
@@ -24,7 +25,11 @@ const extractText = (content: any): string => {
       .filter((b: any) => b?.type === "text")
       .map((b: any) => b.text ?? "")
       .join("");
-  if (content && typeof content === "object" && typeof content.text === "string")
+  if (
+    content &&
+    typeof content === "object" &&
+    typeof content.text === "string"
+  )
     return content.text;
   return "";
 };
@@ -46,6 +51,7 @@ export const sendMessage = async (
 ) => {
   const user = req.user as User;
   const { message, sessionId = `sess_${user.id}_${Date.now()}` } = req.body;
+  const modelToUse = req.creditCheck?.modelToUse ?? "gpt-4o-mini";
 
   if (!message?.trim()) return errors.notFound(reply, "Message");
 
@@ -78,12 +84,28 @@ export const sendMessage = async (
       (result as any).toolsUsed?.map((t: string) => ({ name: t })),
     );
 
+    // Debit AFTER successful response
+    await debitCredits(
+      user.id,
+      "aria_chat",
+      modelToUse,
+      2000, // approx input tokens
+      800, // approx output tokens
+      0.000078, // approx cost USD
+    ).catch((err) =>
+      logger.warn(
+        { err },
+        "Debit failed — non-fatal, response already returned",
+      ),
+    );
+
     return success(reply, {
       message: result.message,
       toolsUsed: (result as any).toolsUsed ?? [],
       sessionId,
       duration: (result as any).duration ?? 0,
       followUpSuggestions: (result as any).followUpSuggestions ?? [],
+      creditsUsed: req.creditCheck?.cost ?? 0,
     });
   } catch (err) {
     logger.error({ err, userId: user.id }, "Agent message failed");
@@ -98,6 +120,7 @@ export const streamMessage = async (
 ) => {
   const user = req.user as User;
   const { message, sessionId = `sess_${user.id}_${Date.now()}` } = req.body;
+  const modelToUse = req.creditCheck?.modelToUse ?? "gpt-4o-mini";
 
   if (!message?.trim()) {
     return reply.code(400).send({ success: false, error: "Message required" });
@@ -150,8 +173,10 @@ export const streamMessage = async (
       send(event);
 
       // Collect data for persistence
-      if ((event as any).type === "token") fullReply += extractText((event as any).content);
-      if ((event as any).type === "tool_start") toolsUsed.push((event as any).tool);
+      if ((event as any).type === "token")
+        fullReply += extractText((event as any).content);
+      if ((event as any).type === "tool_start")
+        toolsUsed.push((event as any).tool);
       if ((event as any).type === "done") {
         fullReply = extractText((event as any).message) || fullReply;
         break;
@@ -160,8 +185,26 @@ export const streamMessage = async (
     }
   } catch (err: any) {
     logger.error({ err, userId: user.id }, "Agent stream failed");
-    send({ type: "error", message: "ARIA encountered an error. Please try again." });
+    send({
+      type: "error",
+      message: "ARIA encountered an error. Please try again.",
+    });
   } finally {
+    // Debit AFTER successful stream completion
+    await debitCredits(
+      user.id,
+      "aria_chat",
+      modelToUse,
+      2000, // approx input tokens
+      1200, // approx output tokens (streaming can be longer)
+      0.000109, // approx cost USD
+    ).catch((err) =>
+      logger.warn(
+        { err },
+        "Debit failed — non-fatal, stream already completed",
+      ),
+    );
+
     // Persist the assistant reply after streaming completes
     if (fullReply) {
       saveMessage(
@@ -170,7 +213,9 @@ export const streamMessage = async (
         "assistant",
         fullReply,
         toolsUsed.map((t) => ({ name: t })),
-      ).catch((err) => logger.warn({ err }, "Failed to save assistant message"));
+      ).catch((err) =>
+        logger.warn({ err }, "Failed to save assistant message"),
+      );
     }
 
     // Fetch follow-up suggestions that were just created
@@ -204,6 +249,7 @@ export const streamMessage = async (
       logger.warn({ err }, "Failed to fetch follow-up suggestions");
     }
 
+    send({ type: "creditsUsed", credits: req.creditCheck?.cost ?? 0 });
     reply.raw.write("data: [DONE]\n\n");
     reply.raw.end();
   }
@@ -261,7 +307,10 @@ export const deleteSessionHandler = async (
 
 // ── PATCH /api/v1/agent/sessions/:sessionId ───────────────────────────────────
 export const renameSessionHandler = async (
-  req: FastifyRequest<{ Params: { sessionId: string }; Body: { title: string } }>,
+  req: FastifyRequest<{
+    Params: { sessionId: string };
+    Body: { title: string };
+  }>,
   reply: FastifyReply,
 ) => {
   const user = req.user as User;
@@ -280,7 +329,10 @@ export const renameSessionHandler = async (
 };
 
 // ── GET /api/v1/agent/memory ───────────────────────────────────────────────────
-export const getMemoryHandler = async (req: FastifyRequest, reply: FastifyReply) => {
+export const getMemoryHandler = async (
+  req: FastifyRequest,
+  reply: FastifyReply,
+) => {
   const user = req.user as User;
   try {
     const memory = await getMemory(user.id);

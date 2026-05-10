@@ -4,6 +4,7 @@ import { getCache, setCache } from "../services/cacheWrapper";
 import { prisma } from "../config/database";
 import { User } from "../types";
 import { logger } from "../utils/logger";
+import { debitCredits } from "../services/credits.service";
 
 interface GenerateCalendarBody {
   niche: string;
@@ -61,9 +62,24 @@ export const generate = async (
           },
         })
         .catch((err) => logger.error({ err }, "Analytics insert failed"));
+
+      // Debit AFTER successful calendar generation
+      const modelToUse = req.creditCheck?.modelToUse ?? "gpt-4o-mini";
+      await debitCredits(
+        userId,
+        "content_calendar",
+        modelToUse,
+        2500,
+        1200,
+        0.000109,
+      ).catch((err) => logger.warn({ err }, "Debit failed — non-fatal"));
     }
 
-    return reply.send({ success: true, data: calendar });
+    return reply.send({
+      success: true,
+      data: calendar,
+      creditsUsed: req.creditCheck?.cost ?? 0,
+    });
   } catch (err) {
     logger.error({ err }, "Calendar generation failed");
 

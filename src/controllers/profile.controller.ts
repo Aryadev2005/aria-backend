@@ -2,6 +2,7 @@ import { FastifyRequest, FastifyReply } from "fastify";
 import * as profileSvc from "../services/profile.service";
 import { success, errors } from "../utils/response";
 import { logger } from "../utils/logger";
+import { debitCredits } from "../services/credits.service";
 import { prisma } from "../config/database";
 import { cache } from "../config/redis";
 import { User } from "../types";
@@ -225,16 +226,26 @@ export const rebuildVoicePortrait = async (
 
     // Clear cache to force fresh fetch
     await cache.del(`aria_identity:${user.id}`);
-    await cache.del(`voice:${user.id}`);
+
+    const modelToUse = req.creditCheck?.modelToUse ?? "gpt-4o-mini";
+
+    // Debit AFTER successful voice portrait rebuild
+    await debitCredits(
+      user.id,
+      "voice_portrait",
+      modelToUse,
+      4000,
+      2000,
+      0.000203,
+    ).catch((err) => logger.warn({ err }, "Debit failed — non-fatal"));
 
     return success(reply, {
-      success: true,
       message: "Voice portrait rebuilt successfully",
-      portrait,
-      portraitAge: "just now",
+      summary: portrait.contentTerritory,
+      creditsUsed: req.creditCheck?.cost ?? 0,
     });
   } catch (err) {
     logger.error({ err, userId: user.id }, "rebuildVoicePortrait failed");
-    return errors.internal(reply, "Failed to rebuild voice portrait");
+    return errors.serviceDown(reply, "Voice Portrait Rebuild");
   }
 };

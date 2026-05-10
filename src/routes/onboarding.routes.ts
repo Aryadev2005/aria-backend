@@ -5,13 +5,15 @@ import type {
   FinaliseNicheBody,
 } from "../controllers/onboarding.controller";
 import { authenticateFirebase } from "../middleware/auth.middleware";
+import { requireCredits } from "../middleware/credits.middleware";
 
 export default async function onboardingRoutes(app: FastifyInstance) {
-  // POST /api/v1/onboarding/connect
+  // POST /api/v1/onboarding/connect (Archetype detection - FREE for new users)
+  // Note: The controller handles credit check internally to skip for first-time users
   app.post<{ Body: ConnectHandleBody }>(
     "/connect",
     {
-      preHandler: [authenticateFirebase],
+      preHandler: [authenticateFirebase, requireCredits("archetype_detection")],
       schema: {
         body: {
           type: "object",

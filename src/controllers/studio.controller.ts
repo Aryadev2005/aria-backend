@@ -1,10 +1,14 @@
 import { FastifyRequest, FastifyReply } from "fastify";
 import * as studioSvc from "../services/studio.service";
 import * as videoSvc from "../services/videoAnalysis.service";
-import { extractScriptLearnings, IntentLabel } from "../services/studio_learning.service";
+import {
+  extractScriptLearnings,
+  IntentLabel,
+} from "../services/studio_learning.service";
 import { prisma } from "../config/database";
 import { success, errors } from "../utils/response";
 import { logger } from "../utils/logger";
+import { debitCredits } from "../services/credits.service";
 import path from "path";
 import fs from "fs";
 import os from "os";
@@ -20,6 +24,7 @@ export const getScriptStructure = async (
   const user = req.user as User;
   const { idea, platform, niche, format, mood, collaboration, angle } =
     req.body as any;
+  const modelToUse = req.creditCheck?.modelToUse ?? "gpt-4o-mini";
 
   try {
     const result = await studioSvc.generateScriptStructure({
@@ -34,7 +39,20 @@ export const getScriptStructure = async (
       followerRange: user.follower_range || undefined,
       userId: user.id,
     });
-    return success(reply, result);
+
+    await debitCredits(
+      user.id,
+      "script_writing",
+      modelToUse,
+      1500,
+      1000,
+      0.000078,
+    ).catch((err) => logger.warn({ err }, "Debit failed"));
+
+    return success(reply, {
+      ...result,
+      creditsUsed: req.creditCheck?.cost ?? 0,
+    });
   } catch (err) {
     logger.error({ err }, "Script structure failed");
     return errors.serviceDown(reply, "Studio Script");
@@ -51,6 +69,7 @@ export const adviseSection = async (
   const user = req.user as User;
   const { sectionLabel, creatorContent, sectionType, idea, mood } =
     req.body as any;
+  const modelToUse = req.creditCheck?.modelToUse ?? "gpt-4o-mini";
 
   try {
     const result = await studioSvc.adviseOnSection({
@@ -63,7 +82,20 @@ export const adviseSection = async (
       niche: user.niches?.[0] || "general",
       archetype: user.archetype || "EDUCATOR",
     });
-    return success(reply, result);
+
+    await debitCredits(
+      user.id,
+      "script_writing",
+      modelToUse,
+      1200,
+      800,
+      0.000063,
+    ).catch((err) => logger.warn({ err }, "Debit failed"));
+
+    return success(reply, {
+      ...result,
+      creditsUsed: req.creditCheck?.cost ?? 0,
+    });
   } catch (err) {
     logger.error({ err }, "Section advice failed");
     return errors.serviceDown(reply, "Studio Advisor");
@@ -71,7 +103,7 @@ export const adviseSection = async (
 };
 
 /**
- * Match BGM for a content idea
+ * Match BGM to content idea
  */
 export const matchBGM = async (
   req: FastifyRequest<{ Body: any }>,
@@ -79,18 +111,32 @@ export const matchBGM = async (
 ) => {
   const user = req.user as User;
   const { idea, mood, format, duration } = req.body as any;
+  const modelToUse = req.creditCheck?.modelToUse ?? "gpt-4o-mini";
 
   try {
     const result = await studioSvc.matchBGM({
       idea,
       mood,
-      platform: user.primary_platform || "instagram",
+      duration,
       niche: user.niches?.[0] || "general",
       archetype: user.archetype || "EDUCATOR",
-      duration,
+      platform: user.primary_platform || "instagram",
       userId: user.id,
     });
-    return success(reply, result);
+
+    await debitCredits(
+      user.id,
+      "song_recommendations",
+      modelToUse,
+      800,
+      400,
+      0.000031,
+    ).catch((err) => logger.warn({ err }, "Debit failed"));
+
+    return success(reply, {
+      ...result,
+      creditsUsed: req.creditCheck?.cost ?? 0,
+    });
   } catch (err) {
     logger.error({ err }, "BGM match failed");
     return errors.serviceDown(reply, "BGM Matcher");
@@ -98,7 +144,7 @@ export const matchBGM = async (
 };
 
 /**
- * Generate a practical shot list
+ * Get shot list from script sections
  */
 export const getShotList = async (
   req: FastifyRequest<{ Body: any }>,
@@ -106,6 +152,7 @@ export const getShotList = async (
 ) => {
   const user = req.user as User;
   const { idea, format, sections } = req.body as any;
+  const modelToUse = req.creditCheck?.modelToUse ?? "gpt-4o-mini";
 
   try {
     const result = await studioSvc.generateShotList({
@@ -115,7 +162,20 @@ export const getShotList = async (
       niche: user.niches?.[0] || "general",
       archetype: user.archetype || "EDUCATOR",
     });
-    return success(reply, result);
+
+    await debitCredits(
+      user.id,
+      "script_writing",
+      modelToUse,
+      1000,
+      600,
+      0.000047,
+    ).catch((err) => logger.warn({ err }, "Debit failed"));
+
+    return success(reply, {
+      ...result,
+      creditsUsed: req.creditCheck?.cost ?? 0,
+    });
   } catch (err) {
     logger.error({ err }, "Shot list failed");
     return errors.serviceDown(reply, "Shot List");
@@ -131,6 +191,7 @@ export const getEditingHelp = async (
 ) => {
   const user = req.user as User;
   const { problem, tool } = req.body as any;
+  const modelToUse = req.creditCheck?.modelToUse ?? "gpt-4o-mini";
 
   try {
     const result = await studioSvc.getEditingHelp({
@@ -139,7 +200,20 @@ export const getEditingHelp = async (
       niche: user.niches?.[0] || "general",
       archetype: user.archetype || "EDUCATOR",
     });
-    return success(reply, result);
+
+    await debitCredits(
+      user.id,
+      "script_writing",
+      modelToUse,
+      800,
+      400,
+      0.000031,
+    ).catch((err) => logger.warn({ err }, "Debit failed"));
+
+    return success(reply, {
+      ...result,
+      creditsUsed: req.creditCheck?.cost ?? 0,
+    });
   } catch (err) {
     logger.error({ err }, "Editing help failed");
     return errors.serviceDown(reply, "Editing Help");
@@ -155,6 +229,7 @@ export const analyseVideoUrl = async (
 ) => {
   const user = req.user as User;
   const { videoUrl, mood } = req.body as any;
+  const modelToUse = req.creditCheck?.modelToUse ?? "gpt-4o-mini";
 
   try {
     const result = await videoSvc.analyseFromUrl({
@@ -164,7 +239,20 @@ export const analyseVideoUrl = async (
       archetype: user.archetype || "EDUCATOR",
       mood,
     });
-    return success(reply, result);
+
+    await debitCredits(
+      user.id,
+      "video_analysis",
+      modelToUse,
+      3000,
+      1500,
+      0.000141,
+    ).catch((err) => logger.warn({ err }, "Debit failed"));
+
+    return success(reply, {
+      ...result,
+      creditsUsed: req.creditCheck?.cost ?? 0,
+    });
   } catch (err) {
     logger.error({ err }, "Video URL analysis failed");
     return errors.serviceDown(reply, "Video Analysis");
@@ -176,6 +264,7 @@ export const analyseVideoUrl = async (
  */
 export const analyseVideoUpload = async (req: any, reply: FastifyReply) => {
   const user = req.user as User;
+  const modelToUse = req.creditCheck?.modelToUse ?? "gpt-4o-mini";
 
   try {
     const data = await req.file();
@@ -207,7 +296,19 @@ export const analyseVideoUpload = async (req: any, reply: FastifyReply) => {
       /* ignore */
     }
 
-    return success(reply, result);
+    await debitCredits(
+      user.id,
+      "video_analysis",
+      modelToUse,
+      3500,
+      1500,
+      0.000156,
+    ).catch((err) => logger.warn({ err }, "Debit failed"));
+
+    return success(reply, {
+      ...result,
+      creditsUsed: req.creditCheck?.cost ?? 0,
+    });
   } catch (err) {
     logger.error({ err }, "Video upload analysis failed");
     return errors.serviceDown(reply, "Video Analysis");
@@ -238,9 +339,9 @@ export const saveSession = async (
       data: {
         user_id: user.id,
         idea,
-        platform: platform || user.primary_platform || 'instagram',
-        niche: niche || user.niches?.[0] || 'general',
-        archetype: user.archetype || 'CREATOR',
+        platform: platform || user.primary_platform || "instagram",
+        niche: niche || user.niches?.[0] || "general",
+        archetype: user.archetype || "CREATOR",
         generated_script: generatedScript || {},
         edited_script: editedScript || {},
         bgm_suggestions: bgmSuggestions || {},
@@ -252,7 +353,7 @@ export const saveSession = async (
 
     return success(reply, { sessionId: session.id });
   } catch (err) {
-    logger.error({ err }, 'saveSession failed');
+    logger.error({ err }, "saveSession failed");
     return errors.internal(reply);
   }
 };
@@ -265,15 +366,11 @@ export const learnFromEdit = async (
   reply: FastifyReply,
 ) => {
   const user = req.user as User;
-  const {
-    generatedSections,
-    editedSections,
-    intentLabel,
-    sessionId,
-  } = req.body as any;
+  const { generatedSections, editedSections, intentLabel, sessionId } =
+    req.body as any;
 
   if (!generatedSections || !editedSections || !intentLabel) {
-    return errors.validation(reply, 'Missing required fields');
+    return errors.validation(reply, "Missing required fields");
   }
 
   try {
@@ -289,13 +386,16 @@ export const learnFromEdit = async (
     if (sessionId) {
       await (prisma as any).studio_scripts.updateMany({
         where: { id: sessionId, user_id: user.id },
-        data: { edited_script: { sections: editedSections }, updated_at: new Date() },
+        data: {
+          edited_script: { sections: editedSections },
+          updated_at: new Date(),
+        },
       });
     }
 
     return success(reply, { learned: true });
   } catch (err) {
-    logger.error({ err }, 'learnFromEdit failed');
+    logger.error({ err }, "learnFromEdit failed");
     return errors.internal(reply);
   }
 };
@@ -311,7 +411,7 @@ export const getScriptHistory = async (
   try {
     const scripts = await (prisma as any).studio_scripts.findMany({
       where: { user_id: user.id },
-      orderBy: [{ pinned: 'desc' }, { created_at: 'desc' }],
+      orderBy: [{ pinned: "desc" }, { created_at: "desc" }],
       take: 50,
       select: {
         id: true,
@@ -326,7 +426,7 @@ export const getScriptHistory = async (
     });
     return success(reply, scripts);
   } catch (err) {
-    logger.error({ err }, 'getScriptHistory failed');
+    logger.error({ err }, "getScriptHistory failed");
     return errors.internal(reply);
   }
 };
@@ -347,7 +447,7 @@ export const togglePin = async (
       select: { pinned: true },
     });
 
-    if (!existing) return errors.notFound(reply, 'Script');
+    if (!existing) return errors.notFound(reply, "Script");
 
     await (prisma as any).studio_scripts.update({
       where: { id: scriptId },
@@ -356,7 +456,7 @@ export const togglePin = async (
 
     return success(reply, { pinned: !existing.pinned });
   } catch (err) {
-    logger.error({ err }, 'togglePin failed');
+    logger.error({ err }, "togglePin failed");
     return errors.internal(reply);
   }
 };
