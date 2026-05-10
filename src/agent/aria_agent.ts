@@ -198,36 +198,54 @@ export const buildARIAAgent = async (
   // Filter ALL_ARIA_TOOLS to remove tools that have DB-injected versions
   // in createDBInjectedTools — avoids duplicate tool names confusing the LLM
   const standaloneTools = ALL_ARIA_TOOLS.filter(
-    (t) => !["get_user_profile", "get_db_live_trends", "get_db_trending_songs",
-             "get_user_content_history", "confirm_niche"].includes((t as any).name)
+    (t) =>
+      ![
+        "get_user_profile",
+        "get_db_live_trends",
+        "get_db_trending_songs",
+        "get_user_content_history",
+        "confirm_niche",
+      ].includes((t as any).name),
   );
 
   const tools = [
-    ...createDBInjectedTools(db, user),  // DB-injected versions (have access to prisma)
-    ...hybridTools,                       // 4 RAG tools — get_hybrid_context, find_similar_trends etc.
-    ...standaloneTools,                   // YouTube stats, Spotify, JioSaavn, Google Trends etc.
+    ...createDBInjectedTools(db, user), // DB-injected versions (have access to prisma)
+    ...hybridTools, // 4 RAG tools — get_hybrid_context, find_similar_trends etc.
+    ...standaloneTools, // YouTube stats, Spotify, JioSaavn, Google Trends etc.
     ...mcpTools,
     webSearchTool,
   ];
 
   // Load memory, voice portrait, and pending suggestions in parallel
-  const [memoryResult, voicePortraitResult, pendingSuggestionsResult] = await Promise.allSettled([
-    getMemory(user.id),
-    import("../services/voice.service").then(m => m.getVoicePortrait(user.id)),
-    import("../services/suggestion.service").then(m => m.getDueSuggestions(user.id)),
-  ]);
+  const [memoryResult, voicePortraitResult, pendingSuggestionsResult] =
+    await Promise.allSettled([
+      getMemory(user.id),
+      import("../services/voice.service").then((m) =>
+        m.getVoicePortrait(user.id),
+      ),
+      import("../services/suggestion.service").then((m) =>
+        m.getDueSuggestions(user.id),
+      ),
+    ]);
 
-  const resolvedMemory           = memoryResult.status           === "fulfilled" ? memoryResult.value           : {};
-  const resolvedPortrait         = voicePortraitResult.status    === "fulfilled" ? voicePortraitResult.value    : null;
-  const resolvedPendingSuggestions = pendingSuggestionsResult.status === "fulfilled" ? pendingSuggestionsResult.value : [];
+  const resolvedMemory =
+    memoryResult.status === "fulfilled" ? memoryResult.value : {};
+  const resolvedPortrait =
+    voicePortraitResult.status === "fulfilled"
+      ? voicePortraitResult.value
+      : null;
+  const resolvedPendingSuggestions =
+    pendingSuggestionsResult.status === "fulfilled"
+      ? pendingSuggestionsResult.value
+      : [];
 
   const systemPrompt = buildARIASystemPrompt({
     user,
-    memory:             resolvedMemory,
+    memory: resolvedMemory,
     sessionContext,
     entryScreen,
     pendingSuggestions: resolvedPendingSuggestions,
-    voicePortrait:      resolvedPortrait,
+    voicePortrait: resolvedPortrait,
   });
 
   const agentConfig: any = {
@@ -403,7 +421,11 @@ export async function* streamARIAAgent({
         };
       }
       if (event.event === "on_tool_end") {
-        yield { type: "tool_end" as const, tool: event.name };
+        yield {
+          type: "tool_end" as const,
+          tool: event.name,
+          output: event.data?.output,
+        };
       }
       if (event.event === "on_chat_model_stream") {
         const token = event.data?.chunk?.content;
@@ -522,9 +544,7 @@ Respond ONLY with valid JSON:
       if (!suggestion.content || !suggestion.type) continue;
 
       const followUpAt = new Date();
-      followUpAt.setDate(
-        followUpAt.getDate() + (suggestion.followUpDays || 3),
-      );
+      followUpAt.setDate(followUpAt.getDate() + (suggestion.followUpDays || 3));
 
       await prisma.aria_suggestions
         .create({

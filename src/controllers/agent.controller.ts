@@ -34,17 +34,51 @@ const extractText = (content: any): string => {
   return "";
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// AI SDK v6 UIMessageChunk stream protocol helpers
+// Each SSE event carries a JSON object validated against uiMessageChunkSchema.
+// ─────────────────────────────────────────────────────────────────────────────
+const sdkLine = (chunk: object) =>
+  `data: ${JSON.stringify(chunk)}\n\n`;
+
+// Map our internal tool names → display-friendly names for useChat parts
+const TOOL_DISPLAY_NAMES: Record<string, string> = {
+  get_db_live_trends: "get_db_live_trends",
+  get_db_trending_songs: "get_db_trending_songs",
+  get_user_profile: "get_user_profile",
+  get_youtube_video_stats: "get_youtube_video_stats",
+  get_youtube_channel_stats: "get_youtube_channel_stats",
+  get_youtube_search: "get_youtube_search",
+  get_hybrid_context: "get_hybrid_context",
+  find_similar_trends: "find_similar_trends",
+  viral_ideas_engine: "viral_ideas_engine",
+  confirm_niche: "confirm_niche",
+  get_user_content_history: "get_user_content_history",
+  web_search: "web_search",
+};
+
+// Tools that should emit a ui_block annotation for generative UI rendering
+const UI_BLOCK_TOOLS = new Set([
+  "get_db_live_trends",
+  "get_db_trending_songs",
+  "get_user_profile",
+  "get_youtube_video_stats",
+  "get_youtube_channel_stats",
+  "get_youtube_search",
+  "get_hybrid_context",
+  "find_similar_trends",
+  "viral_ideas_engine",
+]);
+
 export interface SendMessageBody {
   message: string;
   sessionId?: string;
   history?: any[];
-  /** e.g. 'profile' | 'studio' | 'discover' | 'launch' | 'direct' */
   entryScreen?: string;
-  /** Any extra session context the frontend wants to pass (idea, trendTitle, etc.) */
   context?: Record<string, any>;
 }
 
-// ── POST /api/v1/agent/message ─────────────────────────────────────────────────
+// ── POST /api/v1/agent/message  (non-streaming, legacy) ───────────────────────
 export const sendMessage = async (
   req: FastifyRequest<{ Body: SendMessageBody }>,
   reply: FastifyReply,
@@ -56,88 +90,117 @@ export const sendMessage = async (
   if (!message?.trim()) return errors.notFound(reply, "Message");
 
   try {
-    // Ensure session exists
     const isFirstMessage = !(await getSession(user.id, sessionId));
     await upsertSession(user.id, sessionId, {
-      title: isFirstMessage ? autogenerateTitle(message) : undefined,
+      title: isFirstMessage ? autogenerateTitle(message.trim()) : undefined,
       incrMessages: false,
     });
 
-    // Save user message
     await saveMessage(user.id, sessionId, "user", message.trim());
+
+    const fullUser = await prisma.users.findUnique({
+      where: { id: user.id },
+      select: {
+        id: true,
+        name: true,
+        archetype: true,
+        archetype_label: true,
+        growth_stage: true,
+        tone_profile: true,
+        health_score: true,
+        engagement_rate: true,
+        follower_range: true,
+        primary_platform: true,
+        niches: true,
+        scraped_summary: true,
+        instagram_handle: true,
+        youtube_handle: true,
+      },
+    });
 
     const result = await invokeARIAAgent({
       message: message.trim(),
       sessionId,
-      user,
+      user: fullUser,
       db: prisma,
       entryScreen: req.body.entryScreen,
       sessionContext: req.body.context,
     });
 
-    // Save assistant reply
-    await saveMessage(
-      user.id,
-      sessionId,
-      "assistant",
-      result.message,
-      (result as any).toolsUsed?.map((t: string) => ({ name: t })),
+    await debitCredits(user.id, "aria_chat", modelToUse, 2000, 800).catch(
+      (err) => logger.warn({ err }, "Debit failed — non-fatal"),
     );
 
-    // Debit AFTER successful response
-    await debitCredits(
-      user.id,
-      "aria_chat",
-      modelToUse,
-      2000, // approx input tokens
-      800, // approx output tokens
-    ).catch((err) =>
-      logger.warn(
-        { err },
-        "Debit failed — non-fatal, response already returned",
-      ),
-    );
+    if (result.message) {
+      await saveMessage(
+        user.id,
+        sessionId,
+        "assistant",
+        result.message,
+        result.toolsUsed?.map((t: string) => ({ name: t })),
+      ).catch((err) =>
+        logger.warn({ err }, "Failed to save assistant message"),
+      );
+    }
 
     return success(reply, {
-      message: result.message,
-      toolsUsed: (result as any).toolsUsed ?? [],
-      sessionId,
-      duration: (result as any).duration ?? 0,
-      followUpSuggestions: (result as any).followUpSuggestions ?? [],
+      ...result,
       creditsUsed: req.creditCheck?.cost ?? 0,
     });
   } catch (err) {
     logger.error({ err, userId: user.id }, "Agent message failed");
-    return errors.serviceDown(reply, "ARIA");
+    return errors.serviceDown(reply, "ARIA Brain");
   }
 };
 
-// ── POST /api/v1/agent/stream ──────────────────────────────────────────────────
+// ── POST /api/v1/agent/stream  (AI SDK Data Stream Protocol) ─────────────────
+// Consumed by @ai-sdk/react useChat({ api: '/api/v1/agent/stream' })
 export const streamMessage = async (
   req: FastifyRequest<{ Body: SendMessageBody }>,
   reply: FastifyReply,
 ) => {
   const user = req.user as User;
-  const { message, sessionId = `sess_${user.id}_${Date.now()}` } = req.body;
+  const {
+    message,
+    sessionId = `sess_${user.id}_${Date.now()}`,
+    entryScreen = "direct",
+    context: sessionContext = {},
+  } = req.body;
   const modelToUse = req.creditCheck?.modelToUse ?? "gpt-4o-mini";
 
-  if (!message?.trim()) {
-    return reply.code(400).send({ success: false, error: "Message required" });
+  if (!message?.trim() || !sessionId) {
+    return errors.validation(reply, "message and sessionId required");
   }
 
-  // Ensure session row exists before we start streaming
+  const fullUser = await prisma.users.findUnique({
+    where: { id: user.id },
+    select: {
+      id: true,
+      name: true,
+      archetype: true,
+      archetype_label: true,
+      growth_stage: true,
+      tone_profile: true,
+      health_score: true,
+      engagement_rate: true,
+      follower_range: true,
+      primary_platform: true,
+      niches: true,
+      scraped_summary: true,
+      instagram_handle: true,
+      youtube_handle: true,
+    },
+  });
+
+  // Session housekeeping
   const isFirstMessage = !(await getSession(user.id, sessionId));
   await upsertSession(user.id, sessionId, {
     title: isFirstMessage ? autogenerateTitle(message.trim()) : undefined,
     incrMessages: false,
   });
-
-  // Save user message immediately (before streaming starts)
   await saveMessage(user.id, sessionId, "user", message.trim());
 
-  // ⚠️ reply.raw.writeHead() bypasses Fastify's entire response pipeline,
-  // including @fastify/cors. We must manually forward CORS headers here or the
-  // browser will block the SSE stream even though the server returns 200 OK.
+  // ─── SSE headers — must be set before first write ────────────────────────
   const requestOrigin = req.headers.origin ?? "*";
   reply.raw.writeHead(200, {
     "Content-Type": "text/event-stream",
@@ -151,59 +214,139 @@ export const streamMessage = async (
     Vary: "Origin",
   });
 
-  const send = (data: object) => {
-    reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
-  };
+  // AI SDK v6 stream helper — writes one UIMessageChunk SSE event
+  const write = (chunk: object) => reply.raw.write(sdkLine(chunk));
 
   let fullReply = "";
   const toolsUsed: string[] = [];
+  const pendingCalls = new Map<string, string>();
+  let toolCallCounter = 0;
+  // Each text run gets a stable id so text-start/delta/end triplets are linked
+  const textPartId = `txt_${Date.now()}`;
+
+  // v6: open the message
+  write({ type: "start" });
+  write({ type: "start-step" });
 
   try {
     const gen = streamARIAAgent({
       message: message.trim(),
       sessionId,
-      user,
+      user: fullUser,
       db: prisma,
-      entryScreen: req.body.entryScreen,
-      sessionContext: req.body.context,
+      entryScreen,
+      sessionContext,
     });
 
-    for await (const event of gen) {
-      send(event);
+    let textOpen = false;
 
-      // Collect data for persistence
-      if ((event as any).type === "token")
-        fullReply += extractText((event as any).content);
-      if ((event as any).type === "tool_start")
-        toolsUsed.push((event as any).tool);
-      if ((event as any).type === "done") {
-        fullReply = extractText((event as any).message) || fullReply;
-        break;
+    for await (const event of gen) {
+      const ev = event as any;
+
+      switch (ev.type) {
+        case "token": {
+          const delta =
+            typeof ev.content === "string"
+              ? ev.content
+              : extractText(ev.content);
+          if (delta) {
+            fullReply += delta;
+            if (!textOpen) {
+              write({ type: "text-start", id: textPartId });
+              textOpen = true;
+            }
+            write({ type: "text-delta", id: textPartId, delta });
+          }
+          break;
+        }
+
+        case "tool_start": {
+          // Close any open text part before emitting tool chunks
+          if (textOpen) {
+            write({ type: "text-end", id: textPartId });
+            textOpen = false;
+          }
+          toolsUsed.push(ev.tool);
+          const callId = `call_${++toolCallCounter}`;
+          pendingCalls.set(ev.tool, callId);
+          const toolName = TOOL_DISPLAY_NAMES[ev.tool] ?? ev.tool;
+
+          write({
+            type: "tool-input-available",
+            toolCallId: callId,
+            toolName,
+            input: ev.input ?? {},
+          });
+
+          // Custom data chunk — carries our ToolPill metadata
+          write({
+            type: "data-tool_running",
+            data: {
+              tool: ev.tool,
+              callId,
+              displayName: toolName
+                .replace(/_/g, " ")
+                .replace(/\b\w/g, (c: string) => c.toUpperCase()),
+            },
+          });
+          break;
+        }
+
+        case "tool_end": {
+          const callId = pendingCalls.get(ev.tool) ?? `call_${toolCallCounter}`;
+          pendingCalls.delete(ev.tool);
+
+          const toolName = TOOL_DISPLAY_NAMES[ev.tool] ?? ev.tool;
+          let result = ev.output ?? ev.result ?? null;
+          if (typeof result === "string") {
+            try { result = JSON.parse(result); } catch { /* keep as string */ }
+          }
+
+          write({
+            type: "tool-output-available",
+            toolCallId: callId,
+            output: result ?? {},
+          });
+
+          write({
+            type: "data-tool_done",
+            data: { tool: ev.tool, callId },
+          });
+
+          if (UI_BLOCK_TOOLS.has(ev.tool) && result) {
+            write({
+              type: "data-ui_block",
+              data: { blockType: ev.tool, payload: result },
+            });
+          }
+          break;
+        }
+
+        case "done": {
+          fullReply = extractText(ev.message) || fullReply;
+          break;
+        }
+
+        case "error": {
+          logger.error({ userId: user.id }, "ARIA stream error event");
+          break;
+        }
       }
-      if ((event as any).type === "error") break;
+    }
+
+    if (textOpen) {
+      write({ type: "text-end", id: textPartId });
     }
   } catch (err: any) {
     logger.error({ err, userId: user.id }, "Agent stream failed");
-    send({
-      type: "error",
-      message: "ARIA encountered an error. Please try again.",
-    });
+    write({ type: "text-start", id: textPartId });
+    write({ type: "text-delta", id: textPartId, delta: "\n\n⚠️ ARIA encountered an error. Please try again." });
+    write({ type: "text-end", id: textPartId });
   } finally {
-    // Debit AFTER successful stream completion
-    await debitCredits(
-      user.id,
-      "aria_chat",
-      modelToUse,
-      2000, // approx input tokens
-      1200, // approx output tokens (streaming can be longer)
-    ).catch((err) =>
-      logger.warn(
-        { err },
-        "Debit failed — non-fatal, stream already completed",
-      ),
+    await debitCredits(user.id, "aria_chat", modelToUse, 2000, 1200).catch(
+      (err) => logger.warn({ err }, "Debit failed — non-fatal"),
     );
 
-    // Persist the assistant reply after streaming completes
     if (fullReply) {
       saveMessage(
         user.id,
@@ -216,26 +359,16 @@ export const streamMessage = async (
       );
     }
 
-    // Fetch follow-up suggestions that were just created
     try {
       const followUpSuggestions = await prisma.aria_suggestions.findMany({
-        where: {
-          user_id: user.id,
-          status: "pending",
-          session_id: sessionId,
-        },
-        select: {
-          id: true,
-          suggestion_type: true,
-          suggestion_data: true,
-        },
+        where: { user_id: user.id, status: "pending", session_id: sessionId },
+        select: { id: true, suggestion_type: true, suggestion_data: true },
         orderBy: { created_at: "desc" },
         take: 3,
       });
-
       if (followUpSuggestions.length > 0) {
-        send({
-          type: "suggestions",
+        write({
+          type: "data-suggestions",
           data: followUpSuggestions.map((s) => ({
             id: s.id,
             type: s.suggestion_type,
@@ -247,8 +380,9 @@ export const streamMessage = async (
       logger.warn({ err }, "Failed to fetch follow-up suggestions");
     }
 
-    send({ type: "creditsUsed", credits: req.creditCheck?.cost ?? 0 });
-    reply.raw.write("data: [DONE]\n\n");
+    write({ type: "finish-step" });
+    write({ type: "finish", finishReason: "stop" });
+
     reply.raw.end();
   }
 };
@@ -275,7 +409,6 @@ export const getSessionMessages = async (
   try {
     const session = await getSession(user.id, sessionId);
     if (!session) return errors.notFound(reply, "Session");
-
     const messages = await getMessages(user.id, sessionId);
     return success(reply, { session, messages });
   } catch (err) {
@@ -292,13 +425,10 @@ export const deleteSessionHandler = async (
   const user = req.user as User;
   const { sessionId } = req.params;
   try {
-    const session = await getSession(user.id, sessionId);
-    if (!session) return errors.notFound(reply, "Session");
-
     await deleteSession(user.id, sessionId);
     return noContent(reply);
   } catch (err) {
-    logger.error({ err, userId: user.id }, "Delete session failed");
+    logger.error({ err }, "Delete session failed");
     return errors.internal(reply);
   }
 };
@@ -314,14 +444,11 @@ export const renameSessionHandler = async (
   const user = req.user as User;
   const { sessionId } = req.params;
   const { title } = req.body;
-
-  if (!title?.trim()) return errors.badRequest(reply, "Title is required");
-
   try {
-    await renameSession(user.id, sessionId, title.trim());
-    return success(reply, { updated: true });
+    await renameSession(user.id, sessionId, title);
+    return success(reply, { ok: true });
   } catch (err) {
-    logger.error({ err, userId: user.id }, "Rename session failed");
+    logger.error({ err }, "Rename session failed");
     return errors.internal(reply);
   }
 };

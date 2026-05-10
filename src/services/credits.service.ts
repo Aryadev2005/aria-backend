@@ -35,8 +35,10 @@ export interface CreditCheckResult {
   reason?: string;
   usedPct: number; // 0–100, what frontend shows
   featureCharge: number; // flat feature cost
+  cost: number; // total cost (featureCharge + estimated AI cost)
   modelToUse: string;
   config: ActionConfig;
+  balance?: number; // current wallet balance (for error responses)
 }
 
 export interface DebitResult {
@@ -290,6 +292,7 @@ export async function checkCredits(
       allowed: true,
       usedPct,
       featureCharge: 0,
+      cost: 0,
       modelToUse: resolveModel(config),
       config,
     };
@@ -307,6 +310,8 @@ export async function checkCredits(
       reason: `This feature requires the ${required} plan.`,
       usedPct,
       featureCharge: config.featureCharge,
+      cost: config.featureCharge,
+      balance,
       modelToUse: resolveModel(config),
       config,
     };
@@ -320,6 +325,8 @@ export async function checkCredits(
         "You've used up your monthly allowance. Top up or upgrade to continue.",
       usedPct,
       featureCharge: config.featureCharge,
+      cost: config.featureCharge,
+      balance,
       modelToUse: resolveModel(config),
       config,
     };
@@ -343,6 +350,8 @@ export async function checkCredits(
         reason: `Daily limit reached for ${config.displayName}. Comes back tomorrow.`,
         usedPct,
         featureCharge: config.featureCharge,
+        cost: config.featureCharge,
+        balance,
         modelToUse: resolveModel(config),
         config,
       };
@@ -368,6 +377,8 @@ export async function checkCredits(
         reason: `Monthly limit reached for ${config.displayName}.`,
         usedPct,
         featureCharge: config.featureCharge,
+        cost: config.featureCharge,
+        balance,
         modelToUse: resolveModel(config),
         config,
       };
@@ -378,6 +389,8 @@ export async function checkCredits(
     allowed: true,
     usedPct,
     featureCharge: config.featureCharge,
+    cost: config.featureCharge,
+    balance,
     modelToUse: resolveModel(config),
     config,
   };
