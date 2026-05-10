@@ -46,7 +46,7 @@ export const generateContent = async (
       modelToUse,
       2000, // approx input tokens
       1000, // approx output tokens
-      0.000078, // approx cost USD
+      
     ).catch((err) =>
       logger.warn(
         { err },
@@ -118,7 +118,7 @@ export const generateHooks = async (
       modelToUse,
       800, // approx input tokens
       400, // approx output tokens
-      0.000031, // approx cost USD
+     
     ).catch((err) =>
       logger.warn({ err }, "Debit failed — non-fatal, hooks already returned"),
     );
@@ -166,7 +166,7 @@ export const rewriteHook = async (
       modelToUse,
       600, // approx input tokens
       300, // approx output tokens
-      0.000024, // approx cost USD
+      
     ).catch((err) =>
       logger.warn({ err }, "Debit failed — non-fatal, hook already returned"),
     );
@@ -213,7 +213,7 @@ export const repurposeContent = async (
       modelToUse,
       2500, // approx input tokens (original content)
       1500, // approx output tokens (repurposed content)
-      0.000093, // approx cost USD
+     
     ).catch((err) =>
       logger.warn(
         { err },
@@ -264,7 +264,7 @@ export const analyseContent = async (
       modelToUse,
       1200, // approx input tokens (caption)
       800, // approx output tokens (analysis)
-      0.000055, // approx cost USD
+     
     ).catch((err) =>
       logger.warn(
         { err },

@@ -46,7 +46,7 @@ export const getScriptStructure = async (
       modelToUse,
       1500,
       1000,
-      0.000078,
+      
     ).catch((err) => logger.warn({ err }, "Debit failed"));
 
     return success(reply, {
@@ -89,7 +89,7 @@ export const adviseSection = async (
       modelToUse,
       1200,
       800,
-      0.000063,
+    
     ).catch((err) => logger.warn({ err }, "Debit failed"));
 
     return success(reply, {
@@ -130,7 +130,7 @@ export const matchBGM = async (
       modelToUse,
       800,
       400,
-      0.000031,
+    
     ).catch((err) => logger.warn({ err }, "Debit failed"));
 
     return success(reply, {
@@ -169,7 +169,7 @@ export const getShotList = async (
       modelToUse,
       1000,
       600,
-      0.000047,
+  
     ).catch((err) => logger.warn({ err }, "Debit failed"));
 
     return success(reply, {
@@ -207,7 +207,7 @@ export const getEditingHelp = async (
       modelToUse,
       800,
       400,
-      0.000031,
+   
     ).catch((err) => logger.warn({ err }, "Debit failed"));
 
     return success(reply, {
@@ -246,7 +246,7 @@ export const analyseVideoUrl = async (
       modelToUse,
       3000,
       1500,
-      0.000141,
+      
     ).catch((err) => logger.warn({ err }, "Debit failed"));
 
     return success(reply, {
@@ -302,7 +302,7 @@ export const analyseVideoUpload = async (req: any, reply: FastifyReply) => {
       modelToUse,
       3500,
       1500,
-      0.000156,
+     
     ).catch((err) => logger.warn({ err }, "Debit failed"));
 
     return success(reply, {

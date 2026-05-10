@@ -71,7 +71,7 @@ export const generate = async (
         modelToUse,
         2500,
         1200,
-        0.000109,
+     
       ).catch((err) => logger.warn({ err }, "Debit failed — non-fatal"));
     }
 

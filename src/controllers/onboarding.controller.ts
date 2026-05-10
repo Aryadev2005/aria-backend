@@ -131,7 +131,7 @@ export const connectHandle = async (
         modelToUse,
         1500, // approx input tokens
         800, // approx output tokens
-        0.000063, // approx cost USD
+       
       ).catch((err) => logger.warn({ err }, "Debit failed — non-fatal"));
       creditsUsed = req.creditCheck?.cost ?? 0;
     } else {

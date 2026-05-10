@@ -74,7 +74,7 @@ export const getPostingPackage = async (
       modelToUse,
       1500,
       800,
-      0.000078,
+     
     ).catch((err) => logger.warn({ err }, "Debit failed — non-fatal"));
 
     return success(reply, { ...pkg, creditsUsed: req.creditCheck?.cost ?? 0 });
@@ -132,7 +132,7 @@ export const getTimingIntelligence = async (
       modelToUse,
       1000,
       600,
-      0.000055,
+     
     ).catch((err) => logger.warn({ err }, "Debit failed — non-fatal"));
 
     return success(reply, {
@@ -187,7 +187,7 @@ export const getBrandAlert = async (
       modelToUse,
       1200,
       700,
-      0.000063,
+    
     ).catch((err) => logger.warn({ err }, "Debit failed — non-fatal"));
 
     return success(reply, {

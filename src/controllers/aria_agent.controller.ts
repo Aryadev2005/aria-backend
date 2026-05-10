@@ -81,7 +81,7 @@ export const chat = async (
       modelToUse,
       2000, // approx input tokens (with context)
       800, // approx output tokens
-      0.000078, // approx cost USD
+    
     ).catch((err) =>
       logger.warn(
         { err },
@@ -245,7 +245,7 @@ export const chatStream = async (
           modelToUse,
           2000, // approx input tokens (with context)
           1200, // approx output tokens (streaming can be longer)
-          0.000109, // approx cost USD
+    
         ).catch((err) =>
           logger.warn(
             { err },

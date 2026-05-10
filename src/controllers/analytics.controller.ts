@@ -151,7 +151,7 @@ Respond ONLY with valid JSON:
       modelToUse,
       1500, // approx input tokens
       800, // approx output tokens
-      0.000063, // approx cost USD
+     
     ).catch((err) =>
       logger.warn(
         { err },
@@ -228,7 +228,7 @@ Respond ONLY with valid JSON:
       modelToUse,
       800, // approx input tokens
       400, // approx output tokens
-      0.000031, // approx cost USD
+      
     ).catch((err) =>
       logger.warn({ err }, "Debit failed — non-fatal, times already returned"),
     );
@@ -301,7 +301,7 @@ Respond ONLY with valid JSON:
       modelToUse,
       1200, // approx input tokens
       600, // approx output tokens
-      0.000047, // approx cost USD
+     
     ).catch((err) =>
       logger.warn(
         { err },
@@ -384,7 +384,7 @@ Respond ONLY with valid JSON:
       modelToUse,
       1000, // approx input tokens
       700, // approx output tokens
-      0.000055, // approx cost USD
+  
     ).catch((err) =>
       logger.warn({ err }, "Debit failed — non-fatal, report already returned"),
     );

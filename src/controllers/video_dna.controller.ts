@@ -419,7 +419,7 @@ export const analyseVideo = async (
       req.creditCheck?.modelToUse ?? "gpt-4o-mini",
       3000, // large context
       1500, // detailed analysis output
-      0.000141,
+      
     ).catch((err) => logger.warn({ err }, "Debit failed — non-fatal"));
 
     return success(reply, {
@@ -499,7 +499,7 @@ export const getCompetitorGap = async (
       modelToUse,
       2000,
       800,
-      0.000078,
+      
     ).catch((err) => logger.warn({ err }, "Debit failed — non-fatal"));
 
     return success(reply, {

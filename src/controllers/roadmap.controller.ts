@@ -57,7 +57,7 @@ export const getPersonalisedRoadmap = async (
           modelToUse,
           3000, // approx input tokens (large context)
           1200, // approx output tokens
-          0.000109, // approx cost USD
+         
         ).catch((err) =>
           logger.warn(
             { err },
@@ -94,7 +94,7 @@ export const getPersonalisedRoadmap = async (
       modelToUse,
       3000, // approx input tokens (large context)
       1200, // approx output tokens
-      0.000109, // approx cost USD
+   
     ).catch((err) =>
       logger.warn(
         { err },
@@ -145,7 +145,7 @@ export const refreshRoadmap = async (
       modelToUse,
       3000, // approx input tokens (large context)
       1200, // approx output tokens
-      0.000109, // approx cost USD
+    
     ).catch((err) =>
       logger.warn(
         { err },

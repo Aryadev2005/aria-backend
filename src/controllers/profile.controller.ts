@@ -236,7 +236,7 @@ export const rebuildVoicePortrait = async (
       modelToUse,
       4000,
       2000,
-      0.000203,
+      
     ).catch((err) => logger.warn({ err }, "Debit failed — non-fatal"));
 
     return success(reply, {

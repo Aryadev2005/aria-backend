@@ -435,7 +435,7 @@ export const getViralIdeas = async (
       modelToUse,
       1500, // approx input tokens
       800, // approx output tokens
-      0.000055, // approx cost USD
+    
     ).catch((err) =>
       logger.warn({ err }, "Debit failed — non-fatal, ideas already returned"),
     );
