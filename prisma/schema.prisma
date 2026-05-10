@@ -869,12 +869,12 @@ model credit_config {
 model credit_wallets {
   id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   user_id          String   @unique @db.Uuid
-  balance          Int      @default(0)
-  total_granted    Int      @default(0)
-  total_spent      Int      @default(0)
-  plan_credits     Int      @default(50)
-  rollover_credits Int      @default(0)
-  topup_credits    Int      @default(0)
+  balance          Decimal @db.Decimal(12,4)
+  total_granted    Decimal @db.Decimal(12,4) @default(0)
+  total_spent      Decimal @db.Decimal(12,4) @default(0)
+  plan_credits     Decimal @db.Decimal(12,4) @default(0)
+  rollover_credits Decimal @db.Decimal(12,4) @default(0)
+  topup_credits    Decimal @db.Decimal(12,4) @default(0)
   last_reset_at    DateTime @default(now()) @db.Timestamptz(6)
   next_reset_at    DateTime @default(dbgenerated("NOW() + INTERVAL '30 days'")) @db.Timestamptz(6)
   created_at       DateTime @default(now()) @db.Timestamptz(6)
@@ -889,8 +889,8 @@ model credit_transactions {
   id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   user_id       String   @db.Uuid
   type          String   // 'debit' | 'grant' | 'topup' | 'rollover' | 'refund'
-  amount        Int      // positive = in, negative = out
-  balance_after Int
+  amount        Decimal @db.Decimal(12,4) // positive = in, negative = out
+  balance_after Decimal @db.Decimal(12,4)
   action_key    String?
   model_used    String?
   tokens_input  Int?

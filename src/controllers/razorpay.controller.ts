@@ -1,13 +1,16 @@
 // src/controllers/razorpay.controller.ts
 // ══════════════════════════════════════════════════════════════════════════════
 // Razorpay Payment Controller
-// Handles: order creation + payment signature verification + credit grant
 //
-// Flow:
-//   1. POST /credits/razorpay/create-order  → creates Razorpay order, returns orderId
-//   2. Frontend opens Razorpay checkout modal with orderId
-//   3. POST /credits/razorpay/verify        → verifies HMAC-SHA256 signature
-//                                           → calls processTopup → credits granted
+// Handles TWO payment types:
+//   1. Plan purchase  — upgrades subscription_tier + grants monthly credits
+//   2. Top-up (future) — one-time credit purchase
+//
+// Flow (same for both):
+//   POST /credits/razorpay/create-order  { planId }
+//   → Razorpay modal opens
+//   POST /credits/razorpay/verify        { ...signature, itemId, paymentType }
+//   → tier upgraded + credits granted
 // ══════════════════════════════════════════════════════════════════════════════
 
 import { FastifyRequest, FastifyReply } from "fastify";
@@ -16,76 +19,104 @@ import Razorpay from "razorpay";
 import { success, errors } from "../utils/response";
 import { logger } from "../utils/logger";
 import { User } from "../types/user";
-import { processTopup } from "../services/credits.service";
-import { TOPUP_PACKS } from "../config/credits";
+import { processTopup, resetMonthlyCredits } from "../services/credits.service";
+import { TOPUP_PACKS, PLAN_CREDITS } from "../config/credits";
 import { prisma } from "../config/database";
 
-// ── Razorpay instance (singleton) ─────────────────────────────────────────────
-// Keys are loaded from env — never hardcode them
+// ── Razorpay instance ─────────────────────────────────────────────────────────
 const getRazorpayInstance = () => {
   const keyId = process.env.RAZORPAY_KEY_ID;
   const keySecret = process.env.RAZORPAY_KEY_SECRET;
-
   if (!keyId || !keySecret) {
-    throw new Error(
-      "RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET must be set in environment variables",
-    );
+    throw new Error("RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET must be set");
   }
-
   return new Razorpay({ key_id: keyId, key_secret: keySecret });
 };
 
-// ── Types ─────────────────────────────────────────────────────────────────────
-interface CreateOrderBody {
-  packId: string;
+// ── Plan definitions ──────────────────────────────────────────────────────────
+export const SUBSCRIPTION_PLANS = [
+  { id: "plan_starter", tier: "starter", amountInr: 249, label: "Starter" },
+  { id: "plan_pro", tier: "pro", amountInr: 499, label: "Pro" },
+  { id: "plan_max", tier: "max", amountInr: 749, label: "Max" },
+  { id: "plan_brand", tier: "brand", amountInr: 999, label: "Brand" },
+] as const;
+
+function getPlan(planId: string) {
+  return SUBSCRIPTION_PLANS.find((p) => p.id === planId) ?? null;
 }
 
-interface VerifyPaymentBody {
-  razorpay_order_id: string;
-  razorpay_payment_id: string;
-  razorpay_signature: string;
-  packId: string;
+function getPack(packId: string) {
+  return TOPUP_PACKS.find((p) => p.id === packId) ?? null;
 }
 
 // ── POST /api/v1/credits/razorpay/create-order ────────────────────────────────
-// Step 1: Create a Razorpay order on the server side.
-// The order_id ties the payment to a specific amount — prevents tampering.
+// Body: { planId: "plan_pro" }  OR  { packId: "pack_300" }
 export const createOrder = async (
-  req: FastifyRequest<{ Body: CreateOrderBody }>,
+  req: FastifyRequest<{ Body: { planId?: string; packId?: string } }>,
   reply: FastifyReply,
 ) => {
   const user = req.user as User;
-  const { packId } = req.body;
+  const { planId, packId } = req.body;
 
-  const pack = TOPUP_PACKS.find((p) => p.id === packId);
-  if (!pack) {
+  if (!planId && !packId) {
     return reply.code(400).send({
       success: false,
-      error: "INVALID_PACK",
-      message: `Pack '${packId}' does not exist.`,
+      error: "MISSING_ID",
+      message: "Provide either planId or packId.",
     });
+  }
+
+  let amountInr: number;
+  let description: string;
+  let itemId: string;
+  let paymentType: "plan" | "topup";
+
+  if (planId) {
+    const plan = getPlan(planId);
+    if (!plan) {
+      return reply.code(400).send({
+        success: false,
+        error: "INVALID_PLAN",
+        message: `Plan '${planId}' does not exist.`,
+      });
+    }
+    amountInr = plan.amountInr;
+    description = `ARIA ${plan.label} Plan — 1 month`;
+    itemId = planId;
+    paymentType = "plan";
+  } else {
+    const pack = getPack(packId!);
+    if (!pack) {
+      return reply.code(400).send({
+        success: false,
+        error: "INVALID_PACK",
+        message: `Pack '${packId}' does not exist.`,
+      });
+    }
+    amountInr = pack.amountInr;
+    description = `ARIA ${pack.credits} Credits Top-up`;
+    itemId = packId!;
+    paymentType = "topup";
   }
 
   try {
     const razorpay = getRazorpayInstance();
-
-    // Amount must be in paise (INR × 100)
-    const amountInPaise = pack.amountInr * 100;
+    const amountInPaise = amountInr * 100;
 
     const order = await razorpay.orders.create({
       amount: amountInPaise,
       currency: "INR",
-      receipt: `aria_${user.id.slice(0, 8)}_${packId}_${Date.now()}`,
+      receipt: `aria_${user.id.slice(0, 8)}_${itemId}_${Date.now()}`,
       notes: {
         userId: user.id,
-        packId,
-        credits: String(pack.credits),
-        product: "ARIA Credits",
+        itemId,
+        paymentType,
+        product: "ARIA",
       },
     });
 
     logger.info(
-      { userId: user.id, packId, orderId: order.id, amountInPaise },
+      { userId: user.id, itemId, paymentType, orderId: order.id },
       "Razorpay order created",
     );
 
@@ -93,61 +124,60 @@ export const createOrder = async (
       orderId: order.id,
       amount: amountInPaise,
       currency: "INR",
-      packId,
-      credits: pack.credits,
-      // Return public key — safe to send to frontend
+      description,
+      itemId,
+      paymentType,
       razorpayKeyId: process.env.RAZORPAY_KEY_ID,
     });
   } catch (err: any) {
     logger.error(
-      { err: err.message, userId: user.id, packId },
+      { err: err.message, userId: user.id },
       "Razorpay order creation failed",
     );
     return errors.internal(reply);
   }
 };
 
-// ── POST /api/v1/credits/razorpay/verify ──────────────────────────────────────
-// Step 2: Verify the Razorpay signature on the server side.
-// THIS IS THE CRITICAL SECURITY STEP — never skip or weaken this.
-//
-// Razorpay official signature formula:
-//   HMAC-SHA256( razorpay_order_id + "|" + razorpay_payment_id, RAZORPAY_KEY_SECRET )
-//
-// If the generated digest matches razorpay_signature, the payment is authentic.
+// ── POST /api/v1/credits/razorpay/verify ─────────────────────────────────────
+// Body: { razorpay_order_id, razorpay_payment_id, razorpay_signature, itemId, paymentType }
 export const verifyPayment = async (
-  req: FastifyRequest<{ Body: VerifyPaymentBody }>,
+  req: FastifyRequest<{
+    Body: {
+      razorpay_order_id: string;
+      razorpay_payment_id: string;
+      razorpay_signature: string;
+      itemId: string;
+      paymentType: "plan" | "topup";
+    };
+  }>,
   reply: FastifyReply,
 ) => {
   const user = req.user as User;
-  const { razorpay_order_id, razorpay_payment_id, razorpay_signature, packId } =
-    req.body;
+  const {
+    razorpay_order_id,
+    razorpay_payment_id,
+    razorpay_signature,
+    itemId,
+    paymentType,
+  } = req.body;
 
-  // ── 1. Validate inputs ───────────────────────────────────────────────────
+  // ── 1. Validate ───────────────────────────────────────────────────────────
   if (
     !razorpay_order_id ||
     !razorpay_payment_id ||
     !razorpay_signature ||
-    !packId
+    !itemId ||
+    !paymentType
   ) {
     return reply.code(400).send({
       success: false,
       error: "MISSING_FIELDS",
       message:
-        "razorpay_order_id, razorpay_payment_id, razorpay_signature, and packId are required.",
+        "razorpay_order_id, razorpay_payment_id, razorpay_signature, itemId, paymentType are required.",
     });
   }
 
-  const pack = TOPUP_PACKS.find((p) => p.id === packId);
-  if (!pack) {
-    return reply.code(400).send({
-      success: false,
-      error: "INVALID_PACK",
-      message: `Pack '${packId}' does not exist.`,
-    });
-  }
-
-  // ── 2. Verify HMAC-SHA256 signature ─────────────────────────────────────
+  // ── 2. HMAC-SHA256 signature verification ─────────────────────────────────
   const keySecret = process.env.RAZORPAY_KEY_SECRET;
   if (!keySecret) {
     logger.error("RAZORPAY_KEY_SECRET is not set");
@@ -161,8 +191,8 @@ export const verifyPayment = async (
 
   if (generatedSignature !== razorpay_signature) {
     logger.warn(
-      { userId: user.id, razorpay_order_id, razorpay_payment_id },
-      "Razorpay signature verification FAILED — possible tampering",
+      { userId: user.id, razorpay_order_id },
+      "Razorpay signature verification FAILED",
     );
     return reply.code(400).send({
       success: false,
@@ -172,16 +202,14 @@ export const verifyPayment = async (
     });
   }
 
-  // ── 3. Check for duplicate processing (idempotency) ──────────────────────
-  // Prevent replaying the same payment_id to grant credits twice
+  // ── 3. Idempotency check ──────────────────────────────────────────────────
   const existing = await prisma.credit_topups.findFirst({
     where: { payment_id: razorpay_payment_id },
   });
-
   if (existing) {
     logger.warn(
       { userId: user.id, razorpay_payment_id },
-      "Duplicate payment_id — skipping double credit grant",
+      "Duplicate payment_id",
     );
     return reply.code(409).send({
       success: false,
@@ -190,40 +218,108 @@ export const verifyPayment = async (
     });
   }
 
-  // ── 4. Grant credits ─────────────────────────────────────────────────────
+  // ── 4. Process ────────────────────────────────────────────────────────────
   try {
-    await processTopup(
-      user.id,
-      packId,
-      pack.credits,
-      pack.amountInr,
-      razorpay_payment_id,
-    );
+    if (paymentType === "plan") {
+      const plan = getPlan(itemId);
+      if (!plan) {
+        return reply.code(400).send({ success: false, error: "INVALID_PLAN" });
+      }
 
-    logger.info(
-      { userId: user.id, packId, credits: pack.credits, razorpay_payment_id },
-      "Razorpay payment verified — credits granted",
-    );
+      await activatePlan(
+        user.id,
+        plan.tier,
+        plan.amountInr,
+        razorpay_payment_id,
+      );
 
-    return success(reply, {
-      message: `${pack.credits} credits added to your wallet!`,
-      credits: pack.credits,
-      packId,
-      paymentId: razorpay_payment_id,
-    });
+      logger.info(
+        { userId: user.id, planId: itemId, tier: plan.tier },
+        "Plan activated",
+      );
+
+      return success(reply, {
+        message: `${plan.label} plan activated! Your monthly allowance has been updated.`,
+        paymentType: "plan",
+        tier: plan.tier,
+        planLabel: plan.label,
+        paymentId: razorpay_payment_id,
+      });
+    } else {
+      const pack = getPack(itemId);
+      if (!pack) {
+        return reply.code(400).send({ success: false, error: "INVALID_PACK" });
+      }
+
+      await processTopup(
+        user.id,
+        itemId,
+        pack.credits,
+        pack.amountInr,
+        razorpay_payment_id,
+      );
+
+      logger.info({ userId: user.id, packId: itemId }, "Top-up processed");
+
+      return success(reply, {
+        message: `Top-up successful!`,
+        paymentType: "topup",
+        paymentId: razorpay_payment_id,
+      });
+    }
   } catch (err: any) {
     logger.error(
       { err: err.message, userId: user.id },
-      "processTopup failed after verified payment",
+      "Payment processing failed after signature verify",
     );
     return errors.internal(reply);
   }
 };
 
+// ── activatePlan ──────────────────────────────────────────────────────────────
+// Upgrades subscription_tier on users table + resets credit wallet for new tier.
+async function activatePlan(
+  userId: string,
+  tier: string,
+  amountInr: number,
+  paymentId: string,
+): Promise<void> {
+  const planCredits = PLAN_CREDITS[tier] ?? PLAN_CREDITS.free;
+
+  // 1. Upgrade user tier
+  await prisma.users.update({
+    where: { id: userId },
+    data: {
+      subscription_tier: tier,
+      is_pro: tier !== "free",
+      subscription_expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      updated_at: new Date(),
+    },
+  });
+
+  // 2. Reset wallet with new plan's credit pool
+  //    resetMonthlyCredits handles rollover logic correctly per tier
+  await resetMonthlyCredits(userId, tier);
+
+  // 3. Audit log in credit_topups
+  await prisma.credit_topups.create({
+    data: {
+      user_id: userId,
+      credits: planCredits,
+      amount_inr: amountInr,
+      payment_id: paymentId,
+      payment_status: "completed",
+      pack_id: `subscription_${tier}`,
+    },
+  });
+
+  logger.info(
+    { userId, tier, planCredits },
+    "Plan activated + credits granted",
+  );
+}
+
 // ── POST /api/v1/credits/razorpay/webhook ────────────────────────────────────
-// Optional but recommended: Razorpay webhook for payment.captured events.
-// Handles edge cases where the browser closed before verify could be called.
-// Configure this URL in Razorpay Dashboard → Settings → Webhooks.
 export const handleWebhook = async (
   req: FastifyRequest,
   reply: FastifyReply,
@@ -231,9 +327,7 @@ export const handleWebhook = async (
   const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
 
   if (!webhookSecret) {
-    logger.warn(
-      "RAZORPAY_WEBHOOK_SECRET not set — webhook endpoint is disabled",
-    );
+    logger.warn("RAZORPAY_WEBHOOK_SECRET not set — webhook disabled");
     return reply.code(503).send({ error: "Webhook not configured" });
   }
 
@@ -244,7 +338,6 @@ export const handleWebhook = async (
       .send({ error: "Missing x-razorpay-signature header" });
   }
 
-  // Verify webhook signature
   const generatedSignature = crypto
     .createHmac("sha256", webhookSecret)
     .update(JSON.stringify(req.body))
@@ -257,58 +350,48 @@ export const handleWebhook = async (
 
   const event = req.body as any;
   const eventType = event?.event;
-
   logger.info({ eventType }, "Razorpay webhook received");
 
-  // Handle payment.captured — the most important event
   if (eventType === "payment.captured") {
     const payment = event.payload?.payment?.entity;
     if (!payment) return reply.code(200).send({ status: "no_payload" });
 
-    const { id: paymentId, order_id: orderId, notes } = payment;
-    const { userId, packId } = notes ?? {};
+    const { id: paymentId, notes } = payment;
+    const { userId, itemId, paymentType } = notes ?? {};
 
-    if (!userId || !packId) {
-      logger.warn(
-        { paymentId, orderId },
-        "Webhook: missing userId/packId in notes",
-      );
+    if (!userId || !itemId || !paymentType) {
       return reply.code(200).send({ status: "missing_notes" });
     }
 
-    // Idempotency check
     const existing = await prisma.credit_topups.findFirst({
       where: { payment_id: paymentId },
     });
-
-    if (existing) {
-      logger.info({ paymentId }, "Webhook: payment already processed");
-      return reply.code(200).send({ status: "already_processed" });
-    }
-
-    const pack = TOPUP_PACKS.find((p) => p.id === packId);
-    if (!pack) {
-      logger.warn({ packId }, "Webhook: unknown packId");
-      return reply.code(200).send({ status: "unknown_pack" });
-    }
+    if (existing) return reply.code(200).send({ status: "already_processed" });
 
     try {
-      await processTopup(
-        userId,
-        packId,
-        pack.credits,
-        pack.amountInr,
-        paymentId,
-      );
-      logger.info(
-        { userId, packId, paymentId },
-        "Webhook: credits granted via payment.captured",
-      );
+      if (paymentType === "plan") {
+        const plan = getPlan(itemId);
+        if (plan) {
+          await activatePlan(userId, plan.tier, plan.amountInr, paymentId);
+          logger.info({ userId, itemId }, "Webhook: plan activated");
+        }
+      } else {
+        const pack = getPack(itemId);
+        if (pack) {
+          await processTopup(
+            userId,
+            itemId,
+            pack.credits,
+            pack.amountInr,
+            paymentId,
+          );
+          logger.info({ userId, itemId }, "Webhook: top-up processed");
+        }
+      }
     } catch (err) {
-      logger.error({ err, userId, paymentId }, "Webhook: processTopup failed");
+      logger.error({ err, userId, paymentId }, "Webhook: processing failed");
     }
   }
 
-  // Always return 200 to Razorpay to acknowledge receipt
   return reply.code(200).send({ status: "ok" });
 };
