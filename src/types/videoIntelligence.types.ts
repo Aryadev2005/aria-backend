@@ -179,12 +179,16 @@ export interface VideoIntelligenceReport {
 export interface CompetitorGapReport {
   niche: string;
   videosAnalysed: number;
+  platformsAnalysed: string[];       // e.g. ['Instagram Reels', 'YouTube']
+  instagramReelsCount: number;
+  youtubeVideosCount: number;
   topTopics: string[];
-  missedTopics: string[];            // Topics NONE of the 10 covered — your opportunity
+  missedTopics: string[];            // Topics NONE of the items covered — your opportunity
   overservedTopics: string[];        // Topics everyone covered — avoid
   avgEngagementRate: number;
   titlePatterns: string[];
   opportunityScore: number;          // 0–100: how wide open is this niche?
-  scriptTemplate: string;            // AIRA-generated template for the gap
+  scriptTemplate: string;            // ARIA-generated template for the gap
   topVideoIds: string[];
+  topReelIds: string[];
 }
