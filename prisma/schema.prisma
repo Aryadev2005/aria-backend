@@ -718,6 +718,7 @@ model studio_scripts {
   bgm_suggestions  Json     @default("{}")
   shot_list        Json     @default("{}")
   pinned           Boolean  @default(false)
+  attached_notes   Json     @default("[]")
   created_at       DateTime @default(now())
   updated_at       DateTime @updatedAt
 

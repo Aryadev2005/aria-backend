@@ -12,7 +12,7 @@
 // ══════════════════════════════════════════════════════════════════════════════
 
 import { tool } from "@langchain/core/tools";
-import { ChatOpenAI, tools as openAITools } from "@langchain/openai";
+import { ChatOpenAI } from "@langchain/openai";
 import { createDeepAgent } from "deepagents";
 import { z } from "zod";
 import OpenAI from "openai";
@@ -55,6 +55,13 @@ export interface ScriptResult {
   format: string;
 }
 
+export interface AttachedNote {
+  id: string;
+  title?: string;
+  content?: string;
+  tags?: string[];
+}
+
 export interface StudioInput {
   idea: string;
   platform: string;
@@ -67,6 +74,7 @@ export interface StudioInput {
   voiceContext?: string;
   learnedPrefs?: string;
   creatorName?: string;
+  attachedNotes?: AttachedNote[];
 }
 
 export type SSEEvent =
@@ -288,6 +296,8 @@ const FORMAT_CONFIGS: Record<
 };
 
 // ── PASS 1: LangChain Deep Agent ──────────────────────────────────────────────
+// ── REPLACE the entire runDeepResearch function in src/services/deep_analysis.service.ts
+// ── Everything else (types, FORMAT_CONFIGS, generateScript, runTwoPassStudio) stays identical
 
 export async function runDeepResearch(
   input: StudioInput,
@@ -298,128 +308,220 @@ export async function runDeepResearch(
   onEvent({ type: "phase", phase: "researching", label: "Deep Research" });
   onEvent({ type: "research_update", message: "Initializing research agent…" });
 
-  // ── Tools the researcher subagent gets ───────────────────────────────────
-  // 1. OpenAI's native web search — bound as LangChain tool
-  const webSearchTool = openAITools.webSearch({
-    userLocation: { type: "approximate", country: "IN" },
-  });
+  logger.info(
+    { idea, platform, niche, format },
+    "[DeepResearch] Starting Pass 1",
+  );
 
-  // 2. Apify scraper for platform-specific real trend data
+  // ── Web search tool as a proper LangChain StructuredTool ─────────────────
+  // openAITools.webSearch() returns a ServerTool which is NOT compatible with
+  // deepagents subagent tools[]. We wrap OpenAI's Responses API directly instead.
+  const webSearchTool = tool(
+    async ({ query }: { query: string }): Promise<string> => {
+      logger.info({ query }, "[DeepResearch] web_search called");
+      const apiKey = process.env.OPENAI_API_KEY?.trim();
+      if (!apiKey) return JSON.stringify({ error: "OPENAI_API_KEY not set" });
+
+      try {
+        const res = await fetch("https://api.openai.com/v1/responses", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            model: "gpt-4o-mini",
+            tools: [{ type: "web_search_preview" }],
+            input: query,
+          }),
+          signal: AbortSignal.timeout(30_000),
+        });
+
+        if (!res.ok) {
+          logger.warn(
+            { status: res.status, query },
+            "[DeepResearch] OpenAI Responses API error",
+          );
+          return JSON.stringify({ error: `Search API error ${res.status}` });
+        }
+
+        const data = await res.json();
+        // Extract text output from the response
+        const text = (data.output ?? [])
+          .filter((item: any) => item.type === "message")
+          .flatMap((item: any) => item.content ?? [])
+          .filter((c: any) => c.type === "output_text")
+          .map((c: any) => c.text as string)
+          .join("\n");
+
+        logger.info(
+          { query, resultLength: text.length },
+          "[DeepResearch] web_search success",
+        );
+        return text || JSON.stringify({ error: "No results returned" });
+      } catch (err: any) {
+        logger.warn(
+          { err: err.message, query },
+          "[DeepResearch] web_search failed",
+        );
+        return JSON.stringify({ error: err.message });
+      }
+    },
+    {
+      name: "web_search",
+      description:
+        "Search the web for current information about a topic. Use this for trend research, audience insights, and viral content patterns.",
+      schema: z.object({
+        query: z
+          .string()
+          .describe(
+            "The search query — be specific, include 'India 2025' for Indian market data",
+          ),
+      }),
+    },
+  );
+
+  // ── Apify scraper — OPTIONAL, always returns gracefully ──────────────────
   const apifyScraperTool = tool(
-    async ({ platform: plt, query, maxItems = 8 }) => {
-      const apiKey = process.env.APIFY_API_KEY;
-      if (!apiKey) return JSON.stringify({ error: "APIFY_API_KEY not set" });
+    async ({
+      platform: plt,
+      query,
+    }: {
+      platform: string;
+      query: string;
+    }): Promise<string> => {
+      const apiKey = process.env.APIFY_API_KEY?.trim();
+      if (!apiKey) {
+        logger.warn("[DeepResearch] APIFY_API_KEY not set — skip");
+        return JSON.stringify({
+          skipped: true,
+          reason: "Apify not configured. Proceed with web search results.",
+        });
+      }
+
       const ACTOR_MAP: Record<string, string> = {
         instagram: "apify/instagram-hashtag-scraper",
         youtube: "streamers/youtube-scraper",
         tiktok: "clockworks/free-tiktok-scraper",
       };
       const actorId = ACTOR_MAP[plt] ?? ACTOR_MAP.instagram;
+      logger.info({ plt, query, actorId }, "[DeepResearch] Apify scrape start");
+
       try {
         const runRes = await fetch(
-          `https://api.apify.com/v2/acts/${actorId}/run-sync-get-dataset-items?token=${apiKey}&maxItems=${maxItems}`,
+          `https://api.apify.com/v2/acts/${actorId}/run-sync-get-dataset-items?token=${apiKey}&maxItems=6`,
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               hashtags: [query.replace(/^#/, "")],
-              resultsLimit: maxItems,
+              resultsLimit: 6,
               searchQuery: query,
             }),
-            signal: AbortSignal.timeout(25_000),
+            signal: AbortSignal.timeout(20_000),
           },
         );
-        if (!runRes.ok)
-          return JSON.stringify({ error: `Apify ${runRes.status}` });
+
+        if (!runRes.ok) {
+          logger.warn(
+            { status: runRes.status },
+            "[DeepResearch] Apify HTTP error — skip",
+          );
+          return JSON.stringify({
+            skipped: true,
+            reason: `Apify ${runRes.status}. Use web search data only.`,
+          });
+        }
+
         const items = await runRes.json();
         const trimmed = Array.isArray(items)
-          ? items.slice(0, maxItems).map((it: any) => ({
-              title: it.title || it.caption?.slice(0, 100) || "",
+          ? items.slice(0, 6).map((it: any) => ({
+              title: it.title || it.caption?.slice(0, 80) || "",
               views: it.viewCount || it.videoViewCount || it.likesCount || 0,
-              hashtags: (it.hashtags || []).slice(0, 6),
+              hashtags: (it.hashtags || []).slice(0, 5),
             }))
           : [];
+
+        logger.info({ count: trimmed.length }, "[DeepResearch] Apify success");
         return JSON.stringify({ platform: plt, query, results: trimmed });
       } catch (err: any) {
-        return JSON.stringify({ error: err.message });
+        logger.warn({ err: err.message }, "[DeepResearch] Apify failed — skip");
+        return JSON.stringify({
+          skipped: true,
+          reason: `Apify unavailable. Proceed with web search data only.`,
+        });
       }
     },
     {
       name: "apify_trend_scraper",
       description:
-        "Scrape trending posts from Instagram or YouTube. Use this to get real engagement data. Use AFTER web searches.",
+        "Optional: scrape trending posts from Instagram/YouTube for engagement data. Call ONCE only. If skipped:true is returned, do NOT retry.",
       schema: z.object({
         platform: z.enum(["instagram", "youtube", "tiktok"]),
         query: z.string().describe("Topic or hashtag to search"),
-        maxItems: z.number().optional(),
       }),
     },
   );
 
-  // ── Researcher subagent definition ────────────────────────────────────────
-  // This is a specialized subagent spawned by the main deep agent via the
-  // built-in `task` tool. It runs with context isolation — its own search
-  // loop doesn't pollute the main agent's context window.
+  // ── Researcher subagent ───────────────────────────────────────────────────
   const researcherSubagent = {
     name: "researcher",
     description:
-      "Deep research subagent with web search and platform scraping. Delegate ALL research tasks here.",
-    systemPrompt: `You are a content intelligence researcher for TrendAI — an Indian creator intelligence platform.
-
-Research topics DEEPLY. You MUST search multiple times before concluding.
-
-Required search sequence:
-1. web_search: "[topic] trending [platform] India 2025"
-2. web_search: "[niche] content strategy [platform] viral India 2025"
-3. web_search: "[topic] [niche] Indian audience pain points"
-4. web_search: "top [niche] creators [platform] India hooks"
-5. apify_trend_scraper: get real platform data for the topic
-
-After ALL searches, return ONLY this JSON (no other text, no markdown):
+      "Runs web searches and returns a JSON research brief. Delegate all research here.",
+    systemPrompt: `You are a content intelligence researcher for TrendAI (Indian creator platform).
+ 
+YOUR TASK: Research the given topic. You have a MAXIMUM of 6 tool calls total.
+ 
+STRICT SEQUENCE — follow in order, no deviations:
+Step 1: web_search → "${idea} trending ${platform} India 2025"
+Step 2: web_search → "${niche} viral content ${platform} India 2025"
+Step 3: web_search → "${idea} Indian audience pain points ${niche}"
+Step 4: web_search → "best hooks ${niche} creators ${platform} India"
+Step 5: apify_trend_scraper → platform="${platform}", query="${idea}" (call ONCE, accept any result)
+Step 6: STOP all tool calls. Write the JSON brief immediately.
+ 
+CRITICAL RULES:
+- If apify_trend_scraper returns skipped:true — that is fine, do NOT retry, go to Step 6
+- Do NOT run more than 4 web_search calls
+- Do NOT call any tool more than once
+- After Step 5 (or if it fails), output the JSON immediately — no more tool calls
+ 
+Return ONLY this JSON — no markdown, no explanation, start with { end with }:
 {
   "trendStrength": "rising|peaking|declining|evergreen",
-  "trendSummary": "2-3 sentences on what is ACTUALLY trending with specific data from your searches",
+  "trendSummary": "2-3 sentences on what is trending with specific evidence from your searches",
   "whyItWorks": "The psychological/cultural reason this resonates with Indian audiences",
-  "topViralAngles": ["angle with evidence", "angle 2", "angle 3", "angle 4", "angle 5"],
+  "topViralAngles": ["angle 1 with evidence", "angle 2", "angle 3", "angle 4", "angle 5"],
   "audienceInsights": "Specific demographics, pain points, desires for this topic in India",
-  "hookPatterns": ["hook formula with example from real post", "formula 2", "formula 3", "formula 4"],
-  "competitorGaps": "What top creators are NOT doing — the clear opportunity",
+  "hookPatterns": ["hook formula + example from search", "formula 2", "formula 3", "formula 4"],
+  "competitorGaps": "What top creators are NOT doing — the opportunity",
   "contentRecommendation": "Specific format, length, style recommendation from research",
-  "bestTiming": "Best day/time for Indian audiences on this platform with reasoning",
-  "rawSources": "Key sources and data points found"
+  "bestTiming": "Best day/time for Indian audiences on ${platform} with reasoning",
+  "rawSources": "Key sources and data points found in your searches"
 }`,
-    model: new ChatOpenAI({ model: "gpt-4o-mini", temperature: 0.2 }).bindTools(
-      [webSearchTool],
-    ),
-    tools: [apifyScraperTool],
+    tools: [webSearchTool, apifyScraperTool],
   };
 
-  // ── Main deep agent ───────────────────────────────────────────────────────
-  // createDeepAgent wraps LangGraph orchestration — it gets:
-  // - write_todos (built-in planning tool)
-  // - task (built-in subagent delegation tool)
-  // - The researcher subagent above
+  // ── Main deep agent — with recursion_limit ────────────────────────────────
   const researchAgent = createDeepAgent({
-    model: new ChatOpenAI({ model: "gpt-4o-mini", temperature: 0.2 }),
+    model: new ChatOpenAI({ model: "gpt-4o-mini", temperature: 0.1 }),
     subagents: [researcherSubagent],
     systemPrompt: `You are TrendAI's research orchestrator.
-Your ONLY job: delegate a research task to the researcher subagent, then return its JSON output verbatim.
-Do not modify or interpret the JSON. Just return exactly what the researcher produces.`,
+Use the task tool ONCE to delegate to the researcher subagent.
+Return the researcher's JSON output verbatim — no extra text.`,
   });
 
   const researchTask = `Research this for TrendAI:
 TOPIC: "${idea}"
 PLATFORM: ${platform}
 NICHE: ${niche}
-FORMAT NEEDED: ${format}
-${angle ? `DESIRED ANGLE: ${angle}` : ""}
+FORMAT: ${format}
+${angle ? `ANGLE: ${angle}` : ""}
+ 
+Use the task tool to delegate to the "researcher" subagent now.`;
 
-Delegate to the researcher subagent with these exact instructions:
-- Research "${idea}" trending on ${platform} in India
-- Find viral angles in the ${niche} niche
-- Identify Indian audience insights for this topic
-- Scrape ${platform} for real engagement data on "${idea}"
-- Return the complete JSON research brief`;
+  const TIMEOUT_MS = 90_000;
+  let iterationCount = 0;
 
   try {
     onEvent({
@@ -427,127 +529,215 @@ Delegate to the researcher subagent with these exact instructions:
       message: "Agent planning research strategy…",
     });
 
-    // Stream the deep agent's LangGraph execution
-    const agentStream = await researchAgent.stream(
-      { messages: [{ role: "user", content: researchTask }] },
-      { streamMode: "updates" },
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(
+        () => reject(new Error("Research timed out after 90s")),
+        TIMEOUT_MS,
+      ),
     );
 
-    let stepCount = 0;
-    let finalContent = "";
+    const researchPromise = (async (): Promise<string> => {
+      // .with_config sets the LangGraph recursion limit to prevent infinite loops
+      const agentStream = await (researchAgent as any)
+        .withConfig({ recursionLimit: 25 })
+        .stream(
+          { messages: [{ role: "user", content: researchTask }] },
+          { streamMode: "messages" },
+        );
 
-    for await (const update of agentStream) {
-      // LangGraph streams state updates — extract messages for progress
-      const msgs = update?.messages ?? update?.agent?.messages ?? [];
-      for (const msg of Array.isArray(msgs) ? msgs : []) {
-        const content = typeof msg.content === "string" ? msg.content : "";
-        if (!content) continue;
+      let finalContent = "";
+      let lastEmitted = "";
+      let searchCount = 0;
+      let apifyCalled = false;
 
-        stepCount++;
-        finalContent = content;
+      const emit = (msg: string) => {
+        if (msg !== lastEmitted) {
+          lastEmitted = msg;
+          logger.info({ msg }, "[DeepResearch] SSE emit");
+          onEvent({ type: "research_update", message: msg });
+        }
+      };
 
-        // Friendly progress messages based on content hints
-        if (
-          content.toLowerCase().includes("web_search") ||
-          content.toLowerCase().includes("searching")
-        ) {
-          onEvent({
-            type: "research_update",
-            message: `Web search ${stepCount}…`,
-          });
-        } else if (
-          content.toLowerCase().includes("apify") ||
-          content.toLowerCase().includes("scraping")
-        ) {
-          onEvent({
-            type: "research_update",
-            message: "Scraping platform data…",
-          });
-        } else if (content.toLowerCase().includes("researcher")) {
-          onEvent({
-            type: "research_update",
-            message: "Researcher subagent analyzing…",
-          });
-        } else if (
-          content.toLowerCase().includes("trendstrength") ||
-          content.includes("{")
-        ) {
-          onEvent({
-            type: "research_update",
-            message: "Synthesizing findings…",
-          });
+      for await (const chunk of agentStream) {
+        iterationCount++;
+
+        if (iterationCount > 80) {
+          logger.warn(
+            { iterationCount },
+            "[DeepResearch] Iteration cap hit — breaking",
+          );
+          emit("Finalizing research…");
+          break;
+        }
+
+        // LangGraph "messages" mode: chunk = [BaseMessage, metadata]
+        const [message] = Array.isArray(chunk) ? chunk : [chunk];
+        if (!message) continue;
+
+        const msgType: string =
+          message._getType?.() ?? (message as any).type ?? "";
+
+        const content: string =
+          typeof message.content === "string"
+            ? message.content
+            : Array.isArray(message.content)
+              ? (message.content as any[])
+                  .map((c: any) =>
+                    typeof c === "string" ? c : (c?.text ?? ""),
+                  )
+                  .join("")
+              : "";
+
+        // Cast to any to access tool_calls — TS doesn't know which BaseMessage subtype this is
+        const toolCalls: any[] = (message as any).tool_calls ?? [];
+        const toolName: string = (message as any).name ?? "";
+
+        logger.info(
+          {
+            msgType,
+            toolName,
+            toolCallCount: toolCalls.length,
+            iterationCount,
+            snippet: content.slice(0, 80),
+          },
+          "[DeepResearch] chunk",
+        );
+
+        // AI deciding what to do next
+        if (msgType === "ai" && toolCalls.length > 0) {
+          for (const tc of toolCalls) {
+            logger.info(
+              { name: tc.name, args: tc.args },
+              "[DeepResearch] tool call",
+            );
+
+            if (tc.name === "write_todos") {
+              emit("Planning research strategy…");
+            } else if (tc.name === "task") {
+              emit("Delegating to researcher subagent…");
+            } else if (tc.name === "web_search") {
+              searchCount++;
+              const q: string = tc.args?.query ?? "";
+              emit(`Search ${searchCount}: "${q.slice(0, 55)}"`);
+            } else if (tc.name === "apify_trend_scraper") {
+              if (!apifyCalled) {
+                apifyCalled = true;
+                emit(`Scraping ${tc.args?.platform ?? "platform"} data…`);
+              } else {
+                logger.warn(
+                  "[DeepResearch] Apify called >1 time — potential loop",
+                );
+              }
+            }
+          }
+        }
+
+        // Tool result returned
+        if (msgType === "tool") {
+          logger.info(
+            { toolName, snippet: content.slice(0, 120) },
+            "[DeepResearch] tool result",
+          );
+
+          if (toolName === "web_search") {
+            emit(`Search ${searchCount} complete…`);
+          } else if (toolName === "apify_trend_scraper") {
+            try {
+              const parsed = JSON.parse(content);
+              emit(
+                parsed.skipped
+                  ? "Platform data unavailable — using web results…"
+                  : "Platform data received…",
+              );
+            } catch {
+              emit("Platform data processed…");
+            }
+          } else if (toolName === "task") {
+            emit("Subagent complete — extracting brief…");
+          }
+        }
+
+        // AI final text (no tool calls = done)
+        if (msgType === "ai" && content && toolCalls.length === 0) {
+          finalContent = content;
+          logger.info(
+            { len: content.length, snippet: content.slice(0, 100) },
+            "[DeepResearch] final content",
+          );
+          if (
+            content.includes("trendStrength") ||
+            content.trimStart().startsWith("{")
+          ) {
+            emit("Synthesizing research brief…");
+          }
         }
       }
 
-      // Also check tool call chunks (tool_calls live on individual AIMessages)
-      const toolCalls = (Array.isArray(msgs) ? msgs : []).flatMap(
-        (m: any) => m?.tool_calls ?? [],
+      logger.info(
+        { iterationCount, finalLen: finalContent.length },
+        "[DeepResearch] stream complete",
       );
-      for (const tc of toolCalls) {
-        if (tc?.name === "task") {
-          onEvent({
-            type: "research_update",
-            message: "Delegating to researcher subagent…",
-          });
-        } else if (tc?.name === "write_todos") {
-          onEvent({
-            type: "research_update",
-            message: "Planning research strategy…",
-          });
-        } else if (
-          tc?.name === "web_search" ||
-          tc?.name === "web_search_preview"
-        ) {
-          onEvent({
-            type: "research_update",
-            message: `Searching: ${tc?.args?.query?.slice(0, 50) || "…"}`,
-          });
-        }
-      }
+      return finalContent;
+    })();
+
+    const finalContent = await Promise.race([researchPromise, timeoutPromise]);
+
+    const jsonMatch = finalContent.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      logger.warn(
+        { snippet: finalContent.slice(0, 200) },
+        "[DeepResearch] No JSON in output",
+      );
+      throw new Error("No JSON in research output");
     }
 
-    // Extract the JSON brief from the final agent output
-    const jsonMatch = finalContent.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error("No JSON in research output");
-
     const brief: ResearchBrief = JSON.parse(jsonMatch[0]);
+    logger.info(
+      { trendStrength: brief.trendStrength },
+      "[DeepResearch] Brief parsed OK",
+    );
     onEvent({ type: "research_done", brief });
     return brief;
   } catch (err: any) {
     logger.warn(
-      { err: err.message },
-      "Deep agent failed, using fallback brief",
+      { err: err.message, iterationCount },
+      "[DeepResearch] Failed — fallback",
     );
+    onEvent({
+      type: "research_update",
+      message: "Using cached research patterns…",
+    });
+
     const fallback: ResearchBrief = {
       trendStrength: "evergreen",
-      trendSummary: `Content about "${idea}" in the ${niche} niche on ${platform}.`,
+      trendSummary: `"${idea}" is an established topic in the ${niche} space on ${platform}. Indian creators are actively covering this with educational and relatable formats.`,
       whyItWorks:
-        "Audiences engage with authentic, useful content in this niche.",
+        "Audiences engage with content that validates their experience and gives an actionable next step.",
       topViralAngles: [
-        "Personal story + lesson format",
-        "Common mistake + correct approach",
-        "Beginner guide with actionable steps",
-        "Behind the scenes process reveal",
-        "Myth busting format",
+        "Personal story + lesson: share what you learned the hard way",
+        "Common mistake + correct approach: call out what most people do wrong",
+        "Beginner guide: break it down for someone starting from zero",
+        "Behind the scenes: show your actual process, not the polished version",
+        "Myth busting: challenge a popular belief in your niche",
       ],
-      audienceInsights: `${niche} enthusiasts on ${platform} in India seeking practical value.`,
+      audienceInsights: `Indian ${niche} audience on ${platform} — ages 18-35, value practical actionable content, respond to Hinglish tone, high engagement on relatable real-life scenarios.`,
       hookPatterns: [
-        "I tried X for 30 days — here's what happened",
-        "Nobody tells you this about X",
-        "Stop doing X. Do this instead.",
+        "I tried X for 30 days — here's what nobody tells you",
+        "Stop doing X. Do this instead (here's why)",
         "The real reason X doesn't work for most people",
+        "I wish I knew this when I started with X",
       ],
       competitorGaps:
-        "Most creators explain what without showing how. Show your process.",
-      contentRecommendation: `A ${format} with direct, no-fluff delivery works best for this topic.`,
-      bestTiming: "Tuesday–Thursday, 7–9 PM IST for Indian audiences.",
-      rawSources: "Fallback data — deep agent encountered an error.",
+        "Most creators share the what but skip the how. Show your actual process with real numbers or results.",
+      contentRecommendation: `A ${format} under 60 seconds with a strong hook, one clear idea, and a direct CTA performs best for this topic.`,
+      bestTiming: "Tuesday–Thursday 7–9 PM IST, Sunday 10 AM–12 PM IST.",
+      rawSources: "Fallback patterns — research agent encountered an error.",
     };
+
     onEvent({ type: "research_done", brief: fallback });
     return fallback;
   }
 }
-
 // ── PASS 2: Script Generator ──────────────────────────────────────────────────
 
 const oai = () => {
@@ -571,11 +761,28 @@ export async function generateScript(
     archetype,
     voiceContext,
     learnedPrefs,
+    attachedNotes,
   } = input;
 
   onEvent({ type: "phase", phase: "scripting", label: "Generating Script" });
 
   const formatConfig = FORMAT_CONFIGS[format] || FORMAT_CONFIGS.reel;
+
+  // Build attached notes context if present
+  const attachedNotesContext =
+    attachedNotes && attachedNotes.length > 0
+      ? `
+ATTACHED NOTES (use these as reference/context — full content provided):
+${attachedNotes
+  .map(
+    (note, i) => `--- Note ${i + 1}: ${note.title || "Untitled"} ---
+Content: ${note.content || "(no content)"}
+${note.tags?.length ? `Tags: ${note.tags.join(", ")}` : ""}
+`,
+  )
+  .join("\n")}
+Use insights from these notes where relevant to enrich the script.`
+      : "";
 
   const scriptPrompt = `You are ARIA — TrendAI's script engine for Indian creators.
 
@@ -595,6 +802,7 @@ CREATOR:
 - Archetype: ${archetype}
 ${voiceContext ? `- Voice: ${voiceContext}` : ""}
 ${learnedPrefs ? `- Preferences: ${learnedPrefs}` : ""}
+${attachedNotesContext}
 
 FORMAT RULES: ${formatConfig.scriptInstructions}
 SECTIONS: ${formatConfig.sections.map((s) => s.label).join(", ")}
@@ -604,6 +812,7 @@ Rules:
 2. Address the specific audience pain points found in research
 3. Exploit the competitor gap identified
 4. Write in the creator's voice — never generic
+5. If attached notes are provided, weave relevant insights naturally into the script
 
 Return ONLY valid JSON:
 {

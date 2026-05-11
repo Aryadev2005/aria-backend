@@ -303,6 +303,7 @@ export const saveSession = async (
     bgmSuggestions,
     shotList,
     pinned,
+    attachedNotes,
   } = req.body as any;
 
   try {
@@ -318,6 +319,7 @@ export const saveSession = async (
         bgm_suggestions: bgmSuggestions || {},
         shot_list: shotList || {},
         pinned: pinned || false,
+        attached_notes: attachedNotes || [],
       },
       select: { id: true },
     });
@@ -393,6 +395,7 @@ export const getScriptHistory = async (
         created_at: true,
         edited_script: true,
         generated_script: true,
+        attached_notes: true,
       },
     });
     return success(reply, scripts);
@@ -462,7 +465,8 @@ export const streamScript = async (
   reply: FastifyReply,
 ) => {
   const user = req.user as User;
-  const { idea, platform, niche, format, mood, angle } = req.body as any;
+  const { idea, platform, niche, format, mood, angle, attachedNotes } =
+    req.body as any;
 
   if (!idea?.trim()) {
     return reply.status(400).send({ error: "idea is required" });
@@ -520,6 +524,7 @@ export const streamScript = async (
         voiceContext,
         learnedPrefs: learnedPrefs || undefined,
         creatorName: user.name || undefined,
+        attachedNotes,
       },
       (event) => {
         sendSSE(event);
