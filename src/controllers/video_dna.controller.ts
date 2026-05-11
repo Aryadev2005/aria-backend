@@ -68,7 +68,8 @@ interface YouTubeVideoData {
   description: string;
   tags: string[];
   categoryId: string;
-  publishedAt: string;
+  publishedAt: string;      // formatted display string ("15 Jan 2023")
+  publishedAtRaw: string;   // ← ISO 8601 for recency decay calc
   duration: string;
   durationSeconds: number;
   thumbnailUrl: string;
@@ -130,7 +131,8 @@ const fetchYouTubeData = async (videoId: string): Promise<YouTubeVideoData> => {
     description: (snippet.description || "").slice(0, 600),
     tags: (snippet.tags || []).slice(0, 20),
     categoryId: snippet.categoryId || "22",
-    publishedAt: formatDate(snippet.publishedAt),
+    publishedAt: formatDate(snippet.publishedAt),  // display string
+    publishedAtRaw: snippet.publishedAt || "",         // ← ISO 8601 for recency decay
     duration: formatDuration(content.duration),
     durationSeconds,
     thumbnailUrl:
@@ -170,8 +172,11 @@ const buildSignalExtractionPrompt = (
 
   return `You are ARIA — India's creator intelligence engine. Extract raw signals from this YouTube video.
 
-IMPORTANT: You are a SENSOR, not a calculator. Your job is ONLY to rate the signals below.
-Do NOT compute any overall score. Do NOT invent engagement numbers. Extract only what the title, description, and tags tell you.
+CRITICAL RULES:
+1. You are a SENSOR only. Extract signals from what you can SEE in the title, description, and tags.
+2. Do NOT compute any final scores. Do NOT invent engagement numbers.
+3. All numeric outputs must be bounded integers within the specified range.
+4. Temperature is 0 — be deterministic. Same input = same output every time.
 
 VIDEO DATA:
 Title: "${videoData.videoTitle}"
@@ -181,66 +186,86 @@ Views: ${videoData.viewsRaw.toLocaleString()}
 Likes: ${videoData.likesRaw.toLocaleString()}
 Comments: ${videoData.commentsRaw.toLocaleString()}
 Tags: ${videoData.tags.join(", ") || "none"}
-Description preview: "${videoData.description.slice(0, 400)}"
-Has chapters: ${videoData.hasChapters > 1 ? "Yes" : "No"}
+Description preview (first 400 chars): "${videoData.description.slice(0, 400)}"
+Has chapters in description: ${videoData.hasChapters > 1 ? "Yes" : "No"}
+Tag count: ${videoData.tagCount}
 
-CREATOR CONTEXT:
+CREATOR CONTEXT (personalise qualitative outputs only):
 Archetype: ${archetype} | Niche: ${niche} | Platform: ${platform}
-Their followers: ${followerRange} | Their engagement: ${engRate}%
+Followers: ${followerRange} | Their engagement rate: ${engRate}%
 
 INDIA CONTEXT:
-Rate India relevance for Indian YouTube audience (cultural fit, language, topics, festivals).
+Rate India relevance for the Indian YouTube audience — cultural fit, language (Hindi/Hinglish/English), topics, festivals, problems faced by Indians specifically.
 
-RESPOND ONLY with this exact JSON. ALL numeric fields MUST be integers within stated bounds:
+SIGNAL DEFINITIONS:
+
+HOOK SIGNALS (1–10 each):
+- titleCuriosity: Does this title create genuine curiosity or FOMO? 1=boring statement, 10=irresistible must-click
+- titleClarity: Is the topic crystal clear from the title alone? 1=completely unclear, 10=instantly obvious
+- titleEmotionalPull: Does it trigger a strong emotion (inspiration, fear, joy, anger)? 1=flat, 10=very emotional
+
+SEO SIGNALS (1–5 each):
+- keywordPresence: Are high-volume searchable keywords in the title? 1=no keywords, 5=multiple strong keywords
+- descriptionQuality: Is the full description optimised (informative, not blank/spam)? 1=blank/spam, 5=excellent
+- tagRelevance: Are tags specific and relevant (not generic or spammy)? 1=irrelevant/none, 5=highly targeted
+- descriptionFirstLineQuality: Is the FIRST LINE of the description compelling? (YouTube shows ~150 chars before "Show More" in search results) 1=generic/blank, 5=keyword-rich and compelling
+- hasLeadMagnet: Does the description contain a link to a newsletter, free download, or community? 1=none, 5=clear prominent lead magnet
+
+CONTENT QUALITY SIGNALS (1–10 each):
+- thumbnailTitleSync: Does the thumbnail visually promise the same thing the title promises? 1=completely mismatched, 10=perfect alignment
+- topicDepth: Is the topic specific and niche enough to be genuinely useful? 1=generic listicle, 10=very specific and deep
+- indiaRelevance: How relevant is this content to the Indian YouTube audience? 1=irrelevant to India, 10=specifically made for India
+
+NARRATIVE SIGNALS (1–5 each):
+- hasStrongHook: Based on the title/description, is there a compelling hook in the first 30 seconds implied? 1=no hook, 5=very strong hook
+- hasCTA: Is there a clear call-to-action in the description (subscribe, comment, share)? 1=no CTA, 5=multiple strong CTAs
+- hasChapters: Does the description contain timestamp-based chapters? 1=no chapters, 5=well-structured chapters
+
+DISSONANCE SIGNALS (1–5 each):
+- thumbnailClutter: How visually noisy/cluttered is the implied thumbnail? 1=minimal and clean, 5=extremely cluttered (too much text, faces, arrows)
+- titleOverpromise: Does the title over-promise beyond what the content likely delivers? 1=accurate and honest, 5=massive clickbait/misleading
+
+QUALITATIVE OUTPUTS (AI-generated text — no length restrictions):
+- ariaInsight: Brief 2-sentence analysis of this video's core strength and weakness.
+- actionItems: Array of 3 specific improvement actions. Each starts with a verb. Max 12 words each.
+- improvedHook: Rewritten version of the title that would score higher. Return null if title is already excellent.
+- betterTitle: SEO-optimised title alternative with keywords. Return null if current title is already optimal.
+- nextVideoSuggestion: What the creator should make next based on this video's topic. Be specific.
+- nextVideoReason: One sentence explaining why that next video would perform well.
+- benchmarkAnalysis: 1-2 sentences comparing this video's approach to top performers in its niche.
+- benchmarkStats: Array of 2-3 short comparative stat strings like "Top 20% hook score for ${niche}" or "Below average description quality for ${platform}".
+- shortsOpportunities: Array of 0-3 short-clip opportunities. Each has start (seconds), end (seconds), caption (text for the Short), viralScore (1-100), reason (why this moment is clipworthy). viralScore must be realistic: 45-70 for most clips, 80+ only for genuinely viral moments.
+
+RESPOND ONLY with this exact JSON structure (no markdown, no text before or after):
 {
-  "titleCuriosity":      <integer 1-10: does title make you NEED to click?>,
-  "titleClarity":        <integer 1-10: is the topic 100% clear in 2 seconds?>,
-  "titleEmotionalPull":  <integer 1-10: does title trigger curiosity/FOMO/emotion?>,
-
-  "keywordPresence":     <integer 1-5: 1=no keywords, 5=perfect keyword optimisation>,
-  "descriptionQuality":  <integer 1-5: 1=blank/spam, 5=timestamped+links+keywords>,
-  "tagRelevance":        <integer 1-5: 1=irrelevant/spammy, 5=highly targeted tags>,
-
-  "thumbnailTitleSync":  <integer 1-10: does title promise match what thumbnail likely shows?>,
-  "topicDepth":          <integer 1-10: 1=completely generic, 10=hyper-specific valuable angle>,
-  "indiaRelevance":      <integer 1-10: how relevant to Indian YouTube audience?>,
-
-  "hasStrongHook":       <integer 1-5: inferred from title — does it promise a payoff?>,
-  "hasCTA":              <integer 1-5: 1=no CTA in desc, 5=strong subscribe/like/comment CTA>,
-  "hasChapters":         ${videoData.hasChapters},
-
-  "ariaInsight":         "<3-4 sentences: ARIA's honest take. What's working, what's not, one concrete improvement. Hinglish tone OK. Reference actual title/data.>",
-  "actionItems":         [
-    "<specific action 1 referencing actual title/data>",
-    "<specific action 2>",
-    "<specific action 3>"
-  ],
-  "improvedHook":        "<rewrite the title as a stronger hook for Indian audience, or null if already strong>",
-  "betterTitle":         "<SEO-optimised title alternative, or null if already optimal>",
-  "nextVideoSuggestion": "<exact title of the logical next video to make>",
-  "nextVideoReason":     "<2 sentences: why this is the right next video based on the data>",
-  "benchmarkAnalysis":   "<2-3 sentences: how does this video compare to Indian ${niche} creators of similar size?>",
-  "benchmarkStats":      [
-    "<specific comparison stat 1>",
-    "<specific comparison stat 2>"
-  ],
+  "titleCuriosity": <1-10>,
+  "titleClarity": <1-10>,
+  "titleEmotionalPull": <1-10>,
+  "keywordPresence": <1-5>,
+  "descriptionQuality": <1-5>,
+  "tagRelevance": <1-5>,
+  "descriptionFirstLineQuality": <1-5>,
+  "hasLeadMagnet": <1-5>,
+  "thumbnailTitleSync": <1-10>,
+  "topicDepth": <1-10>,
+  "indiaRelevance": <1-10>,
+  "hasStrongHook": <1-5>,
+  "hasCTA": <1-5>,
+  "hasChapters": <1-5>,
+  "thumbnailClutter": <1-5>,
+  "titleOverpromise": <1-5>,
+  "ariaInsight": "<string>",
+  "actionItems": ["<string>", "<string>", "<string>"],
+  "improvedHook": "<string or null>",
+  "betterTitle": "<string or null>",
+  "nextVideoSuggestion": "<string>",
+  "nextVideoReason": "<string>",
+  "benchmarkAnalysis": "<string>",
+  "benchmarkStats": ["<string>", "<string>"],
   "shortsOpportunities": [
-    {
-      "start": <estimated start second — based on title topic structure and video duration>,
-      "end": <start + max 58 seconds>,
-      "caption": "<pre-written Shorts caption in Hinglish with 3 relevant hashtags>",
-      "viralScore": <integer 1-100: how viral this segment would be as a Short>,
-      "reason": "<one sentence: why this part of the video works as a standalone Short>"
-    }
+    { "start": <seconds>, "end": <seconds>, "caption": "<text>", "viralScore": <1-100>, "reason": "<text>" }
   ]
-}
-
-For "shortsOpportunities": suggest 3-5 segments based on the video topic and duration.
-Since you don't have the actual transcript, infer likely high-value moments from the title and description.
-For a tutorial: suggest the "key reveal" moment (approx 30-40% into video), the "before/after" moment, the "common mistake" moment.
-For a vlog: suggest the most emotionally charged implied moment, the funniest implied moment.
-For a finance/education video: suggest the "shocking stat" moment and the "actionable tip" moment.
-Keep viralScore realistic — most segments are 45-70, only truly viral hooks score 80+.`;
+}`;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -271,6 +296,104 @@ const extractSignals = async (prompt: string): Promise<Partial<RawSignals>> => {
     .replace(/```\n?/g, "")
     .trim();
   return JSON.parse(clean);
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Second AI call: score-connected narrative
+// Runs AFTER scoring is complete so it can reference actual numbers.
+// This replaces the generic ariaInsight from the first extraction call.
+// Temperature 0.3 — still structured but slightly more expressive.
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface NarrativeScoreContext {
+  overallScore:               number;
+  grade:                      string;
+  hookScore:                  number;
+  seoScore:                   number;
+  contentQualityScore:        number;
+  engagementScore:            number;
+  formatType:                 string;
+  nicheDifficultyCoefficient: number;
+  dissonancePenalty:          number;
+  erVsBenchmark:              number;
+  recencyDecayFactor:         number;
+  engagementRate:             number;
+}
+
+const buildNarrativePrompt = (
+  videoData: any,
+  scores: NarrativeScoreContext,
+  user: Partial<User>,
+  niche: string,
+): string => {
+  const archetype = user?.archetype || "CREATOR";
+
+  const lowestComponent = [
+    { name: "Hook", score: scores.hookScore },
+    { name: "SEO", score: scores.seoScore },
+    { name: "Content Quality", score: scores.contentQualityScore },
+    { name: "Engagement", score: scores.engagementScore },
+  ].sort((a, b) => a.score - b.score)[0];
+
+  const difficultyNote = scores.nicheDifficultyCoefficient > 1.0
+    ? `Note: ${niche} is a low-engagement niche. A ${scores.nicheDifficultyCoefficient}x difficulty boost was applied to the engagement score, so the creator's ER is actually stronger than the raw number suggests.`
+    : scores.nicheDifficultyCoefficient < 1.0
+    ? `Note: ${niche} is a high-engagement niche. A ${scores.nicheDifficultyCoefficient}x reduction was applied since this audience naturally has very high ER.`
+    : "";
+
+  const recencyNote = scores.recencyDecayFactor < 0.9
+    ? `Note: Recency decay factor is ${scores.recencyDecayFactor} — this is an older video. View velocity score has been adjusted down accordingly.`
+    : "";
+
+  const dissonanceNote = scores.dissonancePenalty > 0
+    ? `Note: A ${scores.dissonancePenalty}-point Hook Dissonance Penalty was applied because titleCuriosity significantly exceeds titleClarity — a clickbait pattern.`
+    : "";
+
+  return `You are ARIA. Write a precise, score-connected analysis of this YouTube video.
+
+DETERMINISTICALLY COMPUTED SCORES (these are final — do not question them):
+Overall: ${scores.overallScore}/100 (Grade: ${scores.grade})
+  • Hook Score:            ${scores.hookScore}/100${dissonanceNote ? " ← DISSONANCE FLAGGED" : ""}
+  • SEO Score:             ${scores.seoScore}/100
+  • Content Quality Score: ${scores.contentQualityScore}/100
+  • Engagement Score:      ${scores.engagementScore}/100
+
+Weakest component: ${lowestComponent.name} (${lowestComponent.score}/100) — action items must target this.
+Format detected: ${scores.formatType}
+ER vs niche benchmark: ${scores.erVsBenchmark}x
+Engagement rate: ${scores.engagementRate}%
+${difficultyNote}
+${recencyNote}
+${dissonanceNote}
+
+VIDEO:
+Title: "${videoData.videoTitle}"
+Channel: ${videoData.channelName}
+
+CREATOR:
+Archetype: ${archetype} | Niche: ${niche}
+
+RULES:
+1. Every sentence in ariaInsight MUST reference at least one specific score number.
+2. Do NOT give generic advice. Every action item must be specific to THIS video's scores.
+3. benchmarkStats must be quantified (e.g. "Top 20% hook score for ${niche}" — not "good hook").
+4. If dissonance penalty was applied, ariaInsight must mention it explicitly.
+
+RESPOND ONLY with this exact JSON (no markdown, no preamble):
+{
+  "ariaInsight": "<2-3 sentences. Each sentence references a specific score. Example structure: 'Your Hook Score (${scores.hookScore}) is [assessment] because [specific reason from title/description]. However, your ${lowestComponent.name} Score (${lowestComponent.score}) is the main drag because [specific reason]. [One sentence on what this means for the channel's growth.]'>",
+  "actionItems": [
+    "<Verb + specific fix targeting ${lowestComponent.name}. Max 15 words.>",
+    "<Second most critical fix. Max 15 words.>",
+    "<Quick win fix. Max 15 words.>"
+  ],
+  "benchmarkAnalysis": "<1-2 sentences comparing this video to top ${niche} performers. Reference the ${scores.nicheDifficultyCoefficient}x difficulty coefficient if relevant. Be specific.>",
+  "benchmarkStats": [
+    "<Quantified stat string 1 — e.g. 'Top 15% hook score for ${niche}'>",
+    "<Quantified stat string 2>",
+    "<Quantified stat string 3>"
+  ]
+}`;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -328,11 +451,14 @@ export const analyseVideo = async (
       return errors.serviceDown(reply, "YouTube API");
     }
 
-    // Step 2: AI extracts raw signals (sensor role only)
+    // ── Step 2: AI call 1 — Signal Extraction (temperature 0, deterministic) ──
+    // AI acts as sensor only. Extracts bounded integers + qualitative text.
+    // Does NOT compute any scores.
     const prompt = buildSignalExtractionPrompt(
       videoData,
       fullUser as Partial<User>,
     );
+
     let rawSignals: Partial<RawSignals>;
     try {
       rawSignals = await extractSignals(prompt);
@@ -344,7 +470,7 @@ export const analyseVideo = async (
       return errors.serviceDown(reply, "ARIA signal extraction");
     }
 
-    // Step 3: TypeScript computes all scores deterministically
+    // ── Step 3: Resolve niche from user profile ────────────────────────────────
     const rawNiches = fullUser?.niches;
     const niche: string = (() => {
       if (Array.isArray(rawNiches) && rawNiches.length > 0) return String(rawNiches[0]);
@@ -357,6 +483,9 @@ export const analyseVideo = async (
       if (typeof rawNiches === 'string' && rawNiches.trim()) return rawNiches.trim();
       return 'general';
     })();
+
+    // ── Step 4: TypeScript scoring engine (deterministic, zero AI variance) ────
+    // Passes publishedAtRaw, categoryId, and videoTitle for v3 improvements.
     const scoredReport = await computeVideoDNAReport(
       rawSignals,
       videoData.viewsRaw,
@@ -364,46 +493,119 @@ export const analyseVideo = async (
       videoData.commentsRaw,
       videoData.durationSeconds,
       niche,
+      videoData.publishedAtRaw,   // ← NEW: for recency decay
+      videoData.categoryId,        // ← NEW: for format detection
+      videoData.videoTitle,        // ← NEW: for format detection via title keywords
     );
 
-    // Assemble final result (matches existing frontend field expectations)
+    // ── Step 5: AI call 2 — Score-Connected Narrative (temperature 0.3) ────────
+    // Runs AFTER scoring so the AI can reference the actual computed numbers.
+    // Replaces the generic ariaInsight from Step 2 with a score-specific one.
+    let narrativeOverride: {
+      ariaInsight:      string;
+      actionItems:      string[];
+      benchmarkAnalysis:string;
+      benchmarkStats:   string[];
+    } | null = null;
+
+    try {
+      const narrativePrompt = buildNarrativePrompt(
+        videoData,
+        {
+          overallScore:               scoredReport.overallScore,
+          grade:                      scoredReport.grade,
+          hookScore:                  scoredReport.hookScore,
+          seoScore:                   scoredReport.seoScore,
+          contentQualityScore:        scoredReport.contentQualityScore,
+          engagementScore:            scoredReport.engagementScore,
+          formatType:                 scoredReport.formatType,
+          nicheDifficultyCoefficient: scoredReport.nicheDifficultyCoefficient,
+          dissonancePenalty:          scoredReport.dissonancePenalty,
+          erVsBenchmark:              scoredReport.erVsBenchmark,
+          recencyDecayFactor:         scoredReport.recencyDecayFactor,
+          engagementRate:             scoredReport.engagementRate,
+        },
+        fullUser as Partial<User>,
+        niche,
+      );
+
+      const narrativeResponse = await groq().chat.completions.create({
+        model:      MODEL,
+        max_tokens: 800,
+        temperature: 0.3, // slightly more expressive for narrative — not extraction
+        messages: [
+          {
+            role:    "system",
+            content: "You are ARIA, a creator intelligence engine. Respond ONLY with valid JSON. No markdown, no preamble.",
+          },
+          { role: "user", content: narrativePrompt },
+        ],
+      });
+
+      const narrativeContent = narrativeResponse.choices[0]?.message?.content;
+      if (narrativeContent) {
+        const cleanNarrative = narrativeContent
+          .replace(/```json\n?/g, "")
+          .replace(/```\n?/g,     "")
+          .trim();
+        narrativeOverride = JSON.parse(cleanNarrative);
+      }
+    } catch (narrativeErr: any) {
+      // Non-fatal — fall back to extraction-call qualitative text
+      logger.warn({ narrativeErr: narrativeErr.message, videoId }, "Narrative call failed — using extraction fallback");
+    }
+
+    // ── Step 6: Assemble final result ──────────────────────────────────────────
+    // Merge scored report with video metadata.
+    // Override qualitative fields with score-connected narrative if available.
     const result = {
       // Video metadata
-      videoId: videoData.videoId,
-      videoTitle: videoData.videoTitle,
-      channelName: videoData.channelName,
-      publishedAt: videoData.publishedAt,
-      duration: videoData.duration,
+      videoId:      videoData.videoId,
+      videoTitle:   videoData.videoTitle,
+      channelName:  videoData.channelName,
+      publishedAt:  videoData.publishedAt,
+      duration:     videoData.duration,
       thumbnailUrl: videoData.thumbnailUrl,
-      viewCount: videoData.viewCount,
-      likeCount: videoData.likeCount,
+      viewCount:    videoData.viewCount,
+      likeCount:    videoData.likeCount,
       commentCount: videoData.commentCount,
 
-      // All scores — computed in TypeScript, not AI
+      // All scores and derived metrics from the scoring engine
       ...scoredReport,
 
-      // Analysis provenance — useful for debugging
-      analysisEngine: "v2_deterministic",
-      scoringVersion: "2.0",
+      // Override narrative fields with score-connected versions if available
+      ...(narrativeOverride && {
+        ariaInsight:      narrativeOverride.ariaInsight,
+        actionItems:      narrativeOverride.actionItems,
+        benchmarkAnalysis:narrativeOverride.benchmarkAnalysis,
+        benchmarkStats:   narrativeOverride.benchmarkStats,
+        // Keep hookAnalysis and titleAnalysis in sync
+        hookAnalysis:     narrativeOverride.ariaInsight,
+        titleAnalysis:    narrativeOverride.benchmarkAnalysis,
+      }),
+
+      // Analysis provenance
+      analysisEngine:  "v3_deterministic",
+      scoringVersion:  "3.0",
     };
 
-    // Persist (fire-and-forget)
+    // ── Step 7: Persist to DB (fire-and-forget) ────────────────────────────────
     prisma.video_dna_analyses
       .upsert({
-        where: { user_id_video_id: { user_id: user.id, video_id: videoId } },
+        where:  { user_id_video_id: { user_id: user.id, video_id: videoId } },
         update: {
-          result_data: result,
-          analysis_version: "v2",
-          analysed_at: new Date(),
+          result_data:      result as any,
+          analysis_version: "v3",
+          analysed_at:      new Date(),
         },
         create: {
-          user_id: user.id,
-          video_id: videoId,
-          video_title: videoData.videoTitle,
-          channel_name: videoData.channelName,
-          result_data: result,
-          analysis_version: "v2",
-          analysed_at: new Date(),
+          user_id:          user.id,
+          video_id:         videoId,
+          video_title:      videoData.videoTitle,
+          channel_name:     videoData.channelName,
+          result_data:      result as any,
+          analysis_version: "v3",
+          analysed_at:      new Date(),
         },
       })
       .catch((err: any) =>
@@ -417,7 +619,7 @@ export const analyseVideo = async (
         overallScore: result.overallScore,
         grade: result.grade,
       },
-      "Video DNA v2 complete",
+      "Video DNA v3 complete",
     );
 
     // Debit AFTER successful video analysis
