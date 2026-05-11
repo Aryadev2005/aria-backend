@@ -23,12 +23,13 @@ import studioRoutes from "./routes/studio.routes";
 import launchRoutes from "./routes/launch.routes";
 import profileRoutes from "./routes/profile.routes";
 import webhookRoutes from "./routes/webhook.routes";
-import brainRoutes from "./routes/brain.routes";
+// import brainRoutes from "./routes/brain.routes";
 import videoDnaRoutes from "./routes/video_dna.routes";
 import dataDeletionRoutes from "./routes/dataDeletion.routes";
 import integrationRoutes from "./routes/integrations.routes";
 import creditRoutes from "./routes/credits.routes";
 import notesRoutes from "./routes/notes.routes";
+import deepAnalysisRoutes from "./routes/deepAnalysis.routes";
 
 export const buildApp = async (): Promise<FastifyInstance> => {
   const app = Fastify({
@@ -242,14 +243,19 @@ export const buildApp = async (): Promise<FastifyInstance> => {
   await app.register(studioRoutes, { prefix: `${API_PREFIX}/studio` });
   await app.register(launchRoutes, { prefix: `${API_PREFIX}/launch` });
   await app.register(profileRoutes, { prefix: `${API_PREFIX}/profile` });
-  await app.register(brainRoutes, { prefix: `${API_PREFIX}/brain` });
+  // await app.register(brainRoutes, { prefix: `${API_PREFIX}/brain` });
   await app.register(videoDnaRoutes, { prefix: `${API_PREFIX}/video-dna` });
   await app.register(integrationRoutes, {
     prefix: `${API_PREFIX}/integrations`,
   });
   await app.register(creditRoutes, { prefix: `${API_PREFIX}/credits` });
   await app.register(notesRoutes, { prefix: `${API_PREFIX}/notes` });
-  await app.register(dataDeletionRoutes, { prefix: `${API_PREFIX}/data-deletion` });
+  await app.register(dataDeletionRoutes, {
+    prefix: `${API_PREFIX}/data-deletion`,
+  });
+  await app.register(deepAnalysisRoutes, {
+    prefix: `${API_PREFIX}/deep-analysis`,
+  });
 
   // ── Lifecycle / error handlers ─────────────────────────────────────────────
   app.setNotFoundHandler((req, reply) => {

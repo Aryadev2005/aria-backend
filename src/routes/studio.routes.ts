@@ -2,6 +2,8 @@ import { FastifyInstance } from "fastify";
 import * as ctrl from "../controllers/studio.controller";
 import { authenticateFirebase } from "../middleware/auth.middleware";
 import { requireCredits } from "../middleware/credits.middleware";
+// At the top, add the import:
+import { streamDeepAnalysis } from "../controllers/deepAnalysis.controller";
 
 export default async function studioRoutes(app: FastifyInstance) {
   const auth = { preHandler: [authenticateFirebase] };
@@ -177,5 +179,27 @@ export default async function studioRoutes(app: FastifyInstance) {
       },
     },
     ctrl.learnFromEdit as any,
+  );
+
+  // POST /api/v1/studio/deep-analysis/stream
+  app.post(
+    "/deep-analysis/stream",
+    {
+      preHandler: [authenticateFirebase],
+      schema: {
+        body: {
+          type: "object",
+          required: ["topic"],
+          properties: {
+            topic: { type: "string", minLength: 2, maxLength: 300 },
+            platform: { type: "string" },
+            niche: { type: "string" },
+            contentType: { type: "string" },
+            angle: { type: "string" },
+          },
+        },
+      },
+    },
+    streamDeepAnalysis as any,
   );
 }
