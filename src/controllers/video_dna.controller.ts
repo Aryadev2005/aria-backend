@@ -5,6 +5,7 @@ import { cache } from "../config/redis";
 import { success, errors } from "../utils/response";
 import { logger } from "../utils/logger";
 import { debitCredits } from "../services/credits.service";
+import { YoutubeTranscript } from "youtube-transcript";
 import { User } from "../types";
 import {
   computeVideoDNAReport,
@@ -103,70 +104,88 @@ const formatDate = (iso: string): string => {
 //   Fitness:    2–4%      (India baseline)
 // ─────────────────────────────────────────────────────────────────────────────
 
-const deriveNicheFromVideo = (categoryId: string, title: string): string => {
-  const t = (title || "").toLowerCase();
+const deriveNicheFromVideo = (
+  categoryId: string,
+  title: string,
+  transcript: string = "",
+): string => {
+  // Combine title + first 500 chars of transcript for matching.
+  // Title gets 3x weight by repeating it — it's the creator's intentional signal.
+  // Transcript fills gaps where the title is ambiguous or misleading.
+  const t = (
+    `${title} ${title} ${title} ${transcript.slice(0, 500)}`
+  ).toLowerCase();
 
   // Title keyword map — ordered from MOST to LEAST specific
   // Each array entry: [regex, niche string matching NICHE_DIFFICULTY_MAP keys]
   const KEYWORD_NICHE_MAP: Array<[RegExp, string]> = [
-    // Finance — must be checked before "business" to avoid mis-classification
+
+    // ── COMPOUND CONTEXT GUARDS (checked first — prevent false positives) ────
+    // These catch words that exist in multiple niches and need context to classify.
+    // "diet" alone = fitness. "diet + economy/consumer/market/coke" = NOT fitness.
+    // "health" alone = health. "health + economy/gdp/policy" = NOT health.
+    [/\b(diet\s+\w+\s+(economy|market|consumer|spending|paradox|india|gdp|policy))\b/, "finance"],
+    [/\b((economy|economic|gdp|inflation|rbi|market)\s+\w*\s*(diet|food|health))\b/,   "finance"],
+
+    // ── Finance — checked FIRST and most thoroughly ───────────────────────────
     [/\b(stock market|mutual fund|sip|nifty|sensex|ipo|demat|zerodha|groww|smallcase|portfolio|dividend|equity)\b/, "stock market"],
-    [/\b(crypto|bitcoin|ethereum|web3|nft|defi|blockchain)\b/,                                                       "crypto"],
-    [/\b(personal finance|financial planning|budget|savings|expense|emi|loan|insurance|tax|itr|income tax)\b/,       "personal finance"],
-    [/\b(invest|investing|investment|wealth|passive income|financial freedom|retire early|fire movement)\b/,         "investing"],
-    [/\b(finance|money|₹|rupee|paisa|lakh|crore|earn money|make money online)\b/,                                    "finance"],
+    [/\b(crypto|bitcoin|ethereum|web3|nft|defi|blockchain)\b/,                         "crypto"],
+    [/\b(personal finance|financial planning|budget|savings|expense|emi|loan|insurance|tax|itr|income tax)\b/, "personal finance"],
+    [/\b(invest|investing|investment|passive income|financial freedom|retire early)\b/, "investing"],
+    [/\b(economy|economic|economics|gdp|inflation|recession|rbi|monetary policy|fiscal|trade deficit|current account)\b/, "finance"],
+    [/\b(consumer behaviour|consumer behavior|consumer spending|purchasing power|demand supply)\b/, "finance"],
+    [/\b(paradox|behavioral economics|nudge theory|price elasticity|market failure|externality)\b/, "finance"],
+    [/\b(finance|money|₹|rupee|paisa|lakh|crore|earn money|make money online|wealth)\b/, "finance"],
 
-    // Tech — before "education" to avoid tutorial mis-classification
-    [/\b(iphone|samsung|oneplus|pixel|smartphone|unboxing|unbox|review gadget|tech review)\b/,                       "tech"],
-    [/\b(coding|programming|developer|python|javascript|react|node|sql|api|github|leetcode)\b/,                      "coding"],
-    [/\b(ai tool|chatgpt|claude|gemini|artificial intelligence|machine learning|llm)\b/,                              "tech"],
-    [/\b(laptop|pc|gpu|processor|computer|hardware|software|app review)\b/,                                          "tech"],
-    [/\b(saas|startup|product hunt|build in public)\b/,                                                              "saas"],
+    // ── Tech ──────────────────────────────────────────────────────────────────
+    [/\b(iphone|samsung|oneplus|pixel|smartphone|unboxing|unbox|gadget|tech review)\b/, "tech"],
+    [/\b(coding|programming|developer|python|javascript|react|node|sql|api|github|leetcode)\b/, "coding"],
+    [/\b(ai tool|chatgpt|claude|gemini|artificial intelligence|machine learning|llm)\b/, "tech"],
+    [/\b(laptop|pc|gpu|processor|computer|hardware|software|app review)\b/,            "tech"],
+    [/\b(saas|startup|product hunt|build in public)\b/,                                "saas"],
 
-    // Gaming — very specific, rarely mis-classified
+    // ── Gaming ────────────────────────────────────────────────────────────────
     [/\b(gaming|gameplay|walkthrough|playthrough|minecraft|valorant|pubg|bgmi|free fire|gta|roblox|esports|stream)\b/, "gaming"],
 
-    // Education
-    [/\b(upsc|ias|ips|neet|jee|cat|gate|ssc|bank exam|study|lecture|class \d|ncert)\b/,                              "education"],
-    [/\b(learn|tutorial|how to|explained|beginners guide|course|certification)\b/,                                   "education"],
+    // ── Education ─────────────────────────────────────────────────────────────
+    [/\b(upsc|ias|ips|neet|jee|cat|gate|ssc|bank exam|ncert)\b/,                       "education"],
+    [/\b(learn|tutorial|how to|explained|beginners guide|course|certification|lecture)\b/, "education"],
 
-    // Health & Fitness
-    [/\b(workout|gym|exercise|bodybuilding|muscle|weight loss|fat loss|cardio|hiit|calisthenics)\b/,                  "fitness"],
-    [/\b(yoga|meditation|mindfulness|flexibility|stretching)\b/,                                                     "wellness"],
-    [/\b(diet|nutrition|protein|calories|meal prep|keto|intermittent fasting|healthy eating)\b/,                     "fitness"],
-    [/\b(doctor|medical|health tips|disease|symptoms|treatment|mental health|therapy|anxiety|depression)\b/,         "health"],
+    // ── Health & Fitness — single words checked AFTER compound guards above ──
+    [/\b(workout|gym|exercise|bodybuilding|muscle|weight loss|fat loss|cardio|hiit|calisthenics)\b/, "fitness"],
+    [/\b(yoga|meditation|mindfulness|flexibility|stretching)\b/,                       "wellness"],
+    // "diet" and "nutrition" only match here if NOT already matched by finance compound guards above
+    [/\b(diet plan|diet tips|nutrition plan|protein intake|calories deficit|meal prep|keto diet|intermittent fasting|healthy eating)\b/, "fitness"],
+    [/\b(doctor|medical|mental health|therapy|anxiety|depression|hospital|symptoms|treatment)\b/, "health"],
 
-    // Food
-    [/\b(recipe|cook|cooking|baking|food vlog|street food|restaurant|taste test|mukbang|food review)\b/,              "food"],
-    [/\b(biryani|curry|dal|roti|sabzi|indian food|desi food|chai|snack)\b/,                                           "food"],
+    // ── Food ──────────────────────────────────────────────────────────────────
+    [/\b(recipe|cook|cooking|baking|food vlog|street food|restaurant|taste test|mukbang|food review)\b/, "food"],
+    [/\b(biryani|curry|dal|roti|sabzi|indian food|desi food|chai|snack)\b/,            "food"],
 
-    // Beauty & Fashion
-    [/\b(makeup|skincare|foundation|lipstick|eyeshadow|beauty routine|get ready with me|grwm beauty)\b/,              "beauty"],
-    [/\b(fashion|outfit|ootd|lookbook|style|clothing|haul fashion|thrift)\b/,                                         "fashion"],
-    [/\b(hair|haircut|hairstyle|hair care|hair color)\b/,                                                             "beauty"],
+    // ── Beauty & Fashion ──────────────────────────────────────────────────────
+    [/\b(makeup|skincare|foundation|lipstick|eyeshadow|beauty routine|get ready with me)\b/, "beauty"],
+    [/\b(fashion|outfit|ootd|lookbook|style|clothing|haul fashion|thrift)\b/,          "fashion"],
+    [/\b(hair|haircut|hairstyle|hair care|hair color)\b/,                              "beauty"],
 
-    // Travel
-    [/\b(travel|trip|vlog trip|tour|explore|destination|hotel review|flight review|backpacking|road trip)\b/,         "travel"],
-    [/\b(goa|kerala|rajasthan|himachal|uttarakhand|ladakh|kashmir|bali|thailand|europe trip|dubai vlog)\b/,           "travel"],
+    // ── Travel ────────────────────────────────────────────────────────────────
+    [/\b(travel|trip|vlog trip|tour|explore|destination|hotel review|flight review|backpacking|road trip)\b/, "travel"],
+    [/\b(goa|kerala|rajasthan|himachal|uttarakhand|ladakh|kashmir|bali|thailand|europe trip|dubai vlog)\b/, "travel"],
 
-    // Business & Entrepreneurship
-    [/\b(entrepreneur|startup|business idea|side hustle|freelance|agency|ecommerce|amazon fba|dropshipping)\b/,      "entrepreneurship"],
-    [/\b(marketing|digital marketing|seo|social media marketing|ads|branding|sales)\b/,                              "marketing"],
-    [/\b(productivity|time management|morning routine|habit|goal setting|self improvement|personal development)\b/,  "business"],
+    // ── Business & Entrepreneurship ───────────────────────────────────────────
+    [/\b(entrepreneur|startup|business idea|side hustle|freelance|agency|ecommerce|amazon fba|dropshipping)\b/, "entrepreneurship"],
+    [/\b(marketing|digital marketing|seo|social media marketing|ads|branding|sales)\b/, "marketing"],
+    [/\b(productivity|time management|morning routine|habit|goal setting|self improvement)\b/, "business"],
 
-    // Entertainment
-    [/\b(comedy|funny|meme|roast|prank|stand.?up|sketch|skit|reaction)\b/,                                           "comedy"],
-    [/\b(bollywood|movie review|web series|netflix|amazon prime|ott|film review|cinema)\b/,                           "entertainment"],
-    [/\b(music|song|singer|rap|hip hop|cover song|album|playlist|music video)\b/,                                     "music"],
-    [/\b(cricket|ipl|football|kabaddi|sports news|match highlights|athlete)\b/,                                       "sports"],
+    // ── Entertainment ─────────────────────────────────────────────────────────
+    [/\b(comedy|funny|meme|roast|prank|stand.?up|sketch|skit|reaction)\b/,             "comedy"],
+    [/\b(bollywood|movie review|web series|netflix|amazon prime|ott|film review)\b/,   "entertainment"],
+    [/\b(music|song|singer|rap|hip hop|cover song|album|playlist|music video)\b/,      "music"],
+    [/\b(cricket|ipl|football|kabaddi|sports news|match highlights|athlete)\b/,        "sports"],
 
-    // Spirituality
-    [/\b(bhajan|kirtan|spiritual|god|prayer|mandir|temple|astrology|vastu|meditation spiritual)\b/,                   "spirituality"],
-
-    // News
-    [/\b(news|breaking|current affairs|politics|government|election|parliament|modi|rahul|bjp|congress)\b/,           "news"],
+    // ── Spirituality & News ───────────────────────────────────────────────────
+    [/\b(bhajan|kirtan|spiritual|god|prayer|mandir|temple|astrology|vastu)\b/,         "spirituality"],
+    [/\b(news|breaking|current affairs|politics|government|election|parliament)\b/,    "news"],
   ];
-
   for (const [regex, detectedNiche] of KEYWORD_NICHE_MAP) {
     if (regex.test(t)) return detectedNiche;
   }
@@ -324,13 +343,63 @@ const fetchYouTubeData = async (videoId: string): Promise<any> => {
   await cache.set(cacheKey, data, 7200);
   return data;
 };
+// ─────────────────────────────────────────────────────────────────────────────
+// TRANSCRIPT FETCHER
+// Uses youtube-transcript (no API key needed — uses YouTube's auto-captions).
+// Returns first 3000 chars of transcript text for niche detection + signal extraction.
+// Fails silently — transcript is supplementary, not blocking.
+// ─────────────────────────────────────────────────────────────────────────────
 
+const fetchTranscript = async (videoId: string): Promise<string> => {
+  const cacheKey = `yt_transcript:${videoId}`;
+
+  try {
+    const cached = await cache.get(cacheKey) as string | null;
+    if (cached) return cached;
+
+    // Try English first, fall back to Hindi, then any available
+    let transcriptItems: any[] = [];
+    try {
+      transcriptItems = await YoutubeTranscript.fetchTranscript(videoId, { lang: "en" });
+    } catch {
+      try {
+        transcriptItems = await YoutubeTranscript.fetchTranscript(videoId, { lang: "hi" });
+      } catch {
+        transcriptItems = await YoutubeTranscript.fetchTranscript(videoId);
+      }
+    }
+
+    if (!transcriptItems?.length) return "";
+
+    // Join all text, collapse whitespace, take first 3000 chars
+    const fullText = transcriptItems
+      .map((t: any) => t.text || "")
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 3000);
+
+    // Cache for 24 hours — transcripts don't change
+    await cache.set(cacheKey, fullText, 86400);
+    return fullText;
+
+  } catch (err: any) {
+    // Transcript unavailable = private video, no captions, regional block
+    // This is normal — fail silently
+    logger.info({ videoId, reason: err.message }, "Transcript unavailable — continuing without it");
+    return "";
+  }
+};
 // ─────────────────────────────────────────────────────────────────────────────
 // SIGNAL EXTRACTION PROMPT
 // Strict: AI extracts bounded integers only. No scores. No user-profile bias.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const buildSignalExtractionPrompt = (videoData: any, detectedNiche: string): string => {
+const buildSignalExtractionPrompt = (
+  videoData: any,
+  detectedNiche: string,
+  transcript: string = "",
+): string => {
   return `You are ARIA — India's creator intelligence engine. Extract raw signals from this YouTube video.
 
 CRITICAL RULES:
@@ -352,6 +421,10 @@ Description preview (first 400 chars): "${videoData.description.slice(0, 400)}"
 Has chapters (0:00 timestamps): ${videoData.hasChapters > 1 ? "YES" : "NO"}
 Tag count: ${videoData.tagCount}
 Detected niche: ${detectedNiche}
+${transcript
+  ? `\nTRANSCRIPT PREVIEW (first 2000 chars of spoken content — use this for hook, depth, and shorts analysis):\n"${transcript.slice(0, 2000)}"`
+  : "\nTRANSCRIPT: Not available — evaluate from title/description only."
+}
 
 SIGNAL DEFINITIONS:
 
@@ -681,25 +754,26 @@ export const analyseVideo = async (
   }
 
   try {
-    // ── PHASE 1: PARALLEL — YouTube fetch + user profile fetch ────────────────
+    // ── PHASE 1: PARALLEL — YouTube fetch + user profile fetch + transcript ──
     // These have zero dependency on each other. Run simultaneously.
-    // YouTube is the critical path; user profile is supplementary.
+    // YouTube is the critical path; user profile and transcript are supplementary.
     logger.info({ videoId, userId: user.id }, "Video DNA v4 analysis started");
 
-    const [videoDataResult, fullUserResult] = await Promise.allSettled([
+    const [videoDataResult, fullUserResult, transcriptResult] = await Promise.allSettled([
       fetchYouTubeData(videoId),
       prisma.users.findUnique({
         where:  { id: user.id },
         select: {
-          archetype:       true,
-          niches:          true,
-          primary_platform:true,
-          follower_range:  true,
-          engagement_rate: true,
-          health_score:    true,
-          tone_profile:    true,
+          archetype:        true,
+          niches:           true,
+          primary_platform: true,
+          follower_range:   true,
+          engagement_rate:  true,
+          health_score:     true,
+          tone_profile:     true,
         },
       }),
+      fetchTranscript(videoId),  // ← runs in parallel, fails silently
     ]);
 
     // YouTube is non-negotiable — fail if it failed
@@ -713,18 +787,28 @@ export const analyseVideo = async (
     }
 
     const videoData = videoDataResult.value;
-    // User profile is supplementary — silent fallback if DB was slow
     const fullUser  = fullUserResult.status === "fulfilled"
       ? fullUserResult.value
       : null;
+    const transcript = transcriptResult.status === "fulfilled"
+      ? transcriptResult.value
+      : "";
 
     // ── PHASE 2: Niche derivation + Signal extraction ─────────────────────────
     // Niche comes from the VIDEO — not the user profile.
-    const detectedNiche = deriveNicheFromVideo(videoData.categoryId, videoData.videoTitle);
+    const detectedNiche = deriveNicheFromVideo(
+      videoData.categoryId,
+      videoData.videoTitle,
+      transcript,  // ← pass transcript for improved niche detection
+    );
 
     logger.info({ videoId, detectedNiche }, "Niche derived from video");
 
-    const extractionPrompt = buildSignalExtractionPrompt(videoData, detectedNiche);
+    const extractionPrompt = buildSignalExtractionPrompt(
+      videoData,
+      detectedNiche,
+      transcript,  // ← pass transcript for transcript-based signal extraction
+    );
     const { signals: rawSignals, usedFallback: signalFallback } =
       await extractSignals(extractionPrompt);
 
