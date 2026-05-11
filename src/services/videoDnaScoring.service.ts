@@ -234,50 +234,66 @@ const FORMAT_WEIGHTS: Record<VideoFormat, FormatWeights> = {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const NICHE_DIFFICULTY_MAP: Record<string, number> = {
-  // Finance / Business — lurker audience, very low natural ER
-  'finance':           1.25,
-  'personal finance':  1.25,
-  'investing':         1.25,
-  'stock market':      1.25,
-  'crypto':            1.20,
-  'saas':              1.20,
-  'b2b':               1.20,
-  'business':          1.20,
-  'entrepreneurship':  1.15,
-  'marketing':         1.15,
-  // Education / Tech — informed audience, reads but rarely engages
-  'education':         1.15,
-  'coding':            1.15,
-  'programming':       1.15,
-  'tech':              1.10,
-  'technology':        1.10,
-  'science':           1.10,
-  'history':           1.10,
-  // General / Lifestyle — baseline, no adjustment
-  'fitness':           1.00,
-  'health':            1.00,
-  'wellness':          1.00,
-  'travel':            1.00,
-  'food':              1.00,
-  'cooking':           1.00,
-  'fashion':           1.00,
-  'beauty':            1.00,
-  'diy':               1.00,
-  'photography':       1.00,
-  // Entertainment — superfan audience, naturally high ER
-  'vlogs':             0.90,
-  'lifestyle vlog':    0.90,
-  'comedy':            0.80,
-  'entertainment':     0.80,
-  'gaming':            0.80,
-  'music':             0.85,
-  'dance':             0.80,
-  'memes':             0.75,
-  'k-pop':             0.75,
-  'reaction':          0.80,
-  'prank':             0.75,
-  'bollywood':         0.85,
-  'cricket':           0.85,
+  // ── Finance cluster — lurker audience, 1.2–2.5% natural ER, high CPM ──────
+  // These niches are hardest — users watch but rarely engage. Boost heavily.
+  'finance':              1.35,
+  'personal finance':     1.35,
+  'investing':            1.35,
+  'investment':           1.35,
+  'stock market':         1.40,  // most passive audience on YouTube
+  'crypto':               1.25,
+  'saas':                 1.25,
+  'b2b':                  1.25,
+  'business':             1.20,
+  'entrepreneurship':     1.15,
+  'marketing':            1.15,
+  'news':                 1.20,  // passive consumption, rarely engages
+  'politics':             1.20,
+
+  // ── Education / Tech — informed lurker audience, 2–4% ER ─────────────────
+  'education':            1.15,
+  'coding':               1.20,
+  'programming':          1.20,
+  'tech':                 1.10,
+  'technology':           1.10,
+  'science':              1.10,
+  'history':              1.10,
+  'automotive':           1.10,
+
+  // ── Baseline niches — India average, 2–4% ER ─────────────────────────────
+  'fitness':              1.00,
+  'health':               1.00,
+  'wellness':             1.00,
+  'travel':               1.00,
+  'food':                 1.00,
+  'cooking':              1.00,
+  'fashion':              0.95,
+  'beauty':               0.95,
+  'diy':                  1.00,
+  'photography':          1.00,
+  'spirituality':         1.05,
+  'lifestyle':            0.95,
+  'pets':                 1.00,
+  'sports':               0.95,
+
+  // ── High-engagement niches — superfan communities, 4–8% ER ───────────────
+  'vlogs':                0.90,
+  'lifestyle vlog':       0.90,
+  'comedy':               0.75,   // highest raw ER on YouTube India
+  'entertainment':        0.80,
+  'gaming':               0.80,   // 3–6% ER, superfan community
+  'music':                0.85,
+  'dance':                0.80,
+  'memes':                0.70,
+  'reaction':             0.80,
+  'prank':                0.75,
+  'bollywood':            0.85,
+  'cricket':              0.85,
+
+  // ── New high-engagement niches (2025–2026 data) ───────────────────────────
+  'ai tools':             0.85,   // 7–12% ER, passionate early-adopter audience
+  'sustainability':       0.90,   // cause-driven, 4–8% ER
+  'mental health':        0.90,   // high emotional engagement
 };
 
 export const getNicheDifficultyCoefficient = (niche: string): number => {
