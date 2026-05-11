@@ -371,15 +371,18 @@ const fetchTranscript = async (videoId: string): Promise<string> => {
 
     if (!transcriptItems?.length) return "";
 
-    // Join all text, collapse whitespace, take first 3000 chars
+    // Timestamped format: "[0:45] text" — gives AI timing context for Shorts
     const fullText = transcriptItems
-      .map((t: any) => t.text || "")
+      .filter((t: any) => t.text?.trim())
+      .map((t: any) => {
+        const secs = Math.round((t.offset || 0) / 1000);
+        const m    = Math.floor(secs / 60);
+        const s    = secs % 60;
+        return `[${m}:${String(s).padStart(2, "0")}] ${(t.text || "").replace(/\s+/g, " ").trim()}`;
+      })
       .join(" ")
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 3000);
+      .slice(0, 3500);
 
-    // Cache for 24 hours — transcripts don't change
     await cache.set(cacheKey, fullText, 86400);
     return fullText;
 
@@ -422,8 +425,8 @@ Has chapters (0:00 timestamps): ${videoData.hasChapters > 1 ? "YES" : "NO"}
 Tag count: ${videoData.tagCount}
 Detected niche: ${detectedNiche}
 ${transcript
-  ? `\nTRANSCRIPT PREVIEW (first 2000 chars of spoken content — use this for hook, depth, and shorts analysis):\n"${transcript.slice(0, 2000)}"`
-  : "\nTRANSCRIPT: Not available — evaluate from title/description only."
+  ? `\nTRANSCRIPT WITH TIMESTAMPS (format: [minutes:seconds] spoken text — USE THESE TIMESTAMPS for shortsOpportunities start/end values):\n"${transcript.slice(0, 2500)}"\n\nIMPORTANT: When suggesting shortsOpportunities, look at the timestamps in the transcript above. Pick start/end values that correspond to a complete spoken idea or high-energy moment. Convert [m:ss] to total seconds for the start/end fields.`
+  : "\nTRANSCRIPT: Not available — estimate shorts timestamps based on video duration (${videoData.durationSeconds}s). Spread suggestions across early, middle, and late sections of the video."
 }
 
 SIGNAL DEFINITIONS:
@@ -463,8 +466,14 @@ QUALITATIVE OUTPUTS (no length limits):
 - nextVideoReason: One sentence explaining why that next video would perform well in ${detectedNiche}.
 - benchmarkAnalysis: 1-2 sentences comparing this video to top ${detectedNiche} performers on YouTube India.
 - benchmarkStats: Array of 2-3 short stat strings like "Top 20% hook score for ${detectedNiche}".
-- shortsOpportunities: Array of 0-3 short-clip opportunities. IMPORTANT: Only suggest if the video duration > 180 seconds. Each object must have: start (integer seconds), end (integer seconds), caption (text for the Short), viralScore (integer 1-100, realistic: 45-70 for most, 80+ only for genuinely viral moments), reason (why this moment is clipworthy). If video is under 3 minutes or has no clear clip moments, return empty array [].
-
+- shortsOpportunities: Identify 1-3 moments from this video that would make excellent YouTube Shorts (15–90 seconds). Rules:
+  * ONLY suggest if video duration is over 180 seconds. Video duration here is: ${videoData.durationSeconds} seconds.
+  * Each clip must be 15–90 seconds long (end - start must be between 15 and 90).
+  * start and end MUST be plain integers (no quotes, no strings). Example: "start": 45, NOT "start": "45".
+  * start must be less than end. end must be less than ${videoData.durationSeconds}.
+  * viralScore must be a plain integer 1-100. Realistic range: 45-70 for most clips, 80+ only for exceptional moments.
+  * If transcript is available, use it to find the most quotable or high-energy spoken moment.
+  * If no clear clip moments exist, return [].
 RESPOND ONLY with this exact JSON (no markdown, no text before or after):
 {
   "titleCuriosity": <1-10>,
@@ -491,7 +500,9 @@ RESPOND ONLY with this exact JSON (no markdown, no text before or after):
   "nextVideoReason": "<string>",
   "benchmarkAnalysis": "<string>",
   "benchmarkStats": ["<string>", "<string>"],
-  "shortsOpportunities": []
+  "shortsOpportunities": [
+    { "start": 45, "end": 112, "caption": "Example caption for the Short #shorts #niche", "viralScore": 62, "reason": "High-energy explanation of core concept" }
+  ]
 }`;
 };
 
@@ -637,7 +648,7 @@ const extractNarrative = async (
         groq().chat.completions.create(
           {
             model:       MODEL,
-            max_tokens:  600,
+            max_tokens:  2000,
             temperature: 0.3,
             messages: [
               {
@@ -679,40 +690,61 @@ const validateShortsOpportunities = (
   opportunities: any[],
   videoDurationSeconds: number,
 ): any[] => {
-  // Videos under 3 minutes can't produce meaningful shorts
+  // Videos under 3 minutes cannot produce meaningful clips
   if (!videoDurationSeconds || videoDurationSeconds < 180) return [];
   if (!Array.isArray(opportunities) || opportunities.length === 0) return [];
 
-  const MIN_CLIP_LENGTH = 15;  // seconds — shorter is unusable
-  const MAX_CLIP_LENGTH = 60;  // seconds — YouTube Shorts limit
+  const MIN_CLIP_LENGTH = 15;   // seconds — shorter is unusable as a Short
+  const MAX_CLIP_LENGTH = 180;  // seconds — YouTube Shorts limit is now 3 minutes (180s)
 
-  return opportunities
-    .filter((opp) => {
-      if (typeof opp?.start !== "number" || typeof opp?.end !== "number") return false;
-      const start      = Math.round(opp.start);
-      const end        = Math.round(opp.end);
+  const coerceToNumber = (val: any): number | null => {
+    // Handle AI returning strings instead of integers e.g. "start": "120"
+    if (typeof val === "number" && isFinite(val)) return val;
+    if (typeof val === "string") {
+      const parsed = parseFloat(val);
+      if (!isNaN(parsed) && isFinite(parsed)) return parsed;
+    }
+    return null;
+  };
+
+  const validated = opportunities
+    .map((opp) => {
+      // Coerce — never reject on type alone
+      const rawStart = coerceToNumber(opp?.start);
+      const rawEnd   = coerceToNumber(opp?.end);
+
+      if (rawStart === null || rawEnd === null) return null;
+
+      const start      = Math.round(rawStart);
+      const end        = Math.round(rawEnd);
       const clipLength = end - start;
 
-      // Validate timestamp sanity
-      if (start < 0)                           return false;
-      if (end <= start)                        return false;
-      if (clipLength < MIN_CLIP_LENGTH)        return false;
-      if (clipLength > MAX_CLIP_LENGTH)        return false;
-      if (start >= videoDurationSeconds)       return false;
-      if (end   >  videoDurationSeconds + 5)  return false; // 5s tolerance
+      // Hard sanity checks
+      if (start < 0)                          return null;
+      if (end <= start)                       return null;
+      if (clipLength < MIN_CLIP_LENGTH)       return null;
+      if (clipLength > MAX_CLIP_LENGTH)       return null;
+      if (start >= videoDurationSeconds)      return null;
+      if (end > videoDurationSeconds + 10)    return null; // 10s tolerance for rounding
 
-      return true;
+      const rawViralScore = coerceToNumber(opp?.viralScore);
+      const viralScore    = rawViralScore !== null
+        ? Math.min(100, Math.max(1, Math.round(rawViralScore)))
+        : 50;
+
+      return {
+        start,
+        end:        Math.min(videoDurationSeconds, end),
+        caption:    String(opp?.caption  || "").trim().slice(0, 250),
+        viralScore,
+        reason:     String(opp?.reason   || "").trim().slice(0, 300),
+      };
     })
-    .map((opp) => ({
-      start:      Math.max(0, Math.round(opp.start)),
-      end:        Math.min(videoDurationSeconds, Math.round(opp.end)),
-      caption:    String(opp.caption    || "").slice(0, 200),
-      viralScore: Math.min(100, Math.max(1, Math.round(opp.viralScore ?? 50))),
-      reason:     String(opp.reason     || "").slice(0, 300),
-    }))
-    .slice(0, 3); // max 3 opportunities
-};
+    .filter((opp): opp is NonNullable<typeof opp> => opp !== null)
+    .slice(0, 3);
 
+  return validated;
+};
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN HANDLER — POST /api/v1/video-dna/analyse
 //
