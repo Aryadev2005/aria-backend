@@ -9,7 +9,9 @@ import { User } from "../types";
 import { debitCredits } from "../services/credits.service";
 
 /**
- * Get main analytics dashboard with ARIA persona growth map
+ * GET /api/v1/analytics/dashboard
+ * Returns ARIA persona growth map. Platform-aware: reads youtube_scraped_summary
+ * for YouTube-primary users, scraped_summary for Instagram-primary users.
  */
 export const getDashboard = async (
   req: FastifyRequest,
@@ -23,15 +25,42 @@ export const getDashboard = async (
     const dashboard = await cache.getOrSet(
       cacheKey,
       async () => {
-        if (!user.archetype) {
+        // ── Load full user row to get both summary blobs ──────────────────
+        const dbUser = await (prisma.users as any).findUnique({
+          where: { id: user.id },
+          select: {
+            primary_platform: true,
+            scraped_summary: true,
+            youtube_scraped_summary: true,
+            niches: true,
+            follower_range: true,
+            engagement_rate: true,
+            creator_intent: true,
+            archetype: true,
+            tone_profile: true,
+          },
+        });
+
+        const platform = dbUser?.primary_platform || user.primary_platform || "instagram";
+        const isYouTube = platform === "youtube";
+
+        // Pick the correct data blob for this platform
+        const scrapedData = isYouTube
+          ? (dbUser?.youtube_scraped_summary ?? null)
+          : (dbUser?.scraped_summary ?? user.scraped_summary ?? null);
+
+        const effectiveUser = { ...user, ...(dbUser || {}) };
+
+        // ── Archetype detection (only if not yet set) ─────────────────────
+        if (!effectiveUser.archetype) {
           let archetypeResult: any;
           try {
             archetypeResult = await groqService.detectArchetype({
-              niche: user.niches?.[0] || "fashion",
-              platform: user.primary_platform || "instagram",
-              followerRange: user.follower_range || "0-1K",
-              creatorIntent: user.creator_intent || "general",
-              scrapedData: user.scraped_summary,
+              niche: effectiveUser.niches?.[0] || "general",
+              platform,
+              followerRange: effectiveUser.follower_range || "0-1K",
+              creatorIntent: effectiveUser.creator_intent || "general",
+              scrapedData,
             });
           } catch (e) {
             logger.warn({ e }, "Groq detectArchetype failed");
@@ -44,6 +73,7 @@ export const getDashboard = async (
             };
           }
 
+          // Persist archetype (fire-and-forget)
           prisma.users
             .update({
               where: { id: user.id },
@@ -58,18 +88,19 @@ export const getDashboard = async (
             })
             .catch((err) => logger.error({ err }, "Failed to save archetype"));
 
-          user.archetype = archetypeResult.archetype;
-          user.tone_profile = archetypeResult.toneProfile;
+          effectiveUser.archetype = archetypeResult.archetype;
+          effectiveUser.tone_profile = archetypeResult.toneProfile;
         }
 
+        // ── Full persona growth map ────────────────────────────────────────
         try {
           return await groqService.fullPersonaGrowthMap({
-            niche: user.niches?.[0] || "fashion",
-            platform: user.primary_platform || "instagram",
-            followerRange: user.follower_range || "0-1K",
-            creatorIntent: user.creator_intent || "general",
-            scrapedData: user.scraped_summary,
-            engagementRate: user.engagement_rate || 0,
+            niche: effectiveUser.niches?.[0] || "general",
+            platform,
+            followerRange: effectiveUser.follower_range || "0-1K",
+            creatorIntent: effectiveUser.creator_intent || "general",
+            scrapedData,                          // ← correct blob for platform
+            engagementRate: effectiveUser.engagement_rate || 0,
           });
         } catch (e) {
           logger.warn({ e }, "Groq fullPersonaGrowthMap failed");

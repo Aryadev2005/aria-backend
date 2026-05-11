@@ -4,7 +4,7 @@ import { success, errors } from "../utils/response";
 import { logger } from "../utils/logger";
 import { debitCredits } from "../services/credits.service";
 import { prisma } from "../config/database";
-import { cache } from "../config/redis";
+import { cache, CacheKeys } from "../config/redis";
 import { User } from "../types";
 import * as creatorAnalyticsSvc from "../services/creator_analytics.service";
 // GET /api/v1/profile/analytics
@@ -86,7 +86,7 @@ export interface UpdatePlatformBody {
   handle: string;
 }
 
-// PATCH /api/v1/profile/platform
+// PATCH /api/v1/profile/platform  — existing endpoint, unchanged behaviour
 export const updatePlatform = async (
   req: FastifyRequest<{ Body: UpdatePlatformBody }>,
   reply: FastifyReply,
@@ -117,13 +117,7 @@ export const updatePlatform = async (
       });
     }
 
-    // Clear all caches for this user
-    await Promise.allSettled([
-      cache.del(`profile:analytics:${user.id}`),
-      cache.del(`brain:mem:${user.id}`),
-      cache.del(`agent:memory:${user.id}`),
-    ]);
-
+    await bustAllUserCaches(user.id);
     logger.info({ userId: user.id, platform, handle }, "Platform updated");
     return success(reply, { updated: true, platform, handle });
   } catch (err) {
@@ -131,6 +125,142 @@ export const updatePlatform = async (
     return errors.internal(reply);
   }
 };
+
+// ── PATCH /api/v1/profile/switch-platform ─────────────────────────────────────
+// User-facing platform switch. Requirements:
+//   - Both accounts must be connected in account_connections
+//   - If switching TO YouTube: youtube_scraped_summary must exist
+//   - Does NOT reset archetype/niches — restores from the target platform's
+//     stored summary so the switch is instant and data-rich
+export interface SwitchPlatformBody {
+  platform: "instagram" | "youtube";
+}
+
+export const switchPrimary = async (
+  req: FastifyRequest<{ Body: SwitchPlatformBody }>,
+  reply: FastifyReply,
+) => {
+  const user = req.user as User;
+  const { platform } = req.body;
+
+  if (platform !== "instagram" && platform !== "youtube") {
+    return errors.badRequest(reply, "platform must be 'instagram' or 'youtube'");
+  }
+
+  try {
+    // ── 1. Verify both connections exist ──────────────────────────────────
+    const connections = await (prisma as any).account_connections.findMany({
+      where: { user_id: user.id },
+      select: { platform: true },
+    });
+    const connectedPlatforms = connections.map((c: any) => c.platform as string);
+
+    if (!connectedPlatforms.includes("instagram")) {
+      return reply.status(400).send({
+        success: false,
+        error: "instagram_not_connected",
+        message: "Connect your Instagram account first.",
+      });
+    }
+    if (!connectedPlatforms.includes("youtube")) {
+      return reply.status(400).send({
+        success: false,
+        error: "youtube_not_connected",
+        message: "Connect your YouTube channel first.",
+      });
+    }
+
+    // ── 2. If switching to YouTube, verify analytics have been fetched ─────
+    if (platform === "youtube") {
+      const dbUser = await (prisma as any).users.findUnique({
+        where: { id: user.id },
+        select: { youtube_scraped_summary: true },
+      });
+      if (!dbUser?.youtube_scraped_summary) {
+        return reply.status(400).send({
+          success: false,
+          error: "youtube_analytics_not_ready",
+          message:
+            "Fetch your YouTube analytics first (Settings → Integrations → Fetch Analytics) before switching.",
+        });
+      }
+    }
+
+    // ── 3. Load target platform's stored summary to restore profile fields ─
+    //    This makes the switch instant — no re-analysis needed.
+    const fullUser = await (prisma as any).users.findUnique({
+      where: { id: user.id },
+      select: {
+        scraped_summary: true,
+        youtube_scraped_summary: true,
+        niches: true,
+      },
+    });
+
+    let platformPatch: Record<string, any> = { primary_platform: platform };
+
+    if (platform === "youtube") {
+      const ytSummary = fullUser?.youtube_scraped_summary as any;
+      if (ytSummary) {
+        // Restore YouTube-specific profile fields from stored summary
+        platformPatch = {
+          ...platformPatch,
+          follower_count:   ytSummary.subscriberCount   ?? undefined,
+          follower_range:   ytSummary.followerRange      ?? undefined,
+          engagement_rate:  ytSummary.engagementRate
+            ? parseFloat(String(ytSummary.engagementRate))
+            : undefined,
+        };
+        // Restore niches from YouTube analysis if they exist
+        if (ytSummary.detectedNiches?.length) {
+          platformPatch.niches = ytSummary.detectedNiches;
+        }
+      }
+    } else {
+      // Switching back to Instagram — restore from scraped_summary
+      const igSummary = fullUser?.scraped_summary as any;
+      if (igSummary) {
+        platformPatch = {
+          ...platformPatch,
+          follower_count:  igSummary.followerCount  ?? undefined,
+          follower_range:  igSummary.followerRange  ?? undefined,
+          engagement_rate: igSummary.engagementRate
+            ? parseFloat(String(igSummary.engagementRate))
+            : undefined,
+        };
+      }
+    }
+
+    // ── 4. Persist platform switch ─────────────────────────────────────────
+    await (prisma as any).users.update({
+      where: { id: user.id },
+      data: platformPatch,
+    });
+
+    // ── 5. Bust ALL derived caches — order matters ─────────────────────────
+    await bustAllUserCaches(user.id);
+
+    logger.info({ userId: user.id, platform }, "Primary platform switched");
+    return success(reply, { switched: true, platform });
+  } catch (err) {
+    logger.error({ err, userId: user.id }, "switchPrimary failed");
+    return errors.internal(reply);
+  }
+};
+
+// ── Internal helper — bust every cache that depends on platform ────────────────
+async function bustAllUserCaches(userId: string): Promise<void> {
+  await Promise.allSettled([
+    cache.del(`profile:analytics:${userId}`),
+    cache.del(`brain:mem:${userId}`),
+    cache.del(`agent:memory:${userId}`),
+    cache.del(CacheKeys.dashboard(userId)),
+    cache.del(CacheKeys.user(userId)),
+    cache.del(`roadmap:${userId}`),
+    cache.del(`growth:${userId}`),
+    cache.del(`weekly_report:${userId}`),
+  ]);
+}
 
 // GET /api/v1/profile/creator-analytics
 export const getCreatorAnalytics = async (

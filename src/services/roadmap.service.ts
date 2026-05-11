@@ -419,47 +419,102 @@ export async function generatePersonalisedRoadmap(
     : [];
 
   // ── Build context blocks ──────────────────────────────────────────────────
+  // PLATFORM-AWARE DATA EXTRACTION
+  // Rule: if primary_platform === "youtube", read youtube_scraped_summary.
+  //       Otherwise read scraped_summary (Instagram Apify blob).
+  // Both blobs share field names where possible; YouTube-specific fields
+  // (subscriberCount, avgViewsPerVideo, topVideos, topTags) are normalised
+  // into the same variable names the rest of the prompt already uses.
 
-  // Unpack scraped_summary safely — this is the richest data source
-  const ss = (user.scraped_summary as any) || {};
-  const actualFollowers = user.follower_count || ss.followerCount || null;
+  const platform = (user.primary_platform as string) || "instagram";
+  const isYouTube = platform === "youtube";
+
+  // Pick the right summary blob
+  const rawSS = isYouTube
+    ? ((user as any).youtube_scraped_summary as any) || {}
+    : ((user.scraped_summary as any) || {});
+
+  // ── Normalise fields so downstream prompt blocks are platform-agnostic ────
+  // followers / subscriber count
+  const actualFollowers =
+    user.follower_count ||
+    rawSS.subscriberCount ||   // YouTube field
+    rawSS.followerCount ||     // Instagram field
+    rawSS.followers ||
+    null;
+
+  // engagement rate — stored as Decimal on user row, overrides summary
   const actualER = user.engagement_rate
     ? parseFloat(user.engagement_rate.toString())
+    : rawSS.engagementRate
+    ? parseFloat(String(rawSS.engagementRate))
     : null;
-  const actualPostsPerWeek = ss.postsPerWeek ?? null;
-  const avgLikes = ss.avgLikes ?? null;
-  const avgComments = ss.avgComments ?? null;
-  const avgViews = ss.avgViews ?? null;
-  const topHashtags = ss.topHashtags?.slice(0, 8) ?? [];
-  const postTypeMix = ss.postTypeMix ?? null;
-  const bestPostType = ss.bestPostType ?? null;
-  const handle = user.instagram_handle || user.youtube_handle || null;
+
+  // posts / uploads per week
+  const actualPostsPerWeek = rawSS.postsPerWeek ?? null;
+
+  // per-post averages
+  const avgLikes    = rawSS.avgLikesPerVideo  ?? rawSS.avgLikes    ?? null;
+  const avgComments = rawSS.avgCommentsPerVideo ?? rawSS.avgComments ?? null;
+  const avgViews    = rawSS.avgViewsPerVideo   ?? rawSS.avgViews    ?? null;
+
+  // tags / hashtags
+  const topHashtags = isYouTube
+    ? (rawSS.topTags?.slice(0, 8) ?? [])
+    : (rawSS.topHashtags?.slice(0, 8) ?? []);
+
+  // post type mix
+  const postTypeMix  = rawSS.postTypeMix  ?? (isYouTube ? "Videos + Shorts" : null);
+  const bestPostType = rawSS.bestPostType ?? (isYouTube ? "video" : null);
+
+  // handle (for display in prompt)
+  const handle = isYouTube
+    ? (user.youtube_handle || null)
+    : (user.instagram_handle || user.youtube_handle || null);
+
+  // YouTube-specific extras for richer context
+  const channelName       = isYouTube ? (rawSS.channelName || null) : null;
+  const totalViews        = isYouTube ? (rawSS.totalViews || null) : null;
+  const videoCount        = isYouTube ? (rawSS.videoCount || rawSS.totalPostsAnalyzed || null) : null;
+  const recentVideoTitles = isYouTube ? (rawSS.recentVideoTitles?.slice(0, 6) ?? []) : [];
+  const topVideos         = isYouTube ? (rawSS.topVideos?.slice(0, 3) ?? []) : [];
+  const channelDescription = isYouTube ? (rawSS.description || null) : null;
 
   const contextBlocks: string[] = [];
 
   // ── Block 1: Creator identity with real numbers ───────────────────────────
   contextBlocks.push(`CREATOR IDENTITY:
-- Handle: ${handle ? `@${handle}` : "not connected"}
+- Handle: ${handle ? `@${handle}` : "not connected"}${channelName ? ` (Channel: ${channelName})` : ""}
 - Archetype: ${user.archetype || "UNKNOWN"} (${user.archetype_label || "Unknown"})
-- Platform: ${user.primary_platform || "instagram"}
-- Follower count: ${actualFollowers ? actualFollowers.toLocaleString("en-IN") : user.follower_range || "unknown"}
+- Platform: ${platform}
+- ${isYouTube ? "Subscribers" : "Followers"}: ${actualFollowers ? actualFollowers.toLocaleString("en-IN") : user.follower_range || "unknown"}
 - Follower range bucket: ${user.follower_range || "unknown"}
 - Engagement rate: ${actualER !== null ? `${actualER}%` : "unknown"} ${actualER && actualER > 5 ? "(SIGNIFICANTLY above average — this is a key asset)" : actualER && actualER > 2 ? "(above average)" : ""}
-- Posts per week: ${actualPostsPerWeek !== null ? actualPostsPerWeek : "unknown"} ${actualPostsPerWeek !== null && actualPostsPerWeek < 1 ? "(⚠️ CRITICALLY LOW — less than 1 post/week)" : actualPostsPerWeek !== null && actualPostsPerWeek < 3 ? "(below ideal — should be 3-5/week)" : ""}
+- ${isYouTube ? "Uploads per week" : "Posts per week"}: ${actualPostsPerWeek !== null ? actualPostsPerWeek : "unknown"} ${actualPostsPerWeek !== null && actualPostsPerWeek < 1 ? "(⚠️ CRITICALLY LOW — less than 1 upload/week)" : actualPostsPerWeek !== null && actualPostsPerWeek < 3 ? "(below ideal — should be 3-5/week)" : ""}
 - Growth stage: ${user.growth_stage || "unknown"}
 - Creator intent: ${user.creator_intent || "grow_organically"}
 - Tone: ${user.tone_profile || "unknown"}
 - Bio: ${user.bio || "not set"}`);
 
   // ── Block 2: Raw performance numbers ─────────────────────────────────────
-  if (avgLikes !== null || avgComments !== null || avgViews !== null) {
-    contextBlocks.push(`REAL PERFORMANCE NUMBERS (from actual posts):
-- Avg likes per post: ${avgLikes?.toLocaleString("en-IN") ?? "unknown"}
-- Avg comments per post: ${avgComments?.toLocaleString("en-IN") ?? "unknown"}
+  if (avgLikes !== null || avgComments !== null || avgViews !== null || totalViews !== null) {
+    contextBlocks.push(`REAL PERFORMANCE NUMBERS (from actual ${isYouTube ? "videos" : "posts"}):
+- Avg likes per ${isYouTube ? "video" : "post"}: ${avgLikes?.toLocaleString("en-IN") ?? "unknown"}
+- Avg comments per ${isYouTube ? "video" : "post"}: ${avgComments?.toLocaleString("en-IN") ?? "unknown"}
 - Avg video views: ${avgViews?.toLocaleString("en-IN") ?? "unknown"}
-- Post type mix: ${postTypeMix ?? "unknown"}
+${totalViews ? `- Total channel views: ${totalViews.toLocaleString("en-IN")}` : ""}
+${videoCount ? `- Total videos uploaded: ${videoCount}` : ""}
+- Content type mix: ${postTypeMix ?? "unknown"}
 - Best performing format: ${bestPostType ?? "unknown"}
-- Top hashtags: ${topHashtags.length > 0 ? topHashtags.join(", ") : "none detected"}`);
+- Top ${isYouTube ? "tags" : "hashtags"}: ${topHashtags.length > 0 ? topHashtags.join(", ") : "none detected"}`);
+  }
+
+  // ── Block 2b: YouTube top videos (YouTube-only, replaces top reels) ───────
+  if (isYouTube && topVideos.length > 0) {
+    contextBlocks.push(`TOP PERFORMING VIDEOS:
+${topVideos.map((v: any, i: number) => `  ${i + 1}. "${v.title}" — ${(v.views || 0).toLocaleString("en-IN")} views, ${(v.likes || 0).toLocaleString("en-IN")} likes`).join("\n")}
+${recentVideoTitles.length > 0 ? `\nRECENT UPLOADS (titles): ${recentVideoTitles.join(" | ")}` : ""}
+${channelDescription ? `\nCHANNEL DESCRIPTION: "${channelDescription.slice(0, 200)}"` : ""}`);
   }
 
   // ── Block 3: Voice portrait ───────────────────────────────────────────────

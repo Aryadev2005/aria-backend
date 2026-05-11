@@ -15,23 +15,29 @@ import {
 } from "../services/roadmap.service";
 
 // ── Pull EVERY field the AI needs to personalise the roadmap ──────────────────
-// Missing fields here = generic output. This is the full set.
+// STRICT RULES:
+//  1. USER_SELECT must include BOTH scraped_summary AND youtube_scraped_summary
+//     so roadmap.service can pick the correct one based on primary_platform.
+//  2. Never cache-serve stale data after a platform switch — callers bust the
+//     cache before calling this controller.
+//  3. All debit calls are fire-and-forget (non-fatal on failure).
 const USER_SELECT = {
   archetype: true,
   archetype_label: true,
   primary_platform: true,
   follower_range: true,
-  follower_count: true, // ← was missing — actual number e.g. 7081
-  engagement_rate: true, // ← stored as Decimal — the 35.83 figure
+  follower_count: true,
+  engagement_rate: true,
   growth_stage: true,
   creator_intent: true,
-  scraped_summary: true, // ← full JSON blob from Apify scrape
-  aria_last_analysis: true, // ← full onboarding analysis JSON
+  scraped_summary: true,           // Instagram data blob
+  youtube_scraped_summary: true,   // ← ADDED: YouTube OAuth data blob
+  aria_last_analysis: true,
   niches: true,
-  instagram_handle: true, // ← so prompt can reference @handle
+  instagram_handle: true,
   youtube_handle: true,
-  tone_profile: true, // ← casual / educational / entertaining etc.
-  bio: true, // ← their actual IG bio
+  tone_profile: true,
+  bio: true,
 };
 
 // ── GET /api/v1/analytics/roadmap ─────────────────────────────────────────────

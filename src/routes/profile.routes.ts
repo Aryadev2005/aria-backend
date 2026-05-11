@@ -1,7 +1,10 @@
 import { FastifyInstance } from "fastify";
 import * as ctrl from "../controllers/profile.controller";
 import * as identityCtrl from "../controllers/aria_identity.controller";
-import type { UpdatePlatformBody } from "../controllers/profile.controller";
+import type {
+  UpdatePlatformBody,
+  SwitchPlatformBody,
+} from "../controllers/profile.controller";
 import { authenticateFirebase } from "../middleware/auth.middleware";
 import { requireCredits } from "../middleware/credits.middleware";
 
@@ -34,6 +37,26 @@ export default async function profileRoutes(app: FastifyInstance) {
       },
     },
     ctrl.updatePlatform,
+  );
+
+  // ── NEW: PATCH /api/v1/profile/switch-platform ────────────────────────────
+  // User-facing primary platform switch. Both accounts must be connected.
+  // YouTube requires analytics to be fetched first.
+  app.patch<{ Body: SwitchPlatformBody }>(
+    "/switch-platform",
+    {
+      ...auth,
+      schema: {
+        body: {
+          type: "object",
+          required: ["platform"],
+          properties: {
+            platform: { type: "string", enum: ["instagram", "youtube"] },
+          },
+        },
+      },
+    },
+    ctrl.switchPrimary,
   );
 
   // GET /api/v1/profile/aria-identity
