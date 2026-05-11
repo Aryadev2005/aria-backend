@@ -91,7 +91,7 @@ export const chat = async (
 
     return success(reply, {
       ...result,
-      creditsUsed: req.creditCheck?.cost ?? 0,
+      creditsUsed: req.creditCheck?.featureCharge ?? 0,
     });
   } catch (err) {
     logger.error({ err, userId: user.id }, "Agent chat controller failed");
@@ -254,7 +254,7 @@ export const chatStream = async (
         );
 
         reply.raw.write(
-          `data: ${JSON.stringify({ type: "creditsUsed", credits: req.creditCheck?.cost ?? 0 })}\n\n`,
+          `data: ${JSON.stringify({ type: "creditsUsed", credits: req.creditCheck?.featureCharge ?? 0 })}\n\n`,
         );
         reply.raw.end();
         return;

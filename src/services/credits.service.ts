@@ -208,7 +208,6 @@ export async function resetMonthlyCredits(
   userId: string,
   tier: string,
 ): Promise<void> {
-  if (tier === "free") return;
   const wallet = await prisma.credit_wallets.findUnique({
     where: { user_id: userId },
   });
@@ -231,6 +230,7 @@ export async function resetMonthlyCredits(
   } else if (tier === "max" || tier === "brand") {
     rollover = Math.max(0, currentBalance - topupCredits);
   }
+  // free and starter: rollover stays 0 (default)
   rollover = Math.max(0, rollover);
 
   const newBalance = newPlanCredits + rollover + topupCredits;
@@ -417,8 +417,9 @@ export async function debitCredits(
     });
 
     const newBalance = Number(updatedWallet.balance);
-    const planLimit =
-      PLAN_CREDITS[(updatedWallet as any).plan ?? "free"] ?? PLAN_CREDITS.free;
+    const planLimit = Number(updatedWallet.plan_credits) > 0
+      ? Number(updatedWallet.plan_credits)
+      : PLAN_CREDITS.free;
 
     // Recompute usedPct for response
     const totalGranted = Number(updatedWallet.total_granted);
@@ -482,33 +483,33 @@ export async function grantCredits(
   reason: string,
   tier?: string,
 ): Promise<void> {
-  await prisma.$transaction([
-    prisma.credit_wallets.upsert({
-      where: { user_id: userId },
-      create: {
-        user_id: userId,
-        balance: amount,
-        plan_credits: amount,
-        total_granted: amount,
-      },
-      update: {
-        balance: { increment: amount },
-        total_granted: { increment: amount },
-        ...(tier ? { plan_credits: PLAN_CREDITS[tier] ?? amount } : {}),
-        updated_at: new Date(),
-      },
-    }),
-    prisma.credit_transactions.create({
-      data: {
-        user_id: userId,
-        type: "grant",
-        amount,
-        balance_after: 0,
-        description: reason,
-        metadata: { tier },
-      },
-    }),
-  ]);
+  const updatedWallet = await prisma.credit_wallets.upsert({
+    where: { user_id: userId },
+    create: {
+      user_id: userId,
+      balance: amount,
+      plan_credits: amount,
+      total_granted: amount,
+    },
+    update: {
+      balance: { increment: amount },
+      total_granted: { increment: amount },
+      ...(tier ? { plan_credits: PLAN_CREDITS[tier] ?? amount } : {}),
+      updated_at: new Date(),
+    },
+  });
+
+  await prisma.credit_transactions.create({
+    data: {
+      user_id: userId,
+      type: "grant",
+      amount,
+      balance_after: Number(updatedWallet.balance),
+      description: reason,
+      metadata: { tier },
+    },
+  });
+
   await cache.del(`wallet:${userId}`);
   logger.info({ userId, amount, reason }, "Credits granted");
 }
@@ -522,41 +523,42 @@ export async function processTopup(
   amountInr: number,
   paymentId: string,
 ): Promise<void> {
-  await prisma.$transaction([
-    prisma.credit_wallets.update({
-      where: { user_id: userId },
-      data: {
-        balance: { increment: credits },
-        topup_credits: { increment: credits },
-        total_granted: { increment: credits },
-        updated_at: new Date(),
-      },
-    }),
-    prisma.credit_transactions.create({
-      data: {
-        user_id: userId,
-        type: "topup",
-        amount: credits,
-        balance_after: 0,
-        description: `Purchased ${credits} credits (${packId})`,
-        metadata: {
-          pack_id: packId,
-          amount_inr: amountInr,
-          payment_id: paymentId,
-        },
-      },
-    }),
-    prisma.credit_topups.create({
-      data: {
-        user_id: userId,
-        credits,
+  const updatedWallet = await prisma.credit_wallets.update({
+    where: { user_id: userId },
+    data: {
+      balance: { increment: credits },
+      topup_credits: { increment: credits },
+      total_granted: { increment: credits },
+      updated_at: new Date(),
+    },
+  });
+
+  await prisma.credit_transactions.create({
+    data: {
+      user_id: userId,
+      type: "topup",
+      amount: credits,
+      balance_after: Number(updatedWallet.balance),
+      description: `Purchased ${credits} credits (${packId})`,
+      metadata: {
+        pack_id: packId,
         amount_inr: amountInr,
         payment_id: paymentId,
-        payment_status: "completed",
-        pack_id: packId,
       },
-    }),
-  ]);
+    },
+  });
+
+  await prisma.credit_topups.create({
+    data: {
+      user_id: userId,
+      credits,
+      amount_inr: amountInr,
+      payment_id: paymentId,
+      payment_status: "completed",
+      pack_id: packId,
+    },
+  });
+
   await cache.del(`wallet:${userId}`);
   logger.info({ userId, packId, credits }, "Top-up processed");
 }

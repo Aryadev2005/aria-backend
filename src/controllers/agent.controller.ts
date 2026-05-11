@@ -104,7 +104,7 @@ export const sendMessage = async (
       sessionId,
       duration: (result as any).duration ?? 0,
       followUpSuggestions: (result as any).followUpSuggestions ?? [],
-      creditsUsed: req.creditCheck?.cost ?? 0,
+      creditsUsed: req.creditCheck?.featureCharge ?? 0,
     });
   } catch (err) {
     logger.error({ err, userId: user.id }, "Agent message failed");
@@ -247,7 +247,7 @@ export const streamMessage = async (
       logger.warn({ err }, "Failed to fetch follow-up suggestions");
     }
 
-    send({ type: "creditsUsed", credits: req.creditCheck?.cost ?? 0 });
+    send({ type: "creditsUsed", credits: req.creditCheck?.featureCharge ?? 0 });
     reply.raw.write("data: [DONE]\n\n");
     reply.raw.end();
   }
@@ -349,7 +349,7 @@ export const deleteMemory = async (
   const user = req.user as User;
   const { key } = req.params;
   try {
-    await (prisma as any).aria_memory.deleteMany({
+    await prisma.aria_memory.deleteMany({
       where: { user_id: user.id, key },
     });
     return success(reply, { deleted: true });

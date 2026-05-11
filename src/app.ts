@@ -228,7 +228,6 @@ export const buildApp = async (): Promise<FastifyInstance> => {
   const API_PREFIX = `/api/${process.env.API_VERSION || "v1"}`;
 
   await app.register(webhookRoutes, { prefix: `${API_PREFIX}/webhooks` });
-  await app.register(dataDeletionRoutes, { prefix: `${API_PREFIX}/auth` });
   await app.register(authRoutes, { prefix: `${API_PREFIX}/auth` });
   await app.register(userRoutes, { prefix: `${API_PREFIX}/users` });
   await app.register(trendRoutes, { prefix: `${API_PREFIX}/trends` });
@@ -250,6 +249,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
   });
   await app.register(creditRoutes, { prefix: `${API_PREFIX}/credits` });
   await app.register(notesRoutes, { prefix: `${API_PREFIX}/notes` });
+  await app.register(dataDeletionRoutes, { prefix: `${API_PREFIX}/data-deletion` });
 
   // ── Lifecycle / error handlers ─────────────────────────────────────────────
   app.setNotFoundHandler((req, reply) => {

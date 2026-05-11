@@ -752,11 +752,13 @@ model competitor_analyses {
   user_id     String    @db.Uuid
   niche       String
   video_ids   String[]  @default([])
+  reel_ids    String[]  @default([])
   gap_report  Json      @default("{}")
   created_at  DateTime? @default(now()) @db.Timestamptz(6)
   expires_at  DateTime  @db.Timestamptz(6)
   users       users     @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
+  @@unique([user_id, niche], name: "user_id_niche")
   @@index([user_id], map: "idx_competitor_analyses_user")
   @@index([niche],   map: "idx_competitor_analyses_niche")
 }

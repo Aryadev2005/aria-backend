@@ -287,7 +287,7 @@ export const rebuildVoicePortrait = async (
     return success(reply, {
       message: "Voice portrait rebuilt successfully",
       summary: portrait.contentTerritory,
-      creditsUsed: req.creditCheck?.cost ?? 0,
+      creditsUsed: req.creditCheck?.featureCharge ?? 0,
     });
   } catch (err) {
     logger.error({ err, userId: user.id }, "rebuildVoicePortrait failed");

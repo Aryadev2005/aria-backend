@@ -76,7 +76,7 @@ export const generateContent = async (
 
     return success(reply, {
       ...content,
-      creditsUsed: req.creditCheck?.cost ?? 0,
+      creditsUsed: req.creditCheck?.featureCharge ?? 0,
     });
   } catch (err) {
     logger.error({ err }, "Content generation failed");
@@ -125,7 +125,7 @@ export const generateHooks = async (
 
     return success(reply, {
       ...result,
-      creditsUsed: req.creditCheck?.cost ?? 0,
+      creditsUsed: req.creditCheck?.featureCharge ?? 0,
     });
   } catch (err) {
     logger.error({ err }, "Hook generation failed");
@@ -173,7 +173,7 @@ export const rewriteHook = async (
 
     return success(reply, {
       ...result,
-      creditsUsed: req.creditCheck?.cost ?? 0,
+      creditsUsed: req.creditCheck?.featureCharge ?? 0,
     });
   } catch (err) {
     logger.error({ err }, "Hook rewrite failed");
@@ -223,7 +223,7 @@ export const repurposeContent = async (
 
     return success(reply, {
       ...result,
-      creditsUsed: req.creditCheck?.cost ?? 0,
+      creditsUsed: req.creditCheck?.featureCharge ?? 0,
     });
   } catch (err) {
     logger.error({ err }, "Repurpose failed");
@@ -274,7 +274,7 @@ export const analyseContent = async (
 
     return success(reply, {
       ...result,
-      creditsUsed: req.creditCheck?.cost ?? 0,
+      creditsUsed: req.creditCheck?.featureCharge ?? 0,
     });
   } catch (err) {
     logger.error({ err }, "Analysis failed");

@@ -161,7 +161,7 @@ Respond ONLY with valid JSON:
 
     return success(reply, {
       ...prediction,
-      creditsUsed: req.creditCheck?.cost ?? 0,
+      creditsUsed: req.creditCheck?.featureCharge ?? 0,
     });
   } catch (err) {
     logger.error({ err }, "Growth prediction failed");
@@ -235,7 +235,7 @@ Respond ONLY with valid JSON:
 
     return success(reply, {
       ...times,
-      creditsUsed: req.creditCheck?.cost ?? 0,
+      creditsUsed: req.creditCheck?.featureCharge ?? 0,
     });
   } catch (err) {
     logger.error({ err }, "Best times failed");
@@ -311,7 +311,7 @@ Respond ONLY with valid JSON:
 
     return success(reply, {
       ...insights,
-      creditsUsed: req.creditCheck?.cost ?? 0,
+      creditsUsed: req.creditCheck?.featureCharge ?? 0,
     });
   } catch (err) {
     logger.error({ err }, "Competitor insights failed");
@@ -391,7 +391,7 @@ Respond ONLY with valid JSON:
 
     return success(reply, {
       ...report,
-      creditsUsed: req.creditCheck?.cost ?? 0,
+      creditsUsed: req.creditCheck?.featureCharge ?? 0,
     });
   } catch (err) {
     logger.error({ err }, "Weekly report failed");

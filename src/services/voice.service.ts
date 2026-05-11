@@ -55,13 +55,13 @@ export async function getVoicePortrait(userId: string): Promise<VoicePortrait | 
   if (cached) return cached;
 
   try {
-    const row = await (prisma as any).creator_voice_profiles.findUnique({
+    const row = await prisma.creator_voice_profiles.findUnique({
       where: { user_id: userId },
     });
 
     if (!row) return null;
 
-    const portrait = row.voice_data as VoicePortrait;
+    const portrait = (row.voice_data as unknown) as VoicePortrait;
     await cache.set(cacheKey, portrait, VOICE_CACHE_TTL);
     return portrait;
   } catch (err: any) {
@@ -199,7 +199,7 @@ Respond ONLY with valid JSON:
     };
 
     // Save to DB
-    await (prisma as any).creator_voice_profiles.upsert({
+    await prisma.creator_voice_profiles.upsert({
       where:  { user_id: userId },
       create: {
         user_id:        userId,

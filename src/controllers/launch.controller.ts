@@ -77,7 +77,7 @@ export const getPostingPackage = async (
      
     ).catch((err) => logger.warn({ err }, "Debit failed — non-fatal"));
 
-    return success(reply, { ...pkg, creditsUsed: req.creditCheck?.cost ?? 0 });
+    return success(reply, { ...pkg, creditsUsed: req.creditCheck?.featureCharge ?? 0 });
   } catch (err) {
     logger.error({ err, userId: user.id }, "getPostingPackage failed");
     return errors.serviceDown(reply, "ARIA Launch");
@@ -137,7 +137,7 @@ export const getTimingIntelligence = async (
 
     return success(reply, {
       ...timing,
-      creditsUsed: req.creditCheck?.cost ?? 0,
+      creditsUsed: req.creditCheck?.featureCharge ?? 0,
     });
   } catch (err) {
     logger.error({ err, userId: user.id }, "getTimingIntelligence failed");
@@ -192,7 +192,7 @@ export const getBrandAlert = async (
 
     return success(reply, {
       ...alert,
-      creditsUsed: req.creditCheck?.cost ?? 0,
+      creditsUsed: req.creditCheck?.featureCharge ?? 0,
     });
   } catch (err) {
     logger.error({ err, userId: user.id }, "getBrandAlert failed");

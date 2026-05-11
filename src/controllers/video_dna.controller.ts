@@ -345,10 +345,18 @@ export const analyseVideo = async (
     }
 
     // Step 3: TypeScript computes all scores deterministically
-    const niche =
-      (Array.isArray(fullUser?.niches as unknown[])
-        ? (fullUser?.niches as string[])[0]
-        : (fullUser?.niches as string)) || "general";
+    const rawNiches = fullUser?.niches;
+    const niche: string = (() => {
+      if (Array.isArray(rawNiches) && rawNiches.length > 0) return String(rawNiches[0]);
+      if (typeof rawNiches === 'string' && rawNiches.startsWith('[')) {
+        try {
+          const parsed = JSON.parse(rawNiches);
+          if (Array.isArray(parsed) && parsed.length > 0) return String(parsed[0]);
+        } catch { /* fall through */ }
+      }
+      if (typeof rawNiches === 'string' && rawNiches.trim()) return rawNiches.trim();
+      return 'general';
+    })();
     const scoredReport = await computeVideoDNAReport(
       rawSignals,
       videoData.viewsRaw,
@@ -380,7 +388,7 @@ export const analyseVideo = async (
     };
 
     // Persist (fire-and-forget)
-    (prisma as any).video_dna_analyses
+    prisma.video_dna_analyses
       .upsert({
         where: { user_id_video_id: { user_id: user.id, video_id: videoId } },
         update: {
@@ -424,7 +432,7 @@ export const analyseVideo = async (
 
     return success(reply, {
       ...result,
-      creditsUsed: req.creditCheck?.cost ?? 0,
+      creditsUsed: req.creditCheck?.featureCharge ?? 0,
     });
   } catch (err: any) {
     logger.error(
@@ -442,7 +450,7 @@ export const analyseVideo = async (
 export const getHistory = async (req: FastifyRequest, reply: FastifyReply) => {
   const user = req.user as User;
   try {
-    const rows = await (prisma as any).video_dna_analyses.findMany({
+    const rows = await prisma.video_dna_analyses.findMany({
       where: { user_id: user.id },
       orderBy: { analysed_at: "desc" },
       take: 10,
@@ -504,7 +512,7 @@ export const getCompetitorGap = async (
 
     return success(reply, {
       ...report,
-      creditsUsed: req.creditCheck?.cost ?? 0,
+      creditsUsed: req.creditCheck?.featureCharge ?? 0,
     });
   } catch (err: any) {
     logger.error({ err: err.message }, "Competitor gap analysis failed");

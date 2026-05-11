@@ -50,25 +50,11 @@ export const getPersonalisedRoadmap = async (
     if (!force) {
       const cached = await cache.get(`roadmap:${user.id}`);
       if (cached) {
-        // Debit credits even for cached response (middleware already checked)
-        await debitCredits(
-          user.id,
-          "growth_roadmap",
-          modelToUse,
-          3000, // approx input tokens (large context)
-          1200, // approx output tokens
-         
-        ).catch((err) =>
-          logger.warn(
-            { err },
-            "Debit failed — non-fatal, roadmap already returned",
-          ),
-        );
-
+        // Serve from cache — no debit (AI work was already paid for on first generation)
         return success(reply, {
           ...(cached as object),
           fromCache: true,
-          creditsUsed: req.creditCheck?.cost ?? 0,
+          creditsUsed: 0,
         });
       }
     }
@@ -105,7 +91,7 @@ export const getPersonalisedRoadmap = async (
     return success(reply, {
       ...roadmap,
       fromCache: false,
-      creditsUsed: req.creditCheck?.cost ?? 0,
+      creditsUsed: req.creditCheck?.featureCharge ?? 0,
     });
   } catch (err: any) {
     logger.error({ err: err.message, userId: user.id }, "Get roadmap failed");
@@ -157,7 +143,7 @@ export const refreshRoadmap = async (
       ...roadmap,
       refreshed: true,
       fromCache: false,
-      creditsUsed: req.creditCheck?.cost ?? 0,
+      creditsUsed: req.creditCheck?.featureCharge ?? 0,
     });
   } catch (err: any) {
     logger.error(

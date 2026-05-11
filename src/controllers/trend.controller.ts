@@ -446,7 +446,7 @@ export const getViralIdeas = async (
       niche: activeNiche,
       isBrowsing: !!browseNiche,
       refreshedAt: new Date().toISOString(),
-      creditsUsed: req.creditCheck?.cost ?? 0,
+      creditsUsed: req.creditCheck?.featureCharge ?? 0,
     });
   } catch (err) {
     logger.error({ err }, "Viral ideas failed");
@@ -471,7 +471,7 @@ export const recordTrendInteraction = async (
   const { trendId, trendTitle, source, niche, action } = req.body;
 
   try {
-    await (prisma as any).trend_interactions.create({
+    await prisma.trend_interactions.create({
       data: {
         user_id: user.id,
         trend_id: trendId || null,

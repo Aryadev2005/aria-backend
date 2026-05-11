@@ -178,9 +178,9 @@ async function persistLearnings(
     const [, category, ...rest] = key.split('.');
     const memKey = rest.join('.');
     try {
-      await (prisma as any).aria_memory.upsert({
+      await prisma.aria_memory.upsert({
         where: { user_id_category_key: { user_id: userId, category, key: memKey } },
-        update: { value: JSON.stringify(value), updated_at: new Date() },
+        update: { value: JSON.stringify(value) },
         create: {
           user_id: userId,
           category,

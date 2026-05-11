@@ -78,7 +78,7 @@ export const generate = async (
     return reply.send({
       success: true,
       data: calendar,
-      creditsUsed: req.creditCheck?.cost ?? 0,
+      creditsUsed: req.creditCheck?.featureCharge ?? 0,
     });
   } catch (err) {
     logger.error({ err }, "Calendar generation failed");

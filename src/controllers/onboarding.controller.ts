@@ -133,7 +133,7 @@ export const connectHandle = async (
         800, // approx output tokens
        
       ).catch((err) => logger.warn({ err }, "Debit failed — non-fatal"));
-      creditsUsed = req.creditCheck?.cost ?? 0;
+      creditsUsed = req.creditCheck?.featureCharge ?? 0;
     } else {
       logger.info({ userId: user.id }, "First-time archetype detection — FREE");
     }

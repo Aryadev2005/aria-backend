@@ -15,7 +15,7 @@ import { User } from "../types/user";
 declare module "fastify" {
   interface FastifyRequest {
     creditCheck?: {
-      cost: number;
+      featureCharge: number;
       modelToUse: string;
       actionKey: ActionKey;
     };
@@ -40,15 +40,14 @@ export function requireCredits(actionKey: ActionKey) {
         success: false,
         error: "INSUFFICIENT_CREDITS",
         message: check.reason,
-        balance: check.balance,
-        required: check.cost,
+        required: check.featureCharge,
         actionKey,
       });
     }
 
     // Attach to request so the handler knows which model to use
     req.creditCheck = {
-      cost: check.cost,
+      featureCharge: check.featureCharge,
       modelToUse: check.modelToUse,
       actionKey,
     };

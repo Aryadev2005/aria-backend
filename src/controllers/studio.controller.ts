@@ -51,7 +51,7 @@ export const getScriptStructure = async (
 
     return success(reply, {
       ...result,
-      creditsUsed: req.creditCheck?.cost ?? 0,
+      creditsUsed: req.creditCheck?.featureCharge ?? 0,
     });
   } catch (err) {
     logger.error({ err }, "Script structure failed");
@@ -94,7 +94,7 @@ export const adviseSection = async (
 
     return success(reply, {
       ...result,
-      creditsUsed: req.creditCheck?.cost ?? 0,
+      creditsUsed: req.creditCheck?.featureCharge ?? 0,
     });
   } catch (err) {
     logger.error({ err }, "Section advice failed");
@@ -135,7 +135,7 @@ export const matchBGM = async (
 
     return success(reply, {
       ...result,
-      creditsUsed: req.creditCheck?.cost ?? 0,
+      creditsUsed: req.creditCheck?.featureCharge ?? 0,
     });
   } catch (err) {
     logger.error({ err }, "BGM match failed");
@@ -174,7 +174,7 @@ export const getShotList = async (
 
     return success(reply, {
       ...result,
-      creditsUsed: req.creditCheck?.cost ?? 0,
+      creditsUsed: req.creditCheck?.featureCharge ?? 0,
     });
   } catch (err) {
     logger.error({ err }, "Shot list failed");
@@ -212,7 +212,7 @@ export const getEditingHelp = async (
 
     return success(reply, {
       ...result,
-      creditsUsed: req.creditCheck?.cost ?? 0,
+      creditsUsed: req.creditCheck?.featureCharge ?? 0,
     });
   } catch (err) {
     logger.error({ err }, "Editing help failed");
@@ -251,7 +251,7 @@ export const analyseVideoUrl = async (
 
     return success(reply, {
       ...result,
-      creditsUsed: req.creditCheck?.cost ?? 0,
+      creditsUsed: req.creditCheck?.featureCharge ?? 0,
     });
   } catch (err) {
     logger.error({ err }, "Video URL analysis failed");
@@ -307,7 +307,7 @@ export const analyseVideoUpload = async (req: any, reply: FastifyReply) => {
 
     return success(reply, {
       ...result,
-      creditsUsed: req.creditCheck?.cost ?? 0,
+      creditsUsed: req.creditCheck?.featureCharge ?? 0,
     });
   } catch (err) {
     logger.error({ err }, "Video upload analysis failed");
@@ -335,7 +335,7 @@ export const saveSession = async (
   } = req.body as any;
 
   try {
-    const session = await (prisma as any).studio_scripts.create({
+    const session = await prisma.studio_scripts.create({
       data: {
         user_id: user.id,
         idea,
@@ -384,7 +384,7 @@ export const learnFromEdit = async (
 
     // Update the session with the edited script
     if (sessionId) {
-      await (prisma as any).studio_scripts.updateMany({
+      await prisma.studio_scripts.updateMany({
         where: { id: sessionId, user_id: user.id },
         data: {
           edited_script: { sections: editedSections },
@@ -409,7 +409,7 @@ export const getScriptHistory = async (
 ) => {
   const user = req.user as User;
   try {
-    const scripts = await (prisma as any).studio_scripts.findMany({
+    const scripts = await prisma.studio_scripts.findMany({
       where: { user_id: user.id },
       orderBy: [{ pinned: "desc" }, { created_at: "desc" }],
       take: 50,
@@ -442,14 +442,14 @@ export const togglePin = async (
   const { scriptId } = req.params as any;
 
   try {
-    const existing = await (prisma as any).studio_scripts.findFirst({
+    const existing = await prisma.studio_scripts.findFirst({
       where: { id: scriptId, user_id: user.id },
       select: { pinned: true },
     });
 
     if (!existing) return errors.notFound(reply, "Script");
 
-    await (prisma as any).studio_scripts.update({
+    await prisma.studio_scripts.update({
       where: { id: scriptId },
       data: { pinned: !existing.pinned },
     });

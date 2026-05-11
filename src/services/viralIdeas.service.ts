@@ -1,5 +1,14 @@
 import { logger } from "../utils/logger";
 import { prisma } from "../config/database";
+import OpenAI from "openai";
+
+let _openai: OpenAI | null = null;
+const getAI = (): OpenAI => {
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  if (!apiKey) throw new Error('OPENAI_API_KEY is required');
+  if (!_openai) _openai = new OpenAI({ apiKey, timeout: 60_000 });
+  return _openai;
+};
 
 export interface ViralIdea {
   id: string;
@@ -66,7 +75,7 @@ export async function generateViralIdeas(params: {
   let directSignals: any[] = [];
   if (vectorTrends.length < 5) {
     try {
-      directSignals = await (prisma as any).live_trends.findMany({
+      directSignals = await prisma.live_trends.findMany({
         where: {
           expires_at: { gt: new Date() },
           OR: [
@@ -122,28 +131,28 @@ export async function generateViralIdeas(params: {
 
   // ── Step 4: Fetch user context (memory, feedback history, voice portrait) ──
   const [memoryRow, feedbackHistory, voicePortrait] = await Promise.allSettled([
-    (prisma as any).aria_memory.findFirst({
+    prisma.aria_memory.findFirst({
       where: { user_id: userContext.userId },
-      select: { memory_data: true },
+      select: { value: true },
     }),
-    (prisma as any).aria_feedback.findMany({
+    prisma.aria_feedback.findMany({
       where: { user_id: userContext.userId },
       orderBy: { created_at: "desc" },
       take: 20,
       select: { was_helpful: true, recommendation_data: true },
     }),
-    (prisma as any).creator_voice_profiles?.findFirst?.({
+    prisma.creator_voice_profiles.findUnique({
       where: { user_id: userContext.userId },
-      select: { portrait: true },
+      select: { voice_data: true },
     }).catch(() => null),
   ]);
 
   const memory =
-    memoryRow.status === "fulfilled" ? (memoryRow.value as any)?.memory_data : null;
+    memoryRow.status === "fulfilled" ? (memoryRow.value as any)?.value : null;
   const feedback =
     feedbackHistory.status === "fulfilled" ? feedbackHistory.value : [];
   const voice =
-    voicePortrait.status === "fulfilled" ? voicePortrait.value : null;
+    voicePortrait.status === "fulfilled" ? (voicePortrait.value as any)?.voice_data : null;
 
   const helpfulAngles = (feedback as any[])
     .filter((f: any) => f.was_helpful === true)
@@ -210,11 +219,8 @@ RULES:
 
   // ── Step 6: Call OpenAI ───────────────────────────────────────────────────
   try {
-    const OpenAI = (await import("openai")).default;
-    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
-    const response = await client.chat.completions.create({
-      model: "gpt-4o-mini",
+    const response = await getAI().chat.completions.create({
+      model: process.env.OPENAI_MODEL || "gpt-4o-mini",
       max_tokens: 2000,
       temperature: 0.8,
       messages: [{ role: "user", content: prompt }],

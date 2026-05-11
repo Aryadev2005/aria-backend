@@ -40,7 +40,7 @@ interface PlatformConnections {
 }
 
 async function getUserConnections(userId: string): Promise<PlatformConnections> {
-  const rows = await (prisma as any).account_connections.findMany({
+  const rows = await prisma.account_connections.findMany({
     where: { user_id: userId, platform: { in: ['instagram', 'youtube'] } },
     select: { platform: true, handle: true },
   });
@@ -79,7 +79,8 @@ async function fetchTopNicheReels(niche: string, count = 10): Promise<ContentIte
         `${niche.replace(/\s+/g, '').toLowerCase()}india`,
       ],
       resultsLimit: count * 2,
-      searchType: 'hashtag',
+      timeoutSecs: 60,
+      memoryMbytes: 256,
     });
 
     const { items } = await client.dataset(run.defaultDatasetId).listItems();
@@ -304,13 +305,19 @@ export const runCompetitorGapAnalysis = async (
   await cache.set(cacheKey, report, 3600 * 6);
 
   // 8. Persist (fire-and-forget)
-  (prisma as any).competitor_analyses.upsert({
-    where:  { id: `${userId}_${niche}`.replace(/[^a-z0-9]/gi, '') },
-    update: { gap_report: report as any, expires_at: new Date(Date.now() + 6 * 3600_000) },
+  prisma.competitor_analyses.upsert({
+    where: { user_id_niche: { user_id: userId, niche } },
+    update: {
+      gap_report: report as any,
+      video_ids: videos.map((v: any) => v.id),
+      reel_ids: reels.map((r: any) => r.id),
+      expires_at: new Date(Date.now() + 6 * 3600_000),
+    },
     create: {
-      user_id:    userId,
+      user_id: userId,
       niche,
-      video_ids:  allItems.map(v => v.id),
+      video_ids: videos.map((v: any) => v.id),
+      reel_ids: reels.map((r: any) => r.id),
       gap_report: report as any,
       expires_at: new Date(Date.now() + 6 * 3600_000),
     },

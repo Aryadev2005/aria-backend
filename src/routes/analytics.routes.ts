@@ -25,13 +25,6 @@ const authWeeklyReport = {
     requireCredits("weekly_report"),
   ],
 };
-const authCompetitorGap = {
-  preHandler: [
-    authenticateFirebase,
-    requirePro,
-    requireCredits("competitor_gap"),
-  ],
-};
 
 export default async function analyticsRoutes(app: FastifyInstance) {
   // ── Existing analytics routes ───────────────────────────────────────────
@@ -40,11 +33,6 @@ export default async function analyticsRoutes(app: FastifyInstance) {
   app.get("/dashboard", auth, analyticsController.getDashboard);
   app.get("/growth", authPro, analyticsController.getGrowthPrediction);
   app.get("/best-times", auth, analyticsController.getBestPostingTimes);
-  app.get(
-    "/competitors",
-    authCompetitorGap,
-    analyticsController.getCompetitorInsights,
-  );
   app.get(
     "/weekly-report",
     authWeeklyReport,
