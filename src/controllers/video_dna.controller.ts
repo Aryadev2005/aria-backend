@@ -807,18 +807,19 @@ export const analyseVideo = async (
       scoringVersion:      "4.0",
     };
 
-    // ── PHASE 5: FIRE AND FORGET — respond first, persist after ───────────────
-    // The user receives their result immediately.
-    // DB and credits run in the background — failures are logged, not fatal.
     const responsePayload = {
       ...result,
       creditsUsed: req.creditCheck?.featureCharge ?? 0,
     };
 
-    // Send the response BEFORE the background jobs
-    reply.send({ success: true, data: responsePayload });
+    logger.info(
+      { videoId, userId: user.id, overallScore: result.overallScore, grade: result.grade, detectedNiche },
+      "Video DNA v4 complete",
+    );
 
-    // Background: DB persistence (non-blocking)
+    // ── Fire-and-forget background jobs — run AFTER we schedule the response ──
+    // setImmediate pushes these to the next iteration of the event loop,
+    // so they never block the HTTP response.
     setImmediate(() => {
       prisma.video_dna_analyses
         .upsert({
@@ -840,7 +841,6 @@ export const analyseVideo = async (
         })
         .catch((err: any) => logger.warn({ err }, "Video DNA DB save failed — non-fatal"));
 
-      // Background: credit debit
       debitCredits(
         user.id,
         "video_analysis",
@@ -850,13 +850,9 @@ export const analyseVideo = async (
       ).catch((err: any) => logger.warn({ err }, "Credit debit failed — non-fatal"));
     });
 
-    logger.info(
-      { videoId, userId: user.id, overallScore: result.overallScore, grade: result.grade, detectedNiche },
-      "Video DNA v4 complete",
-    );
-
-    // Return here so Fastify doesn't try to send a second response
-    return;
+    // Use the standard success() utility — same shape as every other endpoint.
+    // This is what api.js and the frontend expect: { success: true, data: {...} }
+    return success(reply, responsePayload);
 
   } catch (err: any) {
     logger.error({ err: err.message, videoId, userId: user.id }, "Video DNA v4 failed");
