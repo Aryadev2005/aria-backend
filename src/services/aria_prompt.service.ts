@@ -1,6 +1,8 @@
 import { User } from "../types";
 import { buildMemoryBlock } from "./aria_memory.service";
 import { formatVoiceForPrompt } from "./voice.service";
+import { ariaLibraryNode } from "./aria-openui-library.node";
+const OPENUI_SYSTEM_PROMPT = ariaLibraryNode.prompt();
 
 // ── Token budget helpers ─────────────────────────────────────────────────────
 
@@ -375,6 +377,26 @@ RESPONSE RULES — NEVER BREAK THESE
 9. **If the user is stuck or burned out** — lead with empathy first, one recovery action second.
 10. **Never say "I don't know."** You have tools and expertise. Figure it out and give your best advice.
 11. **Format every response with markdown.** A response with 3+ points MUST use bullets or numbered lists. A response with 2+ sections MUST use \`##\` headers. Bold the most important number or action in every response. No walls of plain text — ever.
+
+═══════════════════════════════════════════════════
+GENERATIVE UI — OPENUI LANG
+═══════════════════════════════════════════════════
+You can respond with interactive UI components instead of plain text.
+For greetings, short confirmations, emotional replies → plain markdown only.
+
+WHEN TO USE:
+- Trends / viral topics → TrendGrid or TrendCard
+- Song recommendations → SongCard  
+- 3+ content ideas → IdeaBatch; single idea with script → ContentIdea
+- Profile stats / analytics → AnalyticsSnapshot
+- Brand deal pricing → RateCard
+- Growth planning → GrowthRoadmap
+- End of any complex response → add QuickActions chips
+
+RULES: root = first, camelCase vars, ₹ for pricing, QuickActions last.
+
+${OPENUI_SYSTEM_PROMPT}
+═══════════════════════════════════════════════════
 
 ════════════════════════════════════════
 SCOPE BOUNDARIES — HARD LIMITS

@@ -3,17 +3,23 @@ import { prisma } from "../config/database";
 import { cache } from "../config/redis";
 import { logger } from "../utils/logger";
 import { User } from "../types";
+import { ariaLibraryNode } from "./aria-openui-library.node";
+const OPENUI_SYSTEM_PROMPT = ariaLibraryNode.prompt();
 
 // Hybrid RAG — replaces direct API calls with 3-tier cached retrieval
-let _hybridBuildLiveContext: ((user: User, memory: any) => Promise<string>) | null = null;
+let _hybridBuildLiveContext:
+  | ((user: User, memory: any) => Promise<string>)
+  | null = null;
 try {
   // Late-bind to avoid hard crash if hybrid module has issues
-  import("./ariaBrain.hybrid.patch").then((mod) => {
-    _hybridBuildLiveContext = mod.hybridBuildLiveContext;
-    logger.info("Hybrid RAG context enabled for ARIA Brain");
-  }).catch(() => {
-    logger.info("Hybrid RAG not available — using direct API context");
-  });
+  import("./ariaBrain.hybrid.patch")
+    .then((mod) => {
+      _hybridBuildLiveContext = mod.hybridBuildLiveContext;
+      logger.info("Hybrid RAG context enabled for ARIA Brain");
+    })
+    .catch(() => {
+      logger.info("Hybrid RAG not available — using direct API context");
+    });
 } catch {
   // Expected if hybrid module isn't ready yet
 }
@@ -487,7 +493,10 @@ export const buildLiveContext = async (user: User, memory: AgentMemoryMap) => {
     try {
       return await _hybridBuildLiveContext(user, memory);
     } catch (err: any) {
-      logger.warn({ err: err.message }, "Hybrid context failed — falling back to direct APIs");
+      logger.warn(
+        { err: err.message },
+        "Hybrid context failed — falling back to direct APIs",
+      );
     }
   }
 
@@ -634,6 +643,37 @@ export const persistSession = async (
   }
 };
 
+// Helper Fuction
+function buildOpenUIInstructions(prompt: string): string {
+  return `
+═══════════════════════════════════════════
+GENERATIVE UI — OPENUI LANG
+═══════════════════════════════════════════
+You can respond with interactive UI components instead of plain text.
+For conversational replies, greetings, or emotional messages → use plain markdown only.
+
+WHEN TO USE COMPONENTS:
+- Trend questions → TrendGrid or TrendCard
+- Song/audio recommendations → SongCard
+- 3+ content ideas → IdeaBatch
+- Single idea with script → ContentIdea  
+- Profile/analytics questions → AnalyticsSnapshot
+- Brand deal pricing → RateCard
+- Growth planning → GrowthRoadmap
+- End of complex responses → always add QuickActions chips
+
+RULES:
+1. Root component first: root = ComponentName(...)
+2. camelCase variable names only
+3. INR (₹) for all pricing
+4. QuickActions at very end
+5. Never leave dangling parentheses
+
+${prompt}
+═══════════════════════════════════════════
+`;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN BRAIN FUNCTION — called for every message
 // ─────────────────────────────────────────────────────────────────────────────
@@ -682,7 +722,7 @@ export const think = async ({
       messages: [
         {
           role: "system",
-          content: `${ARIA_SOUL}\n\n${context}`,
+          content: `${ARIA_SOUL}\n\n${context}\n\n${buildOpenUIInstructions(OPENUI_SYSTEM_PROMPT)}`,
         },
         ...(recentHistory as any),
         {
