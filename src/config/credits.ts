@@ -387,7 +387,7 @@ export const DEFAULT_ACTION_CONFIGS: Record<ActionKey, ActionConfig> = {
     modelMini: "gpt-4o-mini",
     modelHeavy: "gpt-4o",
     useHeavy: false,
-    maxPerDay: 5,
+    maxPerDay: 200,
     freeTierAllowed: true,
     starterTierAllowed: true,
     proTierAllowed: true,

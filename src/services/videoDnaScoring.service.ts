@@ -390,10 +390,12 @@ const computeRecencyDecayFactor = (publishedAtRaw: string, views: number): numbe
  *   10M views  → ~100 (cap before decay)
  */
 const computeViewVelocity = (views: number, recencyDecayFactor: number): number => {
-  if (views <= 0) return 0;
+  if (!views || views <= 0 || !isFinite(views)) return 0;
+  const decay = (!recencyDecayFactor || !isFinite(recencyDecayFactor)) ? 1.0 : recencyDecayFactor;
   // log10(10M) = 7, 100/7 ≈ 14.28 → maps 10M views to score 100 before decay
   const raw = Math.log10(views + 1) * 14.28;
-  return Math.min(100, Math.round(raw * recencyDecayFactor));
+  const result = Math.min(100, Math.round(raw * decay));
+  return isNaN(result) ? 0 : result;
 };
 
 /**
@@ -423,8 +425,10 @@ const computeDurationScore = (seconds: number): number => {
 };
 
 const computeERvsBenchmark = (er: number, benchER: number): number => {
-  if (benchER <= 0) return 1.0;
-  return parseFloat((er / benchER).toFixed(2));
+  if ((benchER > 0 && isFinite(benchER))) {
+    return parseFloat((er / benchER).toFixed(2));
+  }
+  return 0;
 };
 
 export const computeDerivedMetrics = (
@@ -597,12 +601,17 @@ const computeEngagementScore = (
     : adjustedMultiplier >= 0.5 ? 30
     : 15;
 
-  const raw =
-    derived.viewVelocityScore * 0.40 +
-    erNorm                    * 0.40 +
-    derived.durationScore     * 0.20;
+  const safeVelocity  = isFinite(derived.viewVelocityScore)  ? derived.viewVelocityScore  : 0;
+  const safeDuration  = isFinite(derived.durationScore)      ? derived.durationScore      : 50;
+  const safeErNorm    = isFinite(erNorm)                     ? erNorm                     : 15;
 
-  return Math.min(100, Math.round(raw));
+  const raw =
+    safeVelocity * 0.40 +
+    safeErNorm   * 0.40 +
+    safeDuration * 0.20;
+
+  const score = Math.min(100, Math.round(raw));
+  return isNaN(score) ? 0 : score;
 };
 
 /**
@@ -616,18 +625,24 @@ const computeOverallScore = (
   derived:    DerivedMetrics,
   format:     VideoFormat,
 ): number => {
-  const w = FORMAT_WEIGHTS[format];
+  const w = FORMAT_WEIGHTS[format] ?? FORMAT_WEIGHTS['standard'];
+
+  const safeHook        = isFinite(components.hookScore)           ? components.hookScore           : 0;
+  const safeEngagement  = isFinite(components.engagementScore)     ? components.engagementScore     : 0;
+  const safeContent     = isFinite(components.contentQualityScore) ? components.contentQualityScore : 0;
+  const safeSeo         = isFinite(components.seoScore)            ? components.seoScore            : 0;
 
   const base =
-    components.hookScore           * w.hook +
-    components.engagementScore     * w.engagement +
-    components.contentQualityScore * w.contentQuality +
-    components.seoScore            * w.seo;
+    safeHook       * w.hook +
+    safeEngagement * w.engagement +
+    safeContent    * w.contentQuality +
+    safeSeo        * w.seo;
 
-  // Viral bonus rewards outliers without dominating
-  const viralBonus = Math.min(5, Math.max(0, (derived.erVsBenchmark - 2.0) * 5));
+  const erMultiplier = isFinite(derived.erVsBenchmark) ? derived.erVsBenchmark : 0;
+  const viralBonus   = Math.min(5, Math.max(0, (erMultiplier - 2.0) * 5));
 
-  return Math.min(100, Math.round(base + viralBonus));
+  const final = Math.min(100, Math.round(base + viralBonus));
+  return isNaN(final) ? 0 : final;
 };
 
 /**
@@ -706,9 +721,13 @@ export const computeVideoDNAReport = async (
   const { verdict, grade } = computeVerdict(overallScore);
 
   // 10. Build human-readable score summary
-  const erComparison = derived.erVsBenchmark >= 1.0
-    ? `${(derived.erVsBenchmark * nicheDifficultyCoefficient).toFixed(1)}x above niche average (adjusted for ${niche} difficulty)`
-    : `${((1 / derived.erVsBenchmark) * nicheDifficultyCoefficient).toFixed(1)}x below niche average (adjusted for ${niche} difficulty)`;
+  const safeERvsBench = isFinite(derived.erVsBenchmark) && derived.erVsBenchmark > 0
+    ? derived.erVsBenchmark
+    : 1.0;
+
+  const erComparison = safeERvsBench >= 1.0
+    ? `${(safeERvsBench * nicheDifficultyCoefficient).toFixed(1)}x above niche average (adjusted for ${niche} difficulty)`
+    : `${((1 / safeERvsBench) * nicheDifficultyCoefficient).toFixed(1)}x below niche average (adjusted for ${niche} difficulty)`;
 
   const formatNote = formatType !== 'standard'
     ? ` (${formatType} weights applied)`

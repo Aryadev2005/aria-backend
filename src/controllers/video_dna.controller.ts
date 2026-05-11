@@ -25,6 +25,59 @@ const YT_KEY = process.env.YOUTUBE_API_KEY;
 const MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Derives niche purely from the video's own YouTube categoryId + title.
+// No user profile data involved. Same video = same niche = same scores,
+// regardless of who is logged in.
+// ─────────────────────────────────────────────────────────────────────────────
+const deriveNicheFromVideo = (categoryId: string, title: string): string => {
+  const t = (title || '').toLowerCase();
+
+  // Title keyword check first — more specific than categoryId
+  const keywordMap: Array<[RegExp, string]> = [
+    [/\b(finance|invest|stock|mutual fund|sip|crypto|money|wealth|trading|₹)\b/, 'finance'],
+    [/\b(fitness|gym|workout|exercise|weight loss|muscle|yoga|diet|nutrition)\b/, 'fitness'],
+    [/\b(tech|smartphone|phone|laptop|unbox|gadget|software|coding|programming|ai tool)\b/, 'tech'],
+    [/\b(food|recipe|cook|restaurant|street food|taste|eating)\b/, 'food'],
+    [/\b(beauty|makeup|skincare|hair|fashion|style|outfit|ootd|grooming)\b/, 'beauty'],
+    [/\b(travel|vlog|trip|tour|explore|destination|hotel|flight|backpack)\b/, 'travel'],
+    [/\b(gaming|game|play|minecraft|valorant|pubg|bgmi|stream|esport)\b/, 'gaming'],
+    [/\b(study|exam|upsc|neet|jee|learn|tutorial|course|education|lecture)\b/, 'education'],
+    [/\b(motivation|success|entrepreneur|startup|productivity|mindset|business)\b/, 'business'],
+    [/\b(comedy|funny|meme|roast|prank|stand.?up|skit)\b/, 'comedy'],
+    [/\b(health|doctor|medical|mental health|therapy|wellness|hospital)\b/, 'health'],
+    [/\b(news|politics|current affairs|government|election|policy)\b/, 'news'],
+    [/\b(music|song|singer|rap|cover|album|lyrics|band)\b/, 'music'],
+    [/\b(cricket|football|sport|ipl|match|player|team)\b/, 'sports'],
+  ];
+
+  for (const [regex, detectedNiche] of keywordMap) {
+    if (regex.test(t)) return detectedNiche;
+  }
+
+  // Fall back to YouTube's own categoryId classification
+  const categoryMap: Record<string, string> = {
+    '1':  'entertainment',
+    '2':  'automotive',
+    '10': 'music',
+    '15': 'pets',
+    '17': 'sports',
+    '19': 'travel',
+    '20': 'gaming',
+    '22': 'lifestyle',
+    '23': 'comedy',
+    '24': 'entertainment',
+    '25': 'news',
+    '26': 'lifestyle',
+    '27': 'education',
+    '28': 'tech',
+    '29': 'general',
+  };
+
+  return categoryMap[categoryId] ?? 'general';
+  // NOTE: 'general' is the safe neutral fallback — never user's niche.
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Format helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -163,13 +216,6 @@ const buildSignalExtractionPrompt = (
   videoData: any,
   user: Partial<User>,
 ): string => {
-  const archetype = user?.archetype || "CREATOR";
-  const niche =
-    (Array.isArray(user?.niches) ? user.niches[0] : user?.niches) || "general";
-  const platform = user?.primary_platform || "youtube";
-  const followerRange = user?.follower_range || "unknown";
-  const engRate = user?.engagement_rate || 0;
-
   return `You are ARIA — India's creator intelligence engine. Extract raw signals from this YouTube video.
 
 CRITICAL RULES:
@@ -190,9 +236,10 @@ Description preview (first 400 chars): "${videoData.description.slice(0, 400)}"
 Has chapters in description: ${videoData.hasChapters > 1 ? "Yes" : "No"}
 Tag count: ${videoData.tagCount}
 
-CREATOR CONTEXT (personalise qualitative outputs only):
-Archetype: ${archetype} | Niche: ${niche} | Platform: ${platform}
-Followers: ${followerRange} | Their engagement rate: ${engRate}%
+ANALYSIS CONTEXT:
+Platform: YouTube | Region: India
+Evaluate this video purely on its own content, title, description, and tags.
+Do NOT factor in who is asking — score the video as it stands independently.
 
 INDIA CONTEXT:
 Rate India relevance for the Indian YouTube audience — cultural fit, language (Hindi/Hinglish/English), topics, festivals, problems faced by Indians specifically.
@@ -232,8 +279,8 @@ QUALITATIVE OUTPUTS (AI-generated text — no length restrictions):
 - betterTitle: SEO-optimised title alternative with keywords. Return null if current title is already optimal.
 - nextVideoSuggestion: What the creator should make next based on this video's topic. Be specific.
 - nextVideoReason: One sentence explaining why that next video would perform well.
-- benchmarkAnalysis: 1-2 sentences comparing this video's approach to top performers in its niche.
-- benchmarkStats: Array of 2-3 short comparative stat strings like "Top 20% hook score for ${niche}" or "Below average description quality for ${platform}".
+- benchmarkAnalysis: 1-2 sentences comparing this video's approach to top performers in its category.
+- benchmarkStats: Array of 2-3 short comparative stat strings like "Top 20% hook score" or "Below average description quality for YouTube".
 - shortsOpportunities: Array of 0-3 short-clip opportunities. Each has start (seconds), end (seconds), caption (text for the Short), viralScore (1-100), reason (why this moment is clipworthy). viralScore must be realistic: 45-70 for most clips, 80+ only for genuinely viral moments.
 
 RESPOND ONLY with this exact JSON structure (no markdown, no text before or after):
@@ -470,19 +517,10 @@ export const analyseVideo = async (
       return errors.serviceDown(reply, "ARIA signal extraction");
     }
 
-    // ── Step 3: Resolve niche from user profile ────────────────────────────────
-    const rawNiches = fullUser?.niches;
-    const niche: string = (() => {
-      if (Array.isArray(rawNiches) && rawNiches.length > 0) return String(rawNiches[0]);
-      if (typeof rawNiches === 'string' && rawNiches.startsWith('[')) {
-        try {
-          const parsed = JSON.parse(rawNiches);
-          if (Array.isArray(parsed) && parsed.length > 0) return String(parsed[0]);
-        } catch { /* fall through */ }
-      }
-      if (typeof rawNiches === 'string' && rawNiches.trim()) return rawNiches.trim();
-      return 'general';
-    })();
+    // ── Step 3: Derive niche from the VIDEO itself — zero user profile influence ──
+    // categoryId comes from YouTube's own classification of this video.
+    // This means two different users analysing the same video get identical scores.
+    const niche: string = deriveNicheFromVideo(videoData.categoryId, videoData.videoTitle);
 
     // ── Step 4: TypeScript scoring engine (deterministic, zero AI variance) ────
     // Passes publishedAtRaw, categoryId, and videoTitle for v3 improvements.
