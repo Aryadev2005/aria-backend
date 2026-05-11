@@ -207,25 +207,58 @@ export const getJioSaavnTrending = tool(
     schema: z.object({}),
   },
 );
-
-// ── TOOL 6: Google Trends (live search interest) ──────────────────────────────
 export const getGoogleTrends = tool(
-  async ({ keyword, geo = "IN", timeframe = "now 7-d" }) => {
+  async (input: { keyword: string; geo?: string; timeframe?: string }) => {
+    const { keyword, geo = "IN", timeframe = "now 7-d" } = input;
     try {
-      // @ts-ignore
-      const googleTrends = await import("google-trends-api");
+      const { default: googleTrends } = await import("google-trends-api");
       const result = await googleTrends.interestOverTime({
         keyword,
         geo,
         startTime: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
       });
-      const parsed = JSON.parse(result);
+
+      // Check if response is HTML (rate limiting or error)
+      if (typeof result === "string" && result.trim().startsWith("<html")) {
+        if (result.includes("Error 429")) {
+          return JSON.stringify({
+            error:
+              "Google Trends rate limited. Please try again in a few minutes.",
+            rateLimited: true,
+            fallback: {
+              keyword,
+              message:
+                "Trend data temporarily unavailable due to rate limiting",
+            },
+          });
+        } else {
+          return JSON.stringify({
+            error: "Google Trends returned HTML error page",
+            htmlResponse: true,
+          });
+        }
+      }
+
+      // Try to parse JSON
+      let parsed;
+      try {
+        parsed = JSON.parse(result);
+      } catch (parseError: any) {
+        return JSON.stringify({
+          error: `Google Trends JSON parsing failed: ${parseError?.message || parseError}`,
+          rawResponse: result.substring(0, 200),
+        });
+      }
+
       return JSON.stringify({
         keyword,
         trend: normalizeGoogleTrends(parsed),
       });
     } catch (err: any) {
-      return JSON.stringify({ error: `Google Trends failed: ${err.message}` });
+      return JSON.stringify({
+        error: `Google Trends failed: ${err.message}`,
+        type: err.name || "UnknownError",
+      });
     }
   },
   {
@@ -338,24 +371,30 @@ export const getUserProfile = tool(
             tone_profile: true,
             creator_intent: true,
             aria_confirmed_niche: true,
-            scraped_summary: true,        // ADDED — real Instagram data
-            aria_last_analysis: true,     // ADDED — ARIA's own profile analysis
-            aria_analyzed_at: true,       // ADDED — when was this analysis done
+            scraped_summary: true, // ADDED — real Instagram data
+            aria_last_analysis: true, // ADDED — ARIA's own profile analysis
+            aria_analyzed_at: true, // ADDED — when was this analysis done
           },
         });
 
         memoryRows = await (db.aria_memory as any).findMany({
           where: { user_id: userId },
-          orderBy: { confidence: 'desc' },
+          orderBy: { confidence: "desc" },
           take: 30,
           select: { category: true, key: true, value: true },
         });
 
         // Fetch Instagram token from account_connections (not users table)
-        igConnection = await (db.account_connections as any).findFirst({
-          where: { user_id: userId, platform: 'instagram' },
-          select: { platform_user_id: true, encrypted_token: true, handle: true },
-        }).catch(() => null);
+        igConnection = await (db.account_connections as any)
+          .findFirst({
+            where: { user_id: userId, platform: "instagram" },
+            select: {
+              platform_user_id: true,
+              encrypted_token: true,
+              handle: true,
+            },
+          })
+          .catch(() => null);
       } else {
         const rows = await db`
           SELECT id, name, archetype, archetype_label, niches, primary_platform,
@@ -425,7 +464,7 @@ export const getDBLiveTrends = tool(
             ...(niche && niche !== "all" ? { niche_tags: { has: niche } } : {}),
             ...(badge && badge !== "ALL" ? { badge } : {}),
           },
-          orderBy: { velocity: 'desc' },
+          orderBy: { velocity: "desc" },
           take: 20,
           select: {
             title: true,
@@ -437,8 +476,10 @@ export const getDBLiveTrends = tool(
           },
         });
       } else {
-        const nicheClause = niche && niche !== "all" ? `AND '${niche}' = ANY(niche_tags)` : '';
-        const badgeClause = badge && badge !== "ALL" ? `AND badge = '${badge}'` : '';
+        const nicheClause =
+          niche && niche !== "all" ? `AND '${niche}' = ANY(niche_tags)` : "";
+        const badgeClause =
+          badge && badge !== "ALL" ? `AND badge = '${badge}'` : "";
         trends = await db`
           SELECT title, badge, velocity, search_volume, niche_tags, recommendation
           FROM live_trends
@@ -448,7 +489,11 @@ export const getDBLiveTrends = tool(
       }
 
       if (!trends.length) {
-        return JSON.stringify({ message: "No live trends found in DB right now. Try get_google_trends for fresh data.", trends: [] });
+        return JSON.stringify({
+          message:
+            "No live trends found in DB right now. Try get_google_trends for fresh data.",
+          trends: [],
+        });
       }
 
       return JSON.stringify(normalizeDBTrends(trends));
@@ -480,41 +525,74 @@ export const getDBLiveTrends = tool(
 
 // ── TOOL 10: ARIA DB trending songs ──────────────────────────────────────────
 export const getDBTrendingSongs = tool(
-  async ({ language, niche, db }: { language?: string; niche?: string; db?: any }) => {
+  async ({
+    language,
+    niche,
+    db,
+  }: {
+    language?: string;
+    niche?: string;
+    db?: any;
+  }) => {
     try {
-      const { retrieveSongs } = await import("../services/songs/song.rag.service");
+      const { retrieveSongs } =
+        await import("../services/songs/song.rag.service");
 
       const result = await retrieveSongs({
         language: language || "Hindi",
-        niche:    niche    || "general",
-        limit:    15,
+        niche: niche || "general",
+        limit: 15,
       });
 
       if (!result.songs.length) {
         return JSON.stringify({
-          message: "No songs in DB yet. Worker runs every 6h — check back soon.",
-          songs:   [],
+          message:
+            "No songs in DB yet. Worker runs every 6h — check back soon.",
+          songs: [],
         });
       }
 
       // Build a rich summary for ARIA to use in responses
-      const postNow  = result.songs.filter((s) => s.signal === "postNow").slice(0, 5);
-      const peaking  = result.songs.filter((s) => s.lifecycle === "PEAKING").slice(0, 3);
-      const rising   = result.songs.filter((s) => s.lifecycle === "RISING" && s.signal === "postNow").slice(0, 5);
+      const postNow = result.songs
+        .filter((s) => s.signal === "postNow")
+        .slice(0, 5);
+      const peaking = result.songs
+        .filter((s) => s.lifecycle === "PEAKING")
+        .slice(0, 3);
+      const rising = result.songs
+        .filter((s) => s.lifecycle === "RISING" && s.signal === "postNow")
+        .slice(0, 5);
 
       return JSON.stringify({
-        fromCache:   result.fromCache,
-        language:    result.metadata.language,
-        niche:       result.metadata.niche,
-        totalSongs:  result.metadata.songCount,
-        postNow:     postNow.map((s)  => ({ title: s.title, artist: s.artist, rank: s.chart_position, lifecycle: s.lifecycle })),
-        peaking:     peaking.map((s)  => ({ title: s.title, artist: s.artist, rank: s.chart_position })),
-        rising:      rising.map((s)   => ({ title: s.title, artist: s.artist, rank: s.chart_position, change: s.chart_change })),
-        narrative:   result.hotWindowNarrative,
+        fromCache: result.fromCache,
+        language: result.metadata.language,
+        niche: result.metadata.niche,
+        totalSongs: result.metadata.songCount,
+        postNow: postNow.map((s) => ({
+          title: s.title,
+          artist: s.artist,
+          rank: s.chart_position,
+          lifecycle: s.lifecycle,
+        })),
+        peaking: peaking.map((s) => ({
+          title: s.title,
+          artist: s.artist,
+          rank: s.chart_position,
+        })),
+        rising: rising.map((s) => ({
+          title: s.title,
+          artist: s.artist,
+          rank: s.chart_position,
+          change: s.chart_change,
+        })),
+        narrative: result.hotWindowNarrative,
       });
     } catch (err: any) {
       logger.warn({ err: err.message }, "getDBTrendingSongs tool failed");
-      return JSON.stringify({ error: `Failed to fetch trending songs: ${err.message}`, songs: [] });
+      return JSON.stringify({
+        error: `Failed to fetch trending songs: ${err.message}`,
+        songs: [],
+      });
     }
   },
   {
@@ -525,11 +603,15 @@ export const getDBTrendingSongs = tool(
       language: z
         .string()
         .optional()
-        .describe('Language filter: "Hindi", "English", "Punjabi", "Telugu", etc. Default: Hindi'),
+        .describe(
+          'Language filter: "Hindi", "English", "Punjabi", "Telugu", etc. Default: Hindi',
+        ),
       niche: z
         .string()
         .optional()
-        .describe('Niche filter: "fashion", "fitness", "general", etc. Default: general'),
+        .describe(
+          'Niche filter: "fashion", "fitness", "general", etc. Default: general',
+        ),
     }),
   },
 );
@@ -563,7 +645,10 @@ export const getUserContentHistory = tool(
       }
 
       if (!content.length) {
-        return JSON.stringify({ message: "No content history yet for this user.", content: [] });
+        return JSON.stringify({
+          message: "No content history yet for this user.",
+          content: [],
+        });
       }
 
       return JSON.stringify({

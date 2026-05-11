@@ -211,6 +211,57 @@ const InfoAlert = defineComponent({
   component: () => null, // Server-side: no renderer
 });
 
+const ScriptCard = defineComponent({
+  name: "ScriptCard",
+  description: [
+    "Full reel / short / video script with scene-by-scene breakdown.",
+    'Use WHENEVER the user asks to "write a script", "give me a script", "script for X".',
+    "NEVER use ContentIdea for scripts — always use ScriptCard.",
+    "Each scene has: type (hook/build/value/cta/transition/reveal), timing, dialogue, visual direction, sfx, on-screen text.",
+  ].join(" "),
+  props: z.object({
+    title: z.string(),
+    format: z
+      .string()
+      .optional()
+      .describe('"30s Reel", "60s Reel", "YouTube Short"'),
+    totalDuration: z.string().optional().describe('"28–32 seconds"'),
+    platform: z.string().optional(),
+    niche: z.string().optional(),
+    audio: z.string().optional().describe("Suggested song or audio style"),
+    viralPotential: z.enum(["High", "Medium", "Low"]).optional(),
+    scenes: z
+      .array(
+        z.object({
+          type: z.enum([
+            "hook",
+            "build",
+            "value",
+            "cta",
+            "transition",
+            "reveal",
+            "default",
+          ]),
+          scene: z.string().optional().describe('Label e.g. "Opening Hook"'),
+          timing: z.string().optional().describe('"0–3s"'),
+          dialogue: z.string().optional(),
+          visual: z.string().optional().describe("Shot / camera direction"),
+          sfx: z.string().optional().describe("Audio cue"),
+          onScreenText: z
+            .string()
+            .optional()
+            .describe("Text overlay on screen"),
+        }),
+      )
+      .min(2)
+      .max(14),
+    ariaTip: z.string().optional(),
+    captionHook: z.string().optional(),
+    hashtags: z.array(z.string()).optional(),
+  }),
+  component: () => null,
+});
+
 // ─── Export ───────────────────────────────────────────────────────────────────
 export const ariaLibraryNode = createLibrary({
   root: "IdeaBatch",
@@ -225,5 +276,6 @@ export const ariaLibraryNode = createLibrary({
     GrowthRoadmap,
     QuickActions,
     InfoAlert,
+    ScriptCard,
   ],
 });

@@ -387,11 +387,18 @@ For greetings, short confirmations, emotional replies → plain markdown only.
 WHEN TO USE:
 - Trends / viral topics → TrendGrid or TrendCard
 - Song recommendations → SongCard  
-- 3+ content ideas → IdeaBatch; single idea with script → ContentIdea
+- 3+ content ideas → IdeaBatch; single idea (no script) → ContentIdea
+- ANY script request ("write a script", "script for X") → ScriptCard ALWAYS — never ContentIdea
 - Profile stats / analytics → AnalyticsSnapshot
 - Brand deal pricing → RateCard
 - Growth planning → GrowthRoadmap
 - End of any complex response → add QuickActions chips
+- Hook ideas → HookVariations
+- Caption / hashtags / posting kit → PostingPackage  
+- "When should I post?" → TimingCard
+- Weekly plan / content calendar → CalendarWeek
+- Brand outreach / pitch → BrandDealPitch
+- Reel script / YouTube short script → ScriptCard
 
 RULES: root = first, camelCase vars, ₹ for pricing, QuickActions last.
 
