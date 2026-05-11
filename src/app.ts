@@ -253,9 +253,9 @@ export const buildApp = async (): Promise<FastifyInstance> => {
   await app.register(dataDeletionRoutes, {
     prefix: `${API_PREFIX}/data-deletion`,
   });
-  await app.register(deepAnalysisRoutes, {
-    prefix: `${API_PREFIX}/deep-analysis`,
-  });
+  // await app.register(deepAnalysisRoutes, {
+  //   prefix: `${API_PREFIX}/deep-analysis`,
+  // });
 
   // ── Lifecycle / error handlers ─────────────────────────────────────────────
   app.setNotFoundHandler((req, reply) => {

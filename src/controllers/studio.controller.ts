@@ -13,6 +13,8 @@ import path from "path";
 import fs from "fs";
 import os from "os";
 import { User } from "../types";
+import { getVoicePortrait } from "../services/voice.service";
+import { runTwoPassStudio } from "../services/deep_analysis.service";
 
 /**
  * Get script skeleton/structure based on idea and platform
@@ -40,14 +42,9 @@ export const getScriptStructure = async (
       userId: user.id,
     });
 
-    await debitCredits(
-      user.id,
-      "script_writing",
-      modelToUse,
-      1500,
-      1000,
-      
-    ).catch((err) => logger.warn({ err }, "Debit failed"));
+    await debitCredits(user.id, "script_writing", modelToUse, 1500, 1000).catch(
+      (err) => logger.warn({ err }, "Debit failed"),
+    );
 
     return success(reply, {
       ...result,
@@ -83,14 +80,9 @@ export const adviseSection = async (
       archetype: user.archetype || "EDUCATOR",
     });
 
-    await debitCredits(
-      user.id,
-      "script_writing",
-      modelToUse,
-      1200,
-      800,
-    
-    ).catch((err) => logger.warn({ err }, "Debit failed"));
+    await debitCredits(user.id, "script_writing", modelToUse, 1200, 800).catch(
+      (err) => logger.warn({ err }, "Debit failed"),
+    );
 
     return success(reply, {
       ...result,
@@ -130,7 +122,6 @@ export const matchBGM = async (
       modelToUse,
       800,
       400,
-    
     ).catch((err) => logger.warn({ err }, "Debit failed"));
 
     return success(reply, {
@@ -163,14 +154,9 @@ export const getShotList = async (
       archetype: user.archetype || "EDUCATOR",
     });
 
-    await debitCredits(
-      user.id,
-      "script_writing",
-      modelToUse,
-      1000,
-      600,
-  
-    ).catch((err) => logger.warn({ err }, "Debit failed"));
+    await debitCredits(user.id, "script_writing", modelToUse, 1000, 600).catch(
+      (err) => logger.warn({ err }, "Debit failed"),
+    );
 
     return success(reply, {
       ...result,
@@ -201,14 +187,9 @@ export const getEditingHelp = async (
       archetype: user.archetype || "EDUCATOR",
     });
 
-    await debitCredits(
-      user.id,
-      "script_writing",
-      modelToUse,
-      800,
-      400,
-   
-    ).catch((err) => logger.warn({ err }, "Debit failed"));
+    await debitCredits(user.id, "script_writing", modelToUse, 800, 400).catch(
+      (err) => logger.warn({ err }, "Debit failed"),
+    );
 
     return success(reply, {
       ...result,
@@ -240,14 +221,9 @@ export const analyseVideoUrl = async (
       mood,
     });
 
-    await debitCredits(
-      user.id,
-      "video_analysis",
-      modelToUse,
-      3000,
-      1500,
-      
-    ).catch((err) => logger.warn({ err }, "Debit failed"));
+    await debitCredits(user.id, "video_analysis", modelToUse, 3000, 1500).catch(
+      (err) => logger.warn({ err }, "Debit failed"),
+    );
 
     return success(reply, {
       ...result,
@@ -296,14 +272,9 @@ export const analyseVideoUpload = async (req: any, reply: FastifyReply) => {
       /* ignore */
     }
 
-    await debitCredits(
-      user.id,
-      "video_analysis",
-      modelToUse,
-      3500,
-      1500,
-     
-    ).catch((err) => logger.warn({ err }, "Debit failed"));
+    await debitCredits(user.id, "video_analysis", modelToUse, 3500, 1500).catch(
+      (err) => logger.warn({ err }, "Debit failed"),
+    );
 
     return success(reply, {
       ...result,
@@ -458,5 +429,117 @@ export const togglePin = async (
   } catch (err) {
     logger.error({ err }, "togglePin failed");
     return errors.internal(reply);
+  }
+};
+
+// Fetch studio learnings (same helper as studio.service.ts uses internally)
+async function getStudioLearnings(userId: string): Promise<string> {
+  try {
+    const { prisma } = await import("../config/database");
+    const rows = await (prisma as any).aria_memory.findMany({
+      where: { user_id: userId, category: { in: ["style", "voice"] } },
+      select: { category: true, key: true, value: true },
+    });
+    if (!rows.length) return "";
+    return rows
+      .map((r: any) => {
+        try {
+          return `${r.category}.${r.key}: ${JSON.parse(r.value)}`;
+        } catch {
+          return `${r.category}.${r.key}: ${r.value}`;
+        }
+      })
+      .join("\n");
+  } catch {
+    return "";
+  }
+}
+
+// ── POST /api/v1/studio/script/stream ────────────────────────────────────────
+// Two-pass: research → script. Streams SSE events.
+export const streamScript = async (
+  req: FastifyRequest<{ Body: any }>,
+  reply: FastifyReply,
+) => {
+  const user = req.user as User;
+  const { idea, platform, niche, format, mood, angle } = req.body as any;
+
+  if (!idea?.trim()) {
+    return reply.status(400).send({ error: "idea is required" });
+  }
+
+  // SSE headers
+  reply.raw.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+    "Access-Control-Allow-Origin": "*",
+  });
+
+  const sendSSE = (event: any) => {
+    try {
+      reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+    } catch {}
+  };
+
+  const keepAlive = setInterval(() => {
+    try {
+      reply.raw.write(": ping\n\n");
+    } catch {
+      clearInterval(keepAlive);
+    }
+  }, 15_000);
+
+  try {
+    // Load voice portrait and learned prefs in parallel
+    const [vpResult, lpResult] = await Promise.allSettled([
+      getVoicePortrait(user.id),
+      getStudioLearnings(user.id),
+    ]);
+
+    const voicePortrait =
+      vpResult.status === "fulfilled" ? vpResult.value : null;
+    const learnedPrefs =
+      lpResult.status === "fulfilled" ? (lpResult.value as string) : "";
+
+    const voiceContext = voicePortrait
+      ? `Tone: ${voicePortrait.toneSignature}, Energy: ${voicePortrait.energyLevel}, Language: ${voicePortrait.preferredLanguage}, Style: ${voicePortrait.sentenceStyle}`
+      : undefined;
+
+    await runTwoPassStudio(
+      {
+        idea: idea.trim(),
+        platform: platform || user.primary_platform || "instagram",
+        niche: niche || user.niches?.[0] || "general",
+        format: format || "reel",
+        mood,
+        angle,
+        archetype: user.archetype || "EDUCATOR",
+        followerRange: user.follower_range || undefined,
+        voiceContext,
+        learnedPrefs: learnedPrefs || undefined,
+        creatorName: user.name || undefined,
+      },
+      (event) => {
+        sendSSE(event);
+
+        if (event.type === "done") {
+          const modelToUse = req.creditCheck?.modelToUse ?? "gpt-4o-mini";
+          debitCredits(user.id, "script_writing", modelToUse, 3000, 1500).catch(
+            (err) => logger.warn({ err }, "Debit failed"),
+          );
+        }
+      },
+    );
+  } catch (err: any) {
+    logger.error({ err: err.message, userId: user.id }, "streamScript failed");
+    sendSSE({
+      type: "error",
+      message: "Script generation failed. Please try again.",
+    });
+  } finally {
+    clearInterval(keepAlive);
+    reply.raw.end();
   }
 };

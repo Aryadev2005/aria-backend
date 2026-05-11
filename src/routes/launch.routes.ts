@@ -15,8 +15,15 @@ export default async function launchRoutes(app: FastifyInstance) {
         body: {
           type: "object",
           properties: {
-            idea: { type: "string", maxLength: 300 },
-            script: { type: "string", maxLength: 2000 },
+            idea: { type: "string", maxLength: 400 },
+            script: { type: "string", maxLength: 5000 },
+            format: { type: "string" },
+            platform: { type: "string" },
+            niche: { type: "string" },
+            hookLine: { type: "string" },
+            caption: { type: "string" },
+            hashtags: { type: "array", items: { type: "string" } },
+            trendInsight: { type: "string" },
           },
         },
       },

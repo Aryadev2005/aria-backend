@@ -3,7 +3,7 @@ import * as ctrl from "../controllers/studio.controller";
 import { authenticateFirebase } from "../middleware/auth.middleware";
 import { requireCredits } from "../middleware/credits.middleware";
 // At the top, add the import:
-import { streamDeepAnalysis } from "../controllers/deepAnalysis.controller";
+import { streamScript } from "../controllers/studio.controller";
 
 export default async function studioRoutes(app: FastifyInstance) {
   const auth = { preHandler: [authenticateFirebase] };
@@ -200,6 +200,32 @@ export default async function studioRoutes(app: FastifyInstance) {
         },
       },
     },
-    streamDeepAnalysis as any,
+    streamScript as any,
+  );
+
+  // POST /api/v1/studio/script/stream  — Two-pass: research → script via SSE
+  app.post(
+    "/script/stream",
+    {
+      preHandler: [authenticateFirebase, requireCredits("script_writing")],
+      schema: {
+        body: {
+          type: "object",
+          required: ["idea"],
+          properties: {
+            idea: { type: "string", minLength: 2, maxLength: 400 },
+            platform: { type: "string" },
+            niche: { type: "string" },
+            format: {
+              type: "string",
+              enum: ["reel", "post", "carousel", "video", "story", "thread"],
+            },
+            mood: { type: "string" },
+            angle: { type: "string" },
+          },
+        },
+      },
+    },
+    streamScript as any,
   );
 }
