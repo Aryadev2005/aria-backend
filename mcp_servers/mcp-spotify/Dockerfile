@@ -5,7 +5,7 @@ WORKDIR /app
 
 COPY package*.json ./
 # Skip prepare script during install (it needs source files)
-RUN npm ci --ignore-scripts
+RUN npm install --ignore-scripts
 
 COPY . .
 # Now run build after source files are available
@@ -17,7 +17,7 @@ WORKDIR /app
 
 COPY package*.json ./
 # --ignore-scripts skips the 'prepare' script which tries to run tsc (not available in prod deps)
-RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
+RUN npm install --omit=dev --ignore-scripts && npm cache clean --force
 
 COPY --from=build /app/build ./build
 
