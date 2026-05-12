@@ -472,6 +472,40 @@ export const streamScript = async (
     return reply.status(400).send({ error: "idea is required" });
   }
 
+  // ADD: format-duration contract enforcement
+  const FORMAT_MAX_SECONDS: Record<string, number> = {
+    reel:     60,
+    story:    60,
+    post:     90,
+    carousel: Infinity, // slides, not time
+    video:    180 * 60, // 3 hours max
+    thread:   Infinity, // tweets, not time
+  };
+
+  if (duration && format) {
+    const lower = String(duration).toLowerCase().trim();
+    let totalSeconds = 0;
+
+    const hr  = lower.match(/(\d+(?:\.\d+)?)\s*h(?:our|r)?/);
+    const min = lower.match(/(\d+(?:\.\d+)?)\s*m(?:in)?/);
+    const sec = lower.match(/(\d+(?:\.\d+)?)\s*s(?:ec)?/);
+    if (hr)  totalSeconds += parseFloat(hr[1])  * 3600;
+    if (min) totalSeconds += parseFloat(min[1]) * 60;
+    if (sec) totalSeconds += parseFloat(sec[1]);
+
+    const maxSeconds = FORMAT_MAX_SECONDS[format] ?? Infinity;
+    if (totalSeconds > 0 && totalSeconds > maxSeconds) {
+      const maxLabel = maxSeconds >= 3600
+        ? `${maxSeconds / 3600} hour(s)`
+        : maxSeconds >= 60
+          ? `${maxSeconds / 60} minute(s)`
+          : `${maxSeconds} seconds`;
+      return reply.status(400).send({
+        error: `Max duration for a ${format} is ${maxLabel}. Reels are short-form content — maximum 60 seconds.`,
+      });
+    }
+  }
+
   // SSE headers
   reply.raw.writeHead(200, {
     "Content-Type": "text/event-stream",
