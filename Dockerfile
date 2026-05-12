@@ -73,4 +73,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD curl -f http://localhost:3000/health || exit 1
 
 # Run migrations then start the application
-CMD ["sh", "-c", "npx prisma migrate deploy && npx tsx dist/server.js"]
+CMD ["sh", "-c", "npx prisma db push --accept-data-loss && npx tsx dist/server.js"]
