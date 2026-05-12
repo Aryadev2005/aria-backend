@@ -465,7 +465,7 @@ export const streamScript = async (
   reply: FastifyReply,
 ) => {
   const user = req.user as User;
-  const { idea, platform, niche, format, mood, angle, attachedNotes } =
+  const { idea, platform, niche, format, mood, angle, duration, userQuery, attachedNotes } =
     req.body as any;
 
   if (!idea?.trim()) {
@@ -524,6 +524,8 @@ export const streamScript = async (
         voiceContext,
         learnedPrefs: learnedPrefs || undefined,
         creatorName: user.name || undefined,
+        userQuery: userQuery?.trim() || undefined,
+        duration: duration?.trim() || undefined,
         attachedNotes,
       },
       (event) => {

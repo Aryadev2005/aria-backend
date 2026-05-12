@@ -222,6 +222,8 @@ export default async function studioRoutes(app: FastifyInstance) {
             },
             mood: { type: "string" },
             angle: { type: "string" },
+            userQuery: { type: "string", maxLength: 500 },
+            duration: { type: "string", maxLength: 50 },
           },
         },
       },

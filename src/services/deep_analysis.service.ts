@@ -16,6 +16,7 @@ import { ChatOpenAI } from "@langchain/openai";
 import { createDeepAgent } from "deepagents";
 import { z } from "zod";
 import OpenAI from "openai";
+import { ApifyClient } from "apify-client";
 import { logger } from "../utils/logger";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -74,6 +75,8 @@ export interface StudioInput {
   voiceContext?: string;
   learnedPrefs?: string;
   creatorName?: string;
+  userQuery?: string;
+  duration?: string;    // e.g. "5 minutes", "30 min", "1 hour", "45s"
   attachedNotes?: AttachedNote[];
 }
 
@@ -303,7 +306,7 @@ export async function runDeepResearch(
   input: StudioInput,
   onEvent: (event: SSEEvent) => void,
 ): Promise<ResearchBrief> {
-  const { idea, platform, niche, format, angle } = input;
+  const { idea, platform, niche, format, angle, userQuery } = input;
 
   onEvent({ type: "phase", phase: "researching", label: "Deep Research" });
   onEvent({ type: "research_update", message: "Initializing research agent…" });
@@ -381,22 +384,21 @@ export async function runDeepResearch(
     },
   );
 
-  // ── Apify scraper — OPTIONAL, always returns gracefully ──────────────────
+  // ── Apify scraper using apify-client (correct async pattern) ────────────────
   const apifyScraperTool = tool(
     async ({
       platform: plt,
       query,
+      maxItems = 8,
     }: {
       platform: string;
       query: string;
+      maxItems?: number;
     }): Promise<string> => {
-      const apiKey = process.env.APIFY_API_KEY?.trim();
-      if (!apiKey) {
-        logger.warn("[DeepResearch] APIFY_API_KEY not set — skip");
-        return JSON.stringify({
-          skipped: true,
-          reason: "Apify not configured. Proceed with web search results.",
-        });
+      const token = process.env.APIFY_API_TOKEN;  // ✅ correct env var name
+      if (!token) {
+        logger.warn("[DeepResearch] APIFY_API_TOKEN not set — skip");
+        return JSON.stringify({ error: "APIFY_API_TOKEN not set" });
       }
 
       const ACTOR_MAP: Record<string, string> = {
@@ -408,57 +410,43 @@ export async function runDeepResearch(
       logger.info({ plt, query, actorId }, "[DeepResearch] Apify scrape start");
 
       try {
-        const runRes = await fetch(
-          `https://api.apify.com/v2/acts/${actorId}/run-sync-get-dataset-items?token=${apiKey}&maxItems=6`,
+        const client = new ApifyClient({ token });
+
+        // ✅ async run — works with slow actors, no sync timeout
+        const run = await client.actor(actorId).call(
           {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              hashtags: [query.replace(/^#/, "")],
-              resultsLimit: 6,
-              searchQuery: query,
-            }),
-            signal: AbortSignal.timeout(20_000),
+            hashtags: [query.replace(/^#/, "")],
+            resultsLimit: maxItems,
+            searchQuery: query,
           },
+          { timeout: 60, memory: 256 },
         );
 
-        if (!runRes.ok) {
-          logger.warn(
-            { status: runRes.status },
-            "[DeepResearch] Apify HTTP error — skip",
-          );
-          return JSON.stringify({
-            skipped: true,
-            reason: `Apify ${runRes.status}. Use web search data only.`,
-          });
-        }
+        const { items } = await client
+          .dataset(run.defaultDatasetId)
+          .listItems({ limit: maxItems });
 
-        const items = await runRes.json();
-        const trimmed = Array.isArray(items)
-          ? items.slice(0, 6).map((it: any) => ({
-              title: it.title || it.caption?.slice(0, 80) || "",
-              views: it.viewCount || it.videoViewCount || it.likesCount || 0,
-              hashtags: (it.hashtags || []).slice(0, 5),
-            }))
-          : [];
+        const trimmed = items.slice(0, maxItems).map((it: any) => ({
+          title: it.title || it.caption?.slice(0, 100) || "",
+          views: it.viewCount || it.videoViewCount || it.likesCount || 0,
+          hashtags: (it.hashtags || []).slice(0, 6),
+        }));
 
         logger.info({ count: trimmed.length }, "[DeepResearch] Apify success");
         return JSON.stringify({ platform: plt, query, results: trimmed });
       } catch (err: any) {
-        logger.warn({ err: err.message }, "[DeepResearch] Apify failed — skip");
-        return JSON.stringify({
-          skipped: true,
-          reason: `Apify unavailable. Proceed with web search data only.`,
-        });
+        logger.warn({ err: err.message }, "[DeepResearch] Apify scrape failed");
+        return JSON.stringify({ error: err.message });
       }
     },
     {
       name: "apify_trend_scraper",
       description:
-        "Optional: scrape trending posts from Instagram/YouTube for engagement data. Call ONCE only. If skipped:true is returned, do NOT retry.",
+        "Scrape trending posts from Instagram or YouTube. Use this to get real engagement data. Use AFTER web searches.",
       schema: z.object({
         platform: z.enum(["instagram", "youtube", "tiktok"]),
         query: z.string().describe("Topic or hashtag to search"),
+        maxItems: z.number().optional(),
       }),
     },
   );
@@ -499,6 +487,9 @@ Return ONLY this JSON — no markdown, no explanation, start with { end with }:
   "bestTiming": "Best day/time for Indian audiences on ${platform} with reasoning",
   "rawSources": "Key sources and data points found in your searches"
 }`,
+    model: new ChatOpenAI({ model: "gpt-4o-mini", temperature: 0.2 }).bindTools(
+      [webSearchTool, apifyScraperTool],  // ✅ both tools in the LLM manifest
+    ),
     tools: [webSearchTool, apifyScraperTool],
   };
 
@@ -515,10 +506,17 @@ Return the researcher's JSON output verbatim — no extra text.`,
 TOPIC: "${idea}"
 PLATFORM: ${platform}
 NICHE: ${niche}
-FORMAT: ${format}
-${angle ? `ANGLE: ${angle}` : ""}
- 
-Use the task tool to delegate to the "researcher" subagent now.`;
+FORMAT NEEDED: ${format}
+${angle ? `DESIRED ANGLE: ${angle}` : ""}
+${userQuery ? `CREATOR'S EXACT REQUEST: "${userQuery}"` : ""}
+
+Delegate to the researcher subagent with these exact instructions:
+- Research "${idea}" trending on ${platform} in India
+- Find viral angles in the ${niche} niche
+- Identify Indian audience insights for this topic
+- Scrape ${platform} for real engagement data on "${idea}"
+${userQuery ? `- Pay special attention to the creator's specific ask: "${userQuery}"` : ""}
+- Return the complete JSON research brief`;
 
   const TIMEOUT_MS = 90_000;
   let iterationCount = 0;
@@ -746,160 +744,381 @@ const oai = () => {
   return new OpenAI({ apiKey, timeout: 60_000 });
 };
 
+// ── Duration helpers ──────────────────────────────────────────────────────────
+// Inserted just before generateScript. Nothing else changes.
+
+const WORDS_PER_MINUTE = 150; // average spoken delivery rate
+
+function parseDurationToMinutes(duration?: string, format?: string): number {
+  if (duration) {
+    const lower = duration.toLowerCase().trim();
+    let total = 0;
+    const hr  = lower.match(/(\d+(?:\.\d+)?)\s*h(?:our|r)?/);
+    const min = lower.match(/(\d+(?:\.\d+)?)\s*m(?:in)?/);
+    const sec = lower.match(/(\d+(?:\.\d+)?)\s*s(?:ec)?/);
+    if (hr)  total += parseFloat(hr[1])  * 60;
+    if (min) total += parseFloat(min[1]);
+    if (sec) total += parseFloat(sec[1]) / 60;
+    if (total > 0) return total;
+  }
+  // Format-based defaults when no explicit duration given
+  const defaults: Record<string, number> = {
+    reel: 0.5, post: 1, carousel: 2,
+    video: 8,  story: 0.5, thread: 3,
+  };
+  return defaults[format ?? "reel"] ?? 1;
+}
+
+function formatDurationLabel(mins: number): string {
+  if (mins >= 60)  return `${(mins / 60).toFixed(1).replace(/\.0$/, "")} hour${mins >= 120 ? "s" : ""}`;
+  if (mins >= 1)   return `${Math.round(mins)} minute${Math.round(mins) !== 1 ? "s" : ""}`;
+  return `${Math.round(mins * 60)} seconds`;
+}
+
+interface SectionBlueprint {
+  id: string;
+  label: string;
+  type: ScriptSection["type"];
+  placeholder: string;
+  tip: string;
+  targetWords: number;
+  startMin: number;
+  endMin: number;
+}
+
+/**
+ * Builds a section blueprint scaled to any duration.
+ * Short-form (≤3 min): uses FORMAT_CONFIGS sections directly.
+ * Long-form (>3 min): AI decides chapter structure via a planning call.
+ */
+async function buildSectionBlueprints(
+  input: StudioInput,
+  brief: ResearchBrief,
+  totalMinutes: number,
+): Promise<SectionBlueprint[]> {
+  const { idea, platform, niche, format } = input;
+  const totalWords = Math.round(totalMinutes * WORDS_PER_MINUTE);
+
+  // ── Short-form: just use FORMAT_CONFIGS as-is ─────────────────────────────
+  if (totalMinutes <= 3) {
+    const config = FORMAT_CONFIGS[format] || FORMAT_CONFIGS.reel;
+    const perSection = Math.round(totalWords / config.sections.length);
+    let cursor = 0;
+    return config.sections.map((s, i) => {
+      const words = (s.type === "hook" || s.type === "cta")
+        ? Math.round(perSection * 0.5)
+        : perSection;
+      const durMins = words / WORDS_PER_MINUTE;
+      const bp: SectionBlueprint = {
+        id: `s${i}`,
+        label: s.label,
+        type: s.type,
+        placeholder: s.placeholder,
+        tip: s.tip,
+        targetWords: words,
+        startMin: parseFloat(cursor.toFixed(2)),
+        endMin: parseFloat((cursor + durMins).toFixed(2)),
+      };
+      cursor = bp.endMin;
+      return bp;
+    });
+  }
+
+  // ── Long-form: AI plans the chapter structure ─────────────────────────────
+  const durationLabel = formatDurationLabel(totalMinutes);
+
+  const planPrompt = `You are a YouTube script architect for Indian creators.
+
+VIDEO BRIEF:
+- Topic: "${idea}"
+- Platform: ${platform} | Niche: ${niche}
+- Total duration: ${durationLabel} (~${totalWords} words at 150 words/min)
+- Trend context: ${brief.trendSummary}
+- Audience: ${brief.audienceInsights}
+
+Design the optimal chapter structure for this video.
+Rules:
+1. Hook must be short (≤60s). Outro/CTA must be short (≤60s).
+2. Intro context max 2 min.
+3. Content chapters fill the rest. Each chapter covers ONE focused idea.
+4. Chapter count should feel natural for the topic — not forced.
+5. Each chapter label must be specific and descriptive (not just "Chapter 1").
+6. Allocate more time to the most valuable chapters.
+
+Return ONLY valid JSON:
+{
+  "sections": [
+    {
+      "label": "Hook",
+      "type": "hook",
+      "durationMinutes": 0.5,
+      "tip": "delivery tip for this section"
+    },
+    {
+      "label": "Why Most People Get This Wrong",
+      "type": "body",
+      "durationMinutes": 2.0,
+      "tip": "delivery tip"
+    }
+    // ... more sections
+  ]
+}
+
+Types allowed: "hook" | "body" | "detail" | "cta" | "transition"
+Total durationMinutes across all sections MUST sum to exactly ${totalMinutes.toFixed(1)}.`;
+
+  let planSections: Array<{
+    label: string;
+    type: ScriptSection["type"];
+    durationMinutes: number;
+    tip: string;
+  }> = [];
+
+  try {
+    const planRes = await oai().chat.completions.create({
+      model: "gpt-4o-mini",
+      max_tokens: 1200,
+      temperature: 0.4,
+      messages: [
+        { role: "system", content: "You are a script architect. Return ONLY valid JSON, no markdown." },
+        { role: "user", content: planPrompt },
+      ],
+    });
+
+    const raw = (planRes.choices[0].message.content ?? "")
+      .replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+    const parsed = JSON.parse(raw);
+    planSections = parsed.sections || [];
+  } catch (err: any) {
+    logger.warn({ err: err.message }, "[Studio] Section planner failed — using fallback structure");
+    // Fallback: sensible default long-form structure
+    const hookMins  = Math.min(1, totalMinutes * 0.04);
+    const introMins = Math.min(2, totalMinutes * 0.08);
+    const recapMins = Math.min(2, totalMinutes * 0.05);
+    const ctaMins   = Math.min(1, totalMinutes * 0.04);
+    const bodyMins  = totalMinutes - hookMins - introMins - recapMins - ctaMins;
+    const numChaps  = Math.max(2, Math.round(bodyMins / 5));
+    const chapMins  = bodyMins / numChaps;
+
+    planSections = [
+      { label: "Hook", type: "hook", durationMinutes: hookMins, tip: "Open mid-action. No intros." },
+      { label: "Intro & Why This Matters", type: "body", durationMinutes: introMins, tip: "Short. Promise value immediately." },
+      ...Array.from({ length: numChaps }, (_, i) => ({
+        label: `Chapter ${i + 1}`,
+        type: (i === Math.floor(numChaps / 2) ? "detail" : "body") as ScriptSection["type"],
+        durationMinutes: chapMins,
+        tip: "One idea per chapter. Real examples over theory.",
+      })),
+      { label: "Key Takeaways", type: "body", durationMinutes: recapMins, tip: "Name each takeaway explicitly." },
+      { label: "Outro & CTA", type: "cta", durationMinutes: ctaMins, tip: "One specific ask. Warm, not salesy." },
+    ];
+  }
+
+  // Convert plan → blueprints with cumulative timestamps
+  let cursor = 0;
+  return planSections.map((s, i) => {
+    const words = Math.round(s.durationMinutes * WORDS_PER_MINUTE);
+    const bp: SectionBlueprint = {
+      id: `s${i}`,
+      label: s.label,
+      type: s.type,
+      placeholder: `Spoken content for: ${s.label}`,
+      tip: s.tip,
+      targetWords: words,
+      startMin: parseFloat(cursor.toFixed(2)),
+      endMin: parseFloat((cursor + s.durationMinutes).toFixed(2)),
+    };
+    cursor = bp.endMin;
+    return bp;
+  });
+}
+
 export async function generateScript(
   input: StudioInput,
   brief: ResearchBrief,
   onEvent: (event: SSEEvent) => void,
 ): Promise<ScriptResult> {
   const {
-    idea,
-    platform,
-    niche,
-    format,
-    mood,
-    angle,
-    archetype,
-    voiceContext,
-    learnedPrefs,
-    attachedNotes,
+    idea, platform, niche, format, mood, angle,
+    archetype, voiceContext, learnedPrefs, duration, userQuery,
   } = input;
 
   onEvent({ type: "phase", phase: "scripting", label: "Generating Script" });
 
-  const formatConfig = FORMAT_CONFIGS[format] || FORMAT_CONFIGS.reel;
+  // ── Resolve duration ──────────────────────────────────────────────────────
+  const totalMinutes   = parseDurationToMinutes(duration, format);
+  const durationLabel  = formatDurationLabel(totalMinutes);
+  const totalWords     = Math.round(totalMinutes * WORDS_PER_MINUTE);
+  const isShortForm    = totalMinutes <= 3;
 
-  // Build attached notes context if present
-  const attachedNotesContext =
-    attachedNotes && attachedNotes.length > 0
-      ? `
-ATTACHED NOTES (use these as reference/context — full content provided):
-${attachedNotes
-  .map(
-    (note, i) => `--- Note ${i + 1}: ${note.title || "Untitled"} ---
-Content: ${note.content || "(no content)"}
-${note.tags?.length ? `Tags: ${note.tags.join(", ")}` : ""}
-`,
-  )
-  .join("\n")}
-Use insights from these notes where relevant to enrich the script.`
-      : "";
+  // Shared context injected into every section call
+  const sharedCtx = `
+VIDEO CONTEXT:
+- Idea: "${idea}" | Platform: ${platform} | Niche: ${niche}
+- Total duration: ${durationLabel} (~${totalWords} words) | Format: ${format}
+- Mood: ${mood || "authentic"} | Angle: ${angle || "best from research"}
+- Archetype: ${archetype}
+${userQuery ? `- Creator's exact request: "${userQuery}"` : ""}
+${voiceContext ? `- Voice profile: ${voiceContext}` : ""}
+${learnedPrefs ? `- Learned preferences: ${learnedPrefs}` : ""}
 
-  const scriptPrompt = `You are ARIA — TrendAI's script engine for Indian creators.
-
-RESEARCH BRIEF (from deep web research — apply these directly):
+RESEARCH INSIGHTS:
 - Trend: ${brief.trendStrength} — ${brief.trendSummary}
 - Why it works: ${brief.whyItWorks}
 - Top viral angles: ${brief.topViralAngles.join(" | ")}
 - Audience: ${brief.audienceInsights}
 - Proven hooks: ${brief.hookPatterns.join(" | ")}
-- Opportunity gap: ${brief.competitorGaps}
-- Recommendation: ${brief.contentRecommendation}
-- Best timing: ${brief.bestTiming}
+- Competitor gap: ${brief.competitorGaps}
+- Recommendation: ${brief.contentRecommendation}`.trim();
 
-CREATOR:
-- Idea: "${idea}" | Platform: ${platform} | Niche: ${niche}
-- Format: ${format} (${formatConfig.durationRange}) | Mood: ${mood || "authentic"} | Angle: ${angle || "best from research"}
-- Archetype: ${archetype}
-${voiceContext ? `- Voice: ${voiceContext}` : ""}
-${learnedPrefs ? `- Preferences: ${learnedPrefs}` : ""}
-${attachedNotesContext}
+  // ── Step 1: Build section blueprints ─────────────────────────────────────
+  onEvent({ type: "research_update", message: "Planning script structure…" });
+  const blueprints = await buildSectionBlueprints(input, brief, totalMinutes);
+  const totalSections = blueprints.length;
 
-FORMAT RULES: ${formatConfig.scriptInstructions}
-SECTIONS: ${formatConfig.sections.map((s) => s.label).join(", ")}
+  // ── Step 2: Meta call — hookLine, caption, hashtags (once, fast) ─────────
+  const metaPrompt = `${sharedCtx}
 
-Rules:
-1. Hook MUST use one of the proven hook patterns from research
-2. Address the specific audience pain points found in research
-3. Exploit the competitor gap identified
-4. Write in the creator's voice — never generic
-5. If attached notes are provided, weave relevant insights naturally into the script
+Generate the meta elements for this script. Return ONLY valid JSON:
+{
+  "hookLine": "Single most powerful opening line, max 15 words",
+  "hookTip": "Why this hook works and exactly how to deliver it",
+  "caption": "Full ready-to-post caption with emojis, line breaks",
+  "hashtags": ["#tag1","#tag2","#tag3","#tag4","#tag5","#tag6","#tag7","#tag8","#tag9","#tag10"],
+  "trendInsight": "One punchy sentence on why this script is timely right now"
+}`;
+
+  let meta: any = {};
+  try {
+    const metaRes = await oai().chat.completions.create({
+      model: "gpt-4o-mini",
+      max_tokens: 600,
+      temperature: 0.7,
+      messages: [
+        { role: "system", content: "You are ARIA. Return ONLY valid JSON, no markdown." },
+        { role: "user", content: metaPrompt },
+      ],
+    });
+    const raw = (metaRes.choices[0].message.content ?? "")
+      .replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+    meta = JSON.parse(raw);
+  } catch {
+    meta = { hookLine: "", hookTip: "", caption: "", hashtags: [], trendInsight: brief.trendSummary };
+  }
+
+  // ── Step 3: Generate each section independently ───────────────────────────
+  const generatedSections: ScriptSection[] = [];
+  let prevSummary = ""; // rolling context for coherence
+
+  for (let i = 0; i < blueprints.length; i++) {
+    const bp = blueprints[i];
+    const isFirst = i === 0;
+    const isLast  = i === blueprints.length - 1;
+
+    const sectionPrompt = `${sharedCtx}
+
+You are writing section ${i + 1} of ${totalSections} of a ${durationLabel} script.
+${prevSummary ? `\nPREVIOUS SECTION SUMMARY:\n${prevSummary}\n` : ""}
+CURRENT SECTION:
+- Label: "${bp.label}"
+- Type: ${bp.type}
+- Timestamp: ${bp.startMin.toFixed(1)}–${bp.endMin.toFixed(1)} min
+- Target words: ~${bp.targetWords} words of spoken dialogue
+${isFirst ? "- This is the HOOK. Grab attention in the first 3 seconds. Use one of the proven hook patterns from research. NO 'Hey guys welcome back'." : ""}
+${isLast ? "- This is the OUTRO. End with ONE specific CTA. Warm, not salesy." : ""}
+
+RULES:
+1. Write FULL spoken dialogue — the creator reads this word for word
+2. Hit the word target: ~${bp.targetWords} words
+3. Natural conversational tone — match the creator's voice profile
+4. No section labels, headers, or meta-commentary in the content field
+5. Apply Indian creator context — Hinglish where natural, Indian examples, ₹ for prices
+6. Hook MUST use one of the proven hook patterns from research (first section only)
 
 Return ONLY valid JSON:
 {
-  "hookLine": "Most powerful opening line (max 15 words)",
-  "hookTip": "Why this hook works and how to deliver it",
-  "caption": "Full ready-to-post caption with emojis, line breaks, hashtags",
-  "hashtags": ["#tag1","#tag2","#tag3","#tag4","#tag5","#tag6","#tag7","#tag8","#tag9","#tag10"],
-  "totalDuration": "${formatConfig.durationRange}",
-  "trendInsight": "One punchy sentence on why this script is timely",
-  "sections": [
-    ${formatConfig.sections
-      .map(
-        (s, i) => `{
-      "id": "s${i}",
-      "label": "${s.label}",
-      "type": "${s.type}",
-      "content": "Full, specific, ready-to-use content using research insights",
-      "tip": "Specific delivery or editing tip",
-      "placeholder": "${s.placeholder}",
-      "durationEstimate": "Estimated time/length"
-    }`,
-      )
-      .join(",\n    ")}
-  ]
+  "content": "Full spoken script for this section. Must be ~${bp.targetWords} words.",
+  "tip": "${bp.tip}",
+  "durationEstimate": "${bp.startMin.toFixed(1)}–${bp.endMin.toFixed(1)} min"
 }`;
 
-  const res = await oai().chat.completions.create({
-    model: "gpt-4o-mini",
-    max_tokens: 3000,
-    temperature: 0.72,
-    messages: [
-      {
-        role: "system",
-        content: "You are ARIA. Return ONLY valid JSON, no markdown.",
-      },
-      { role: "user", content: scriptPrompt },
-    ],
-  });
+    // Token budget: 1.4 tokens/word + 200 overhead for JSON structure, capped at 4000
+    const sectionTokens = Math.min(Math.round(bp.targetWords * 1.4) + 200, 4000);
 
-  const text = res.choices[0].message.content ?? "";
-  const cleaned = text
-    .replace(/```json\n?/g, "")
-    .replace(/```\n?/g, "")
-    .trim();
-  const parsed = JSON.parse(cleaned);
+    try {
+      const sRes = await oai().chat.completions.create({
+        model: "gpt-4o-mini",
+        max_tokens: sectionTokens,
+        temperature: 0.72,
+        messages: [
+          { role: "system", content: "You are ARIA. Return ONLY valid JSON. Write the full spoken script — never summarise or truncate the content field." },
+          { role: "user", content: sectionPrompt },
+        ],
+      });
 
-  const sections: ScriptSection[] = (parsed.sections || []).map(
-    (s: any, i: number) => ({
-      id: s.id || `s${i}`,
-      label: s.label || formatConfig.sections[i]?.label || `Section ${i + 1}`,
-      type: s.type || formatConfig.sections[i]?.type || "body",
-      content: s.content || "",
-      tip: s.tip || formatConfig.sections[i]?.tip || "",
-      placeholder: s.placeholder || formatConfig.sections[i]?.placeholder || "",
-      durationEstimate: s.durationEstimate,
-    }),
-  );
+      const raw = (sRes.choices[0].message.content ?? "")
+        .replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
 
-  for (let i = 0; i < sections.length; i++) {
-    onEvent({
-      type: "section",
-      section: sections[i],
-      index: i,
-      total: sections.length,
-    });
-    await new Promise((r) => setTimeout(r, 100));
+      let parsed: any = {};
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        // If JSON parse fails, use the raw text as content rather than crashing
+        parsed = { content: raw, tip: bp.tip, durationEstimate: `${bp.startMin.toFixed(1)}–${bp.endMin.toFixed(1)} min` };
+      }
+
+      const section: ScriptSection = {
+        id: bp.id,
+        label: bp.label,
+        type: bp.type,
+        content: parsed.content || "",
+        tip: parsed.tip || bp.tip,
+        placeholder: bp.placeholder,
+        durationEstimate: parsed.durationEstimate || `${bp.startMin.toFixed(1)}–${bp.endMin.toFixed(1)} min`,
+      };
+
+      generatedSections.push(section);
+      // Keep last 300 chars as rolling context for the next section
+      prevSummary = `[${bp.label}]: ${(parsed.content || "").slice(0, 300)}…`;
+
+      onEvent({ type: "section", section, index: i, total: totalSections });
+
+    } catch (err: any) {
+      logger.warn({ err: err.message, label: bp.label }, "[Studio] Section generation failed — placeholder inserted");
+      const fallback: ScriptSection = {
+        id: bp.id,
+        label: bp.label,
+        type: bp.type,
+        content: "",
+        tip: bp.tip,
+        placeholder: bp.placeholder,
+        durationEstimate: `${bp.startMin.toFixed(1)}–${bp.endMin.toFixed(1)} min`,
+      };
+      generatedSections.push(fallback);
+      onEvent({ type: "section", section: fallback, index: i, total: totalSections });
+    }
   }
 
+  // ── Step 4: Emit meta + done ──────────────────────────────────────────────
   onEvent({
     type: "meta",
-    caption: parsed.caption || "",
-    hashtags: parsed.hashtags || [],
-    hookLine: parsed.hookLine || "",
-    hookTip: parsed.hookTip || "",
-    totalDuration: parsed.totalDuration || formatConfig.durationRange,
-    trendInsight: parsed.trendInsight || brief.trendSummary,
+    caption: meta.caption || "",
+    hashtags: meta.hashtags || [],
+    hookLine: meta.hookLine || "",
+    hookTip: meta.hookTip || "",
+    totalDuration: durationLabel,
+    trendInsight: meta.trendInsight || brief.trendSummary,
   });
 
   const result: ScriptResult = {
-    sections,
-    hookLine: parsed.hookLine || "",
-    hookTip: parsed.hookTip || "",
-    caption: parsed.caption || "",
-    hashtags: parsed.hashtags || [],
-    totalDuration: parsed.totalDuration || formatConfig.durationRange,
+    sections: generatedSections,
+    hookLine: meta.hookLine || "",
+    hookTip: meta.hookTip || "",
+    caption: meta.caption || "",
+    hashtags: meta.hashtags || [],
+    totalDuration: durationLabel,
     researchBrief: brief,
-    trendInsight: parsed.trendInsight || brief.trendSummary,
+    trendInsight: meta.trendInsight || brief.trendSummary,
     format,
   };
 
