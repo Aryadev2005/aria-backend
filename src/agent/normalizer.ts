@@ -179,7 +179,7 @@ export const normalizeGoogleTrends = (rawTrends: any) => {
       timeline: [],
       averageInterest: 0,
       direction: "stable",
-      error: `Normalization failed: ${error.message}`,
+      error: `Normalization failed: ${(error as Error).message}`,
     };
   }
 };

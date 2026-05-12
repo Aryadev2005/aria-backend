@@ -17,9 +17,10 @@ RUN npm ci
 # Generate Prisma client
 RUN npx prisma generate
 
-# Copy source code
+# Copy source code (excluding .env via .dockerignore)
 COPY . .
 
+# Note: .env file is NOT copied - env vars are passed via docker-compose at runtime
 # Build TypeScript
 RUN npm run build
 
@@ -39,11 +40,17 @@ COPY prisma ./prisma/
 # Install production dependencies only
 RUN npm ci --omit=dev && npm cache clean --force
 
+# Install tsx for ES module runtime support
+RUN npm install tsx
+
 # Generate Prisma client for production
 RUN npx prisma generate
 
 # Copy built application from builder
 COPY --from=builder /app/dist ./dist
+
+# Copy Prisma 7 config (needed by migrate deploy and prisma generate at runtime)
+COPY --from=builder /app/prisma.config.ts ./prisma.config.ts
 
 # Copy essential scripts
 COPY --from=builder /app/scripts ./scripts
@@ -65,5 +72,5 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD curl -f http://localhost:3000/health || exit 1
 
-# Start the application
-CMD ["node", "dist/server.js"]
+# Run migrations then start the application
+CMD ["sh", "-c", "npx prisma migrate deploy && npx tsx dist/server.js"]

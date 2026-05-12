@@ -124,7 +124,12 @@ export const buildApp = async (): Promise<FastifyInstance> => {
       if (isOriginAllowed(origin)) {
         return cb(null, true);
       }
-      return cb(new Error("CORS origin blocked"), false);
+      app.log.warn({ origin, allowedOrigins }, "CORS origin rejected");
+      const corsErr = Object.assign(
+        new Error(`CORS origin blocked: ${origin}`),
+        { statusCode: 403 },
+      );
+      return cb(corsErr, false);
     },
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: [

@@ -22,8 +22,8 @@ COPY package*.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
 COPY --from=build /app/dist ./dist
-COPY --from=build /app/.env ./.env
 
+# Note: .env is NOT copied - environment variables are passed via docker-compose at runtime
 EXPOSE 8088
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD node -e "fetch('http://127.0.0.1:' + (process.env.MCP_PORT || 8088) + '/ready').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
