@@ -53,40 +53,42 @@ function getConnection() {
 //   Google     — 50% India + 50% global creator demand signals
 // ════════════════════════════════════════════════════════════════════════════
 
-const REDDIT_PER_SUB = 15;
-const TIKTOK_PER_TAG = 10;
-const PINTEREST_PER_QUERY = 20;
-const INSTAGRAM_PER_TAG = 18;
+const REDDIT_PER_SUB = 8; // top 8 posts per subreddit — prioritizes freshness and relevance to trends over volume
+const TIKTOK_PER_TAG = 5; // top 5 videos per hashtag — TikTok trends can be very volatile, so we focus on the cream of the crop
+const PINTEREST_PER_QUERY = 8; // top 8 pins per query — Pinterest engagement is more stable, but we still want to focus on the most relevant content
+const INSTAGRAM_PER_TAG = 8; // top 8 reels per hashtag — Instagram's algorithm favors recency and engagement, so we want to capture the most impactful content
 
 // ── Reddit — 25 subreddits (60% India core + 40% global niche) ───────────────
 const REDDIT_SUBREDDITS = [
   // India core — intent signals (15)
-  "india",
+  //"india",
   "AskIndia",
-  "IndiaSpeaks",
-  "IndianFood",
-  "IndiaInvestments",
-  "delhi",
-  "mumbai",
-  "bangalore",
+  "BuyItForLife",
+  //"IndianFood",
+  //"IndiaInvestments",
+  //"delhi",
+  //"mumbai",
+  //"bangalore",
   "bollywood",
-  "cricket",
+  //"cricket",
   "Entrepreneur",
-  "startups",
-  "socialmedia",
+  //"startups",
+  "NoStupidQuestions",
+  "ExplainLikeImFive (ELI5)",
+  //"socialmedia",
   "SkincareAddiction",
-  "IndianGaming",
+  //"IndianGaming",
   // Global niche communities — creators everywhere consume these (10)
   "marketing",
-  "content_marketing",
+  //"content_marketing",
   "fitness",
   "food",
-  "travel",
+  //"travel",
   "technology",
   "gaming",
   "Music",
   "fashion",
-  "Frugal",
+  //"Frugal",
 ];
 
 // ── TikTok — 20 hashtags (50% India + 50% global trend signals) ──────────────
@@ -95,20 +97,20 @@ const REDDIT_SUBREDDITS = [
 //          (all same traffic pool — FYP algorithm surface)
 const TIKTOK_HASHTAGS = [
   // India-specific (10) — niche-separated, zero overlap
-  "indiancreator",
-  "desicreator",
-  "bollywood",
-  "indianfashion",
-  "indianfood",
-  "streetfoodindia",
-  "indiantraveller",
-  "indianfitness",
-  "ipl2025",
+  //"indiancreator",
+  //"desicreator",
+  //"bollywood",
+  //"indianfashion",
+  //"indianfood",
+  //"streetfoodindia",
+  //"indiantraveller",
+  //"indianfitness",
+  //"ipl2025",
   "startupindia",
   // Global trend early-warning (10) — what hits India 60-90 days later
   "koreanbeauty",
   "grwm",
-  "thatgirl",
+  //"thatgirl",
   "cleangirl",
   "quietluxury",
   "fitcheck",
@@ -121,38 +123,48 @@ const TIKTOK_HASHTAGS = [
 // ── Pinterest — 10 queries (70% global aesthetic + 30% India-specific) ────────
 const PINTEREST_QUERIES = [
   // Global aesthetic trends (7) — these hit India 3-6 months later
-  "quiet luxury aesthetic 2025",
+  // "quiet luxury aesthetic 2025",
+  // "clean girl aesthetic outfit",
+  // "korean skincare routine steps",
+  // "coastal grandmother style",
+  // "that girl morning routine",
+  // "minimalist home office setup",
+  // "y2k fashion aesthetic",
+  // India-specific (3) — high intent, niche-separated
+  // "indian wedding guest outfit 2025",
+  // "bollywood makeup look",
+  // "mehndi design 2025",
   "clean girl aesthetic outfit",
   "korean skincare routine steps",
-  "coastal grandmother style",
   "that girl morning routine",
-  "minimalist home office setup",
-  "y2k fashion aesthetic",
-  // India-specific (3) — high intent, niche-separated
+  "quiet luxury aesthetic 2025",
   "indian wedding guest outfit 2025",
   "bollywood makeup look",
-  "mehndi design 2025",
 ];
 
 // ── Instagram hashtags — 15 tags (70% global + 30% India) ─────────────────────
 const INSTAGRAM_HASHTAGS = [
-  // Global creator trends (10)
-  "contentcreator",
-  "reelsinstagram",
-  "grwm",
-  "dayinmylife",
-  "thatgirl",
-  "cleangirl",
-  "ootd",
-  "skincareroutine",
-  "gymtok",
-  "smallbusiness",
-  // India-specific (5)
-  "indiancreator",
-  "reelsindia",
-  "bollywoodreels",
-  "indianfashionblogger",
-  "desifood",
+  // // Global creator trends (10)
+  // "contentcreator",
+  // "reelsinstagram",
+  // "grwm",
+  // "dayinmylife",
+  // "thatgirl",
+  // "cleangirl",
+  // "ootd",
+  // "skincareroutine",
+  // "gymtok",
+  // "smallbusiness",
+  // // India-specific (5)
+  // "indiancreator",
+  // "reelsindia",
+  // "bollywoodreels",
+  // "indianfashionblogger",
+  // "desifood",
+   "contentcreator", "grwm", "ootd",
+  "skincareroutine", "reelsinstagram",
+  "indiancreator", "reelsindia",
+  "bollywoodreels", "indianfashionblogger", "desifood",
 ];
 
 // ── Google Trends — 15 keywords (50% India + 50% global creator signals) ─────
