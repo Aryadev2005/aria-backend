@@ -44,7 +44,8 @@ export type ActionKey =
   | "archetype_detection"
   | "voice_portrait"
   | "video_analysis"
-  | "competitor_gap";
+  | "competitor_gap"
+  | "rival_spy";
 
 export interface ActionConfig {
   key: ActionKey;
@@ -403,6 +404,19 @@ export const DEFAULT_ACTION_CONFIGS: Record<ActionKey, ActionConfig> = {
     maxPerDay: 3,
     freeTierAllowed: true,
     starterTierAllowed: true,
+    proTierAllowed: true,
+    maxTierAllowed: true,
+  },
+  rival_spy: {
+    key: "rival_spy",
+    displayName: "Rival Spy",
+    featureCharge: 35,
+    modelMini: "gpt-4o-mini",
+    modelHeavy: "gpt-4o",
+    useHeavy: false,
+    maxPerDay: 3,
+    freeTierAllowed: false,
+    starterTierAllowed: false,
     proTierAllowed: true,
     maxTierAllowed: true,
   },

@@ -1,7 +1,7 @@
 generator client {
   provider        = "prisma-client-js"
-  engineType      = "library"
   previewFeatures = ["partialIndexes"]
+  engineType      = "library"
 }
 
 datasource db {
@@ -25,15 +25,15 @@ model analytics {
 /// Stores metadata for each ARIA chat session (title, preview, timestamps).
 /// Individual messages live in aria_chat_sessions, keyed by session_id.
 model aria_sessions {
-  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  user_id      String    @db.Uuid
-  session_id   String    @unique          // matches thread_id used by LangGraph checkpointer
-  title        String    @default("New Chat")
-  preview      String?                    // first ~80 chars of last assistant message
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id       String   @db.Uuid
+  session_id    String   @unique
+  title         String   @default("New Chat")
+  preview       String?
   message_count Int      @default(0)
-  created_at   DateTime  @default(now()) @db.Timestamptz(6)
-  updated_at   DateTime  @default(now()) @db.Timestamptz(6)
-  users        users     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  created_at    DateTime @default(now()) @db.Timestamptz(6)
+  updated_at    DateTime @default(now()) @db.Timestamptz(6)
+  users         users    @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
   @@index([user_id, updated_at(sort: Desc)], map: "idx_aria_sessions_user")
   @@index([session_id], map: "idx_aria_sessions_sid")
@@ -56,7 +56,6 @@ model aria_chat_sessions {
   @@index([created_at(sort: Desc)], map: "idx_chat_sessions_created")
   @@index([user_id, session_id], map: "idx_chat_sessions_user")
 }
-
 
 model aria_feedback {
   id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
@@ -212,6 +211,7 @@ model creator_notes {
 
   @@index([user_id], map: "idx_creator_notes_user_id")
   @@index([user_id, source], map: "idx_creator_notes_user_source")
+  @@index([user_id, is_pinned], map: "idx_creator_notes_pinned", where: raw("(is_pinned = true)"))
 }
 
 model launch_packages {
@@ -235,46 +235,43 @@ model live_songs {
   language       String?
   raw_data       Json?
   fetched_at     DateTime? @default(now()) @db.Timestamptz(6)
-
-  // ── 3-Tier Intelligence Fields ──
   expires_at     DateTime? @db.Timestamptz(6)
-  rank_history   Json?     @default("[]")
-  peak_rank      Int?
-  lifecycle      String?   @default("RISING")
-  signal         String?   @default("postNow")
   growth         String?   @default("stable")
-  niche_tags     String[]  @default([])
+  lifecycle      String?   @default("RISING")
   mood_tags      String[]  @default([])
+  niche_tags     String[]  @default([])
+  peak_rank      Int?
+  rank_history   Json?     @default("[]")
+  signal         String?   @default("postNow")
 
   @@index([language, lifecycle], map: "idx_live_songs_lang_lifecycle")
   @@index([expires_at], map: "idx_live_songs_expires")
 }
 
 model live_trends {
-  id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  source              String
-  title               String
-  search_volume       Int?
-  velocity            Decimal?  @db.Decimal(5, 2)
-  platform_raw_score  Decimal?  @db.Decimal(10, 4) @default(0)
-  niche_tags          String[]
-  platform_tags       String[]
-  raw_data            Json?
-  fetched_at          DateTime? @default(now()) @db.Timestamptz(6)
-  expires_at          DateTime? @db.Timestamptz(6)
-  badge               String?
-  recommendation      String?
-  content_format      String?   @default("unknown")
-  override_reason     String?
-  is_override         Boolean?  @default(false)
+  id                 String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  source             String
+  title              String
+  search_volume      Int?
+  velocity           Decimal?          @db.Decimal(5, 2)
+  niche_tags         String[]
+  platform_tags      String[]
+  raw_data           Json?
+  fetched_at         DateTime?         @default(now()) @db.Timestamptz(6)
+  expires_at         DateTime?         @db.Timestamptz(6)
+  badge              String?
+  recommendation     String?
+  content_format     String?           @default("unknown")
+  is_override        Boolean?          @default(false)
+  override_reason    String?
+  platform_raw_score Decimal?          @default(0) @db.Decimal(10, 4)
+  trend_embeddings   trend_embeddings?
 
-  trend_embeddings trend_embeddings[]
-
+  @@unique([title, source], name: "title_source")
   @@index([badge], map: "idx_live_trends_badge")
   @@index([expires_at], map: "idx_live_trends_expires")
   @@index([niche_tags], map: "idx_live_trends_niche", type: Gin)
   @@index([platform_tags], map: "idx_live_trends_platform", type: Gin)
-  @@unique([title, source], name: "title_source")
 }
 
 model radar_snapshots {
@@ -289,7 +286,6 @@ model radar_snapshots {
   @@index([niche, platform], map: "idx_radar_niche_platform")
 }
 
-// ── Scrape Health Monitor ────────────────────────────────────────────────────
 model scrape_health {
   id                   String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   source               String    @unique
@@ -302,22 +298,23 @@ model scrape_health {
   updated_at           DateTime  @default(now()) @db.Timestamptz(6)
 }
 
-// ── Trend Interactions (Feedback Loop) ──────────────────────────────────────
 model trend_interactions {
-  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  user_id     String    @db.Uuid
-  trend_id    String?   @db.Uuid
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id     String   @db.Uuid
+  trend_id    String?  @db.Uuid
   trend_title String
   source      String?
   niche       String?
-  action      String    // 'viewed' | 'saved' | 'created' | 'dismissed'
-  created_at  DateTime  @default(now()) @db.Timestamptz(6)
-
-  users       users     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  action      String
+  created_at  DateTime @default(now()) @db.Timestamptz(6)
+  users       users    @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
   @@index([user_id])
   @@index([source, niche])
   @@index([created_at(sort: Desc)])
+  @@index([created_at(sort: Desc)], map: "idx_trend_interactions_created")
+  @@index([source, niche], map: "idx_trend_interactions_source")
+  @@index([user_id], map: "idx_trend_interactions_user")
 }
 
 model rate_cards {
@@ -342,127 +339,126 @@ model saved_trends {
 }
 
 model users {
-  id                      String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  firebase_uid            String               @unique
-  email                   String               @unique
-  name                    String
-  phone                   String?
-  photo_url               String?
-  bio                     String?
-  instagram_handle        String?
-  youtube_handle          String?
-  fcm_token               String?
-  platform                String?
-  follower_range          String?
-  primary_platform        String?
-  niches                  Json?                @default("[]")
-  is_pro                  Boolean?             @default(false)
-  subscription_tier       String?              @default("free")
-  created_at              DateTime?            @default(now()) @db.Timestamptz(6)
-  updated_at              DateTime?            @default(now()) @db.Timestamptz(6)
-  archetype               String?
-  archetype_label         String?
-  archetype_confidence    Int?
-  growth_stage            String?              @default("DISCOVERY")
-  tone_profile            String?
-  health_score            Int?
-  onboarding_step         String?
-  follower_count          Int?
-  scraped_summary         Json?
-  scraped_at              DateTime?            @db.Timestamptz(6)
-  youtube_scraped_summary Json?
-  youtube_scraped_at      DateTime?            @db.Timestamptz(6)
-  engagement_rate         Decimal?             @db.Decimal(5, 2)
-  creator_intent          String?              @default("grow_organically")
-  aria_last_analysis      Json?
-  aria_analyzed_at        DateTime?            @db.Timestamptz(6)
-  aria_confirmed_niche    Boolean?             @default(false)
-  subscription_product_id String?
-  subscription_expires_at DateTime?            @db.Timestamptz(6)
-  subscription_store      String?
-  deletion_requested_at   DateTime?            @db.Timestamptz(6)
-  deletion_confirmation_code String?
-  deletion_source         String?
-  deleted_at              DateTime?            @db.Timestamptz(6)
-  analytics               analytics[]
-  aria_sessions           aria_sessions[]
-  aria_chat_sessions      aria_chat_sessions[]
-  aria_feedback           aria_feedback[]
-  aria_memory             aria_memory[]
-  aria_suggestions        aria_suggestions[]
-  content_calendars       content_calendars[]
-  content_history         content_history[]
-  launch_packages         launch_packages[]
-  rate_cards              rate_cards?
-  saved_trends            saved_trends[]
-  studio_sessions         studio_sessions[]
-  account_connections     account_connections[]
-  creator_voice_profiles  creator_voice_profiles?
-  trend_interactions      trend_interactions[]
-
-  creator_analytics       creator_analytics[]
-  video_dna_analyses      video_dna_analyses[]
-  competitor_analyses     competitor_analyses[]
-  calendar_entries        calendar_entries[]
-
-  credit_wallet           credit_wallets?
-  credit_transactions     credit_transactions[]
-  credit_topups           credit_topups[]
-  creator_notes           creator_notes[]
+  id                          String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  firebase_uid                String                  @unique
+  email                       String                  @unique
+  name                        String
+  phone                       String?
+  photo_url                   String?
+  bio                         String?
+  instagram_handle            String?
+  youtube_handle              String?
+  fcm_token                   String?
+  platform                    String?
+  follower_range              String?
+  primary_platform            String?
+  niches                      Json?                   @default("[]")
+  is_pro                      Boolean?                @default(false)
+  subscription_tier           String?                 @default("free")
+  created_at                  DateTime?               @default(now()) @db.Timestamptz(6)
+  updated_at                  DateTime?               @default(now()) @db.Timestamptz(6)
+  archetype                   String?
+  archetype_label             String?
+  archetype_confidence        Int?
+  growth_stage                String?                 @default("DISCOVERY")
+  tone_profile                String?
+  health_score                Int?
+  onboarding_step             String?
+  follower_count              Int?
+  scraped_summary             Json?
+  scraped_at                  DateTime?               @db.Timestamptz(6)
+  engagement_rate             Decimal?                @db.Decimal(5, 2)
+  creator_intent              String?                 @default("grow_organically")
+  aria_last_analysis          Json?
+  aria_analyzed_at            DateTime?               @db.Timestamptz(6)
+  subscription_product_id     String?
+  subscription_expires_at     DateTime?               @db.Timestamptz(6)
+  subscription_store          String?
+  deletion_requested_at       DateTime?               @db.Timestamptz(6)
+  deletion_confirmation_code  String?
+  deletion_source             String?
+  deleted_at                  DateTime?               @db.Timestamptz(6)
+  aria_confirmed_niche        Boolean?                @default(false)
+  youtube_scraped_at          DateTime?               @db.Timestamptz(6)
+  youtube_scraped_summary     Json?
+  roadmap_last_lens           String?
+  roadmap_last_generated_at   DateTime?               @db.Timestamptz(6)
+  roadmap_posts_at_generation Int?                    @default(0)
+  account_connections         account_connections[]
+  analytics                   analytics[]
+  aria_chat_sessions          aria_chat_sessions[]
+  aria_feedback               aria_feedback[]
+  aria_memory                 aria_memory[]
+  aria_sessions               aria_sessions[]
+  aria_suggestions            aria_suggestions[]
+  calendar_entries            calendar_entries[]
+  competitor_analyses         competitor_analyses[]
+  content_calendars           content_calendars[]
+  content_history             content_history[]
+  creator_analytics           creator_analytics[]
+  creator_notes               creator_notes[]
+  creator_voice_profiles      creator_voice_profiles?
+  credit_topups               credit_topups[]
+  credit_transactions         credit_transactions[]
+  credit_wallet               credit_wallets?
+  launch_packages             launch_packages[]
+  rate_cards                  rate_cards?
+  rival_spy_sessions          rival_spy_sessions[]
+  roadmap_actions             roadmap_actions[]
+  saved_trends                saved_trends[]
+  studio_sessions             studio_sessions[]
+  trend_interactions          trend_interactions[]
+  video_dna_analyses          video_dna_analyses[]
 
   @@index([archetype], map: "idx_users_archetype")
   @@index([firebase_uid], map: "idx_users_firebase_uid")
   @@index([deletion_confirmation_code], map: "idx_users_deletion_code", where: raw("(deletion_confirmation_code IS NOT NULL)"))
-  @@index([deletion_requested_at], map: "idx_users_deletion_pending", where: raw("(deletion_requested_at IS NOT NULL AND deleted_at IS NULL)"))
+  @@index([deletion_requested_at], map: "idx_users_deletion_pending", where: raw("((deletion_requested_at IS NOT NULL) AND (deleted_at IS NULL))"))
 }
 
 model account_connections {
-  id                String    @id @default(cuid())
-  user_id           String    @db.Uuid
-  platform          String    // 'instagram' | 'youtube'
-  platform_user_id  String?
-  handle            String?
-  encrypted_token   String
-  token_expires_at  DateTime?
-  scopes            String[]
-  connected_at      DateTime  @default(now())
-  updated_at        DateTime  @updatedAt
-  users             users     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  id               String    @id @default(cuid())
+  user_id          String    @db.Uuid
+  platform         String
+  platform_user_id String?
+  handle           String?
+  encrypted_token  String
+  token_expires_at DateTime?
+  scopes           String[]
+  connected_at     DateTime  @default(now())
+  updated_at       DateTime  @updatedAt
+  users            users     @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
   @@unique([user_id, platform], name: "user_id_platform")
 }
-
-// ══════════════════════════════════════════════════════════════════════════════
-// Hybrid RAG: Vector Embeddings + Knowledge Graph + Hot Window Cache
-// ══════════════════════════════════════════════════════════════════════════════
 
 /// Tier 2 — Warm Retrieval: Vector embeddings of live trend signals.
 /// The `embedding` column (vector(1536)) is managed via raw SQL since Prisma
 /// doesn't support pgvector natively.
 model trend_embeddings {
-  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  trend_id    String    @unique @db.Uuid
+  id          String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  trend_id    String                 @unique @db.Uuid
   embed_text  String
   niche       String?
   platform    String?
-  created_at  DateTime? @default(now()) @db.Timestamptz(6)
-  updated_at  DateTime? @default(now()) @db.Timestamptz(6)
-
-  live_trends live_trends @relation(fields: [trend_id], references: [id], onDelete: Cascade)
+  created_at  DateTime?              @default(now()) @db.Timestamptz(6)
+  updated_at  DateTime?              @default(now()) @db.Timestamptz(6)
+  embedding   Unsupported("vector")?
+  live_trends live_trends            @relation(fields: [trend_id], references: [id], onDelete: Cascade)
 
   @@index([niche], map: "idx_trend_embeddings_niche")
   @@index([updated_at(sort: Desc)], map: "idx_trend_embeddings_updated")
+  @@index([embedding], map: "idx_trend_embeddings_vector")
 }
 
 /// Tier 3 — Cold Knowledge Graph: Nodes representing niches, platforms, formats, archetypes.
 model graph_nodes {
-  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  node_type   String
-  label       String
-  properties  Json?     @default("{}")
-  created_at  DateTime? @default(now()) @db.Timestamptz(6)
-  updated_at  DateTime? @default(now()) @db.Timestamptz(6)
-
+  id           String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  node_type    String
+  label        String
+  properties   Json?         @default("{}")
+  created_at   DateTime?     @default(now()) @db.Timestamptz(6)
+  updated_at   DateTime?     @default(now()) @db.Timestamptz(6)
   source_edges graph_edges[] @relation("edge_source")
   target_edges graph_edges[] @relation("edge_target")
 
@@ -473,17 +469,16 @@ model graph_nodes {
 
 /// Tier 3 — Cold Knowledge Graph: Edges (relationships) between graph nodes.
 model graph_edges {
-  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  source_id   String    @db.Uuid
-  target_id   String    @db.Uuid
-  edge_type   String
-  weight      Decimal?  @default(1.0) @db.Decimal(5, 2)
-  properties  Json?     @default("{}")
-  created_at  DateTime? @default(now()) @db.Timestamptz(6)
-  updated_at  DateTime? @default(now()) @db.Timestamptz(6)
-
-  source      graph_nodes @relation("edge_source", fields: [source_id], references: [id], onDelete: Cascade)
-  target      graph_nodes @relation("edge_target", fields: [target_id], references: [id], onDelete: Cascade)
+  id         String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  source_id  String      @db.Uuid
+  target_id  String      @db.Uuid
+  edge_type  String
+  weight     Decimal?    @default(1.0) @db.Decimal(5, 2)
+  properties Json?       @default("{}")
+  created_at DateTime?   @default(now()) @db.Timestamptz(6)
+  updated_at DateTime?   @default(now()) @db.Timestamptz(6)
+  source     graph_nodes @relation("edge_source", fields: [source_id], references: [id], onDelete: Cascade)
+  target     graph_nodes @relation("edge_target", fields: [target_id], references: [id], onDelete: Cascade)
 
   @@unique([source_id, target_id, edge_type])
   @@index([source_id], map: "idx_graph_edges_source")
@@ -511,38 +506,22 @@ model trend_trajectories {
 
 /// Tier 1 — Hot Window Cache: Pre-assembled ARIA context, backed by Postgres + Redis.
 model hot_window_cache {
-  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  cache_key   String    @unique
-  narrative   String
-  metadata    Json?     @default("{}")
-  created_at  DateTime? @default(now()) @db.Timestamptz(6)
-  expires_at  DateTime  @db.Timestamptz(6)
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  cache_key  String    @unique
+  narrative  String
+  metadata   Json?     @default("{}")
+  created_at DateTime? @default(now()) @db.Timestamptz(6)
+  expires_at DateTime  @db.Timestamptz(6)
 
   @@index([cache_key], map: "idx_hot_window_cache_key")
   @@index([expires_at], map: "idx_hot_window_cache_expires")
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
-// Songs 3-Tier Architecture — Prisma Schema Additions
-//
-// ADD THESE MODELS to your main prisma/schema.prisma file.
-// Then run: npx prisma generate
-//
-// Tier 1 — song_hot_window     : Pre-assembled narrative in Redis + Postgres
-// Tier 2 — song_embeddings     : pgvector semantic search (via raw SQL)
-// Tier 3 — song_trajectories   : Rank/velocity history + lifecycle state
-//
-// Also: live_songs gets new columns — run the companion SQL migration first.
-// ══════════════════════════════════════════════════════════════════════════════
-
-// ── Tier 1: Song Hot Window Cache ─────────────────────────────────────────────
-// Mirrors hot_window_cache but scoped to songs per language+niche combination.
-// Prisma upserts via $queryRawUnsafe; the cache_key is "songhot:{language}:{niche}"
 model song_hot_window {
   id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  cache_key  String   @unique                        // "songhot:hindi:fashion"
-  narrative  String                                  // pre-assembled markdown narrative
-  metadata   Json?    @default("{}")                 // signal counts, sources used, etc.
+  cache_key  String   @unique
+  narrative  String
+  metadata   Json?    @default("{}")
   created_at DateTime @default(now()) @db.Timestamptz(6)
   expires_at DateTime @db.Timestamptz(6)
 
@@ -550,48 +529,38 @@ model song_hot_window {
   @@index([expires_at], map: "idx_song_hot_window_expires")
 }
 
-// ── Tier 2: Song Embeddings ───────────────────────────────────────────────────
-// embedding vector(1536) is managed via raw SQL — Prisma can't model pgvector.
-// The column exists in the DB but is invisible to Prisma's type system.
 model song_embeddings {
-  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  song_id     String   @unique @db.Uuid              // FK → live_songs.id
-  embed_text  String                                 // text that was embedded
-  language    String?                                // denormalised for filtering
-  niche_tags  String[]                               // denormalised for filtering
-  created_at  DateTime @default(now()) @db.Timestamptz(6)
-  updated_at  DateTime @default(now()) @db.Timestamptz(6)
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  song_id    String   @unique @db.Uuid
+  embed_text String
+  language   String?
+  niche_tags String[]
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  updated_at DateTime @default(now()) @db.Timestamptz(6)
 
   @@index([language], map: "idx_song_embeddings_lang")
   @@index([updated_at(sort: Desc)], map: "idx_song_embeddings_updated")
 }
 
-// ── Tier 3: Song Trajectories ─────────────────────────────────────────────────
-// One row per (song_title + language). Updated every fetch cycle.
-// lifecycle: RISING | PEAKING | DECLINING | DEAD | CYCLICAL
 model song_trajectories {
-  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  song_title    String
-  artist        String
-  language      String   @default("unknown")
-  lifecycle     String   @default("RISING")          // computed from rank_history
-  rank_history  Json     @default("[]")              // [{date, rank, streams}]
-  peak_rank     Int?
-  peak_at       DateTime? @db.Timestamptz(6)
-  first_seen    DateTime  @default(now()) @db.Timestamptz(6)
-  confidence    Decimal   @default(0.5) @db.Decimal(4, 2)
-  niche_tags    String[]  @default([])               // which niches this song appears in
-  source        String?                              // spotify | jiosaavn | youtube
-  updated_at    DateTime  @default(now()) @db.Timestamptz(6)
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  song_title   String
+  artist       String
+  language     String    @default("unknown")
+  lifecycle    String    @default("RISING")
+  rank_history Json      @default("[]")
+  peak_rank    Int?
+  peak_at      DateTime? @db.Timestamptz(6)
+  first_seen   DateTime  @default(now()) @db.Timestamptz(6)
+  confidence   Decimal   @default(0.5) @db.Decimal(4, 2)
+  niche_tags   String[]  @default([])
+  source       String?
+  updated_at   DateTime  @default(now()) @db.Timestamptz(6)
 
   @@unique([song_title, language], name: "uq_song_traj_title_lang")
   @@index([language, lifecycle], map: "idx_song_traj_lang_lifecycle")
   @@index([updated_at(sort: Desc)], map: "idx_song_traj_updated")
 }
-
-// ══════════════════════════════════════════════════════════════════════════════
-// Discovery Raw Tables — Global scrape storage for TikTok, Pinterest, Google Trends
-// ══════════════════════════════════════════════════════════════════════════════
 
 model discovery_reddit_raw {
   id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
@@ -692,27 +661,32 @@ model discovery_google_trends_raw {
 }
 
 model discovery_youtube_raw {
-  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  video_id      String   @unique
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  video_id      String    @unique
   title         String
-  channel       String   @default("")
-  view_count    BigInt   @default(0)
-  like_count    BigInt   @default(0)
-  comment_count BigInt   @default(0)
-  category_id   String   @default("0")
-  velocity      Int      @default(0)
-  niche_tags    String[] @default([])
+  channel       String    @default("")
+  view_count    BigInt    @default(0)
+  like_count    BigInt    @default(0)
+  comment_count BigInt    @default(0)
+  category_id   String    @default("0")
+  velocity      Int       @default(0)
+  niche_tags    String[]  @default([])
   thumbnail_url String?
   published_at  DateTime? @db.Timestamptz(6)
-  scraped_at    DateTime @default(now()) @db.Timestamptz(6)
-  expires_at    DateTime @db.Timestamptz(6)
-  raw_data      Json     @default("{}")
+  scraped_at    DateTime  @default(now()) @db.Timestamptz(6)
+  expires_at    DateTime  @db.Timestamptz(6)
+  raw_data      Json      @default("{}")
 
   @@index([velocity(sort: Desc)])
   @@index([view_count(sort: Desc)])
   @@index([scraped_at(sort: Desc)])
   @@index([expires_at])
   @@index([category_id])
+  @@index([category_id], map: "idx_youtube_raw_category")
+  @@index([expires_at], map: "idx_youtube_raw_expires")
+  @@index([scraped_at(sort: Desc)], map: "idx_youtube_raw_scraped")
+  @@index([velocity(sort: Desc)], map: "idx_youtube_raw_velocity")
+  @@index([view_count(sort: Desc)], map: "idx_youtube_raw_views")
 }
 
 model creator_voice_profiles {
@@ -722,9 +696,8 @@ model creator_voice_profiles {
   posts_analysed  Int      @default(0)
   confidence      Decimal  @default(0.5) @db.Decimal(4, 2)
   built_at        DateTime @default(now()) @db.Timestamptz(6)
-  next_rebuild_at DateTime @default(dbgenerated("NOW() + INTERVAL '7 days'")) @db.Timestamptz(6)
-
-  users users @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  next_rebuild_at DateTime @default(dbgenerated("(now() + '7 days'::interval)")) @db.Timestamptz(6)
+  users           users    @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
   @@index([user_id])
   @@index([next_rebuild_at])
@@ -742,30 +715,30 @@ model studio_scripts {
   bgm_suggestions  Json     @default("{}")
   shot_list        Json     @default("{}")
   pinned           Boolean  @default(false)
-  attached_notes   Json     @default("[]")
   created_at       DateTime @default(now())
   updated_at       DateTime @updatedAt
+  attached_notes   Json     @default("[]")
 
   @@index([user_id])
   @@index([user_id, pinned])
 }
 
 model video_dna_analyses {
-  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  user_id           String    @db.Uuid
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id           String   @db.Uuid
   video_id          String
   video_title       String?
   channel_name      String?
-  result_data       Json      @default("{}")
-  heatmap_data      Json      @default("{}")
-  streams_data      Json      @default("{}")
-  shorts_timestamps Json      @default("[]")
-  competitor_gap    Json      @default("{}")
-  analysis_version  String    @default("v1")
-  processing_ms     Int       @default(0)
-  analysed_at       DateTime  @default(now()) @db.Timestamptz(6)
-  created_at        DateTime  @default(now()) @db.Timestamptz(6)
-  users             users     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  result_data       Json     @default("{}")
+  heatmap_data      Json     @default("{}")
+  analysis_version  String   @default("v1")
+  processing_ms     Int      @default(0)
+  analysed_at       DateTime @default(now()) @db.Timestamptz(6)
+  created_at        DateTime @default(now()) @db.Timestamptz(6)
+  competitor_gap    Json     @default("{}")
+  shorts_timestamps Json     @default("[]")
+  streams_data      Json     @default("{}")
+  users             users    @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
   @@unique([user_id, video_id], name: "user_id_video_id")
   @@index([user_id], map: "idx_video_dna_user")
@@ -773,71 +746,54 @@ model video_dna_analyses {
 }
 
 model competitor_analyses {
-  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  user_id     String    @db.Uuid
-  niche       String
-  video_ids   String[]  @default([])
-  reel_ids    String[]  @default([])
-  gap_report  Json      @default("{}")
-  created_at  DateTime? @default(now()) @db.Timestamptz(6)
-  expires_at  DateTime  @db.Timestamptz(6)
-  users       users     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id    String    @db.Uuid
+  niche      String
+  video_ids  String[]  @default([])
+  reel_ids   String[]  @default([])
+  gap_report Json      @default("{}")
+  created_at DateTime? @default(now()) @db.Timestamptz(6)
+  expires_at DateTime  @db.Timestamptz(6)
+  users      users     @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
   @@unique([user_id, niche], name: "user_id_niche")
   @@index([user_id], map: "idx_competitor_analyses_user")
-  @@index([niche],   map: "idx_competitor_analyses_niche")
+  @@index([niche], map: "idx_competitor_analyses_niche")
+  @@index([expires_at], map: "idx_competitor_analyses_expiry")
 }
 
 model video_heatmaps {
-  video_id    String    @id
+  video_id     String   @id
   heatmap_data Json     @default("{}")
-  scraped_at  DateTime  @default(now()) @db.Timestamptz(6)
-  expires_at  DateTime  @db.Timestamptz(6)
+  scraped_at   DateTime @default(now()) @db.Timestamptz(6)
+  expires_at   DateTime @db.Timestamptz(6)
 
   @@index([expires_at], map: "idx_video_heatmaps_expiry")
 }
 
-// ── Calendar Entries (individual pieces of content) ───────────────────────────
-// Separate from content_calendars (which stores AI-generated month blobs).
-// This stores individual confirmed entries from the Studio→Launch→Calendar flow.
 model calendar_entries {
-  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  user_id        String    @db.Uuid
-
-  // Content
-  title          String
-  idea           String?
-  platform       String    @default("instagram")
-  niche          String?
-  format         String?   // Reel, Carousel, Story, Video
-
-  // Scheduling
-  scheduled_date String    // "YYYY-MM-DD"
-  scheduled_time String?   // "7:30 PM IST"
-
-  // Status pipeline: idea → script → ready → posted
-  status         String    @default("idea")
-
-  // Source references
-  studio_session_id String? // links to studio_scripts.id
-  source         String    @default("manual") // "manual" | "discovery" | "ai_generated"
-
-  // AI suggestion metadata
-  is_ai_suggested Boolean  @default(false)
-  ai_accepted     Boolean  @default(false)
-
-  // Rich data
-  hook           String?
-  caption        String?
-  hashtags       Json      @default("[]")
-  aria_tip       String?
-
-  // Timestamps
-  created_at     DateTime  @default(now()) @db.Timestamptz(6)
-  updated_at     DateTime  @default(now()) @db.Timestamptz(6)
-  posted_at      DateTime? @db.Timestamptz(6)
-
-  users          users     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id           String    @db.Uuid
+  title             String
+  idea              String?
+  platform          String    @default("instagram")
+  niche             String?
+  format            String?
+  scheduled_date    String
+  scheduled_time    String?
+  status            String    @default("idea")
+  studio_session_id String?
+  source            String    @default("manual")
+  is_ai_suggested   Boolean   @default(false)
+  ai_accepted       Boolean   @default(false)
+  hook              String?
+  caption           String?
+  hashtags          Json      @default("[]")
+  aria_tip          String?
+  created_at        DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at        DateTime  @default(now()) @db.Timestamptz(6)
+  posted_at         DateTime? @db.Timestamptz(6)
+  users             users     @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
   @@index([user_id], map: "idx_cal_entries_user")
   @@index([user_id, scheduled_date], map: "idx_cal_entries_user_date")
@@ -845,99 +801,92 @@ model calendar_entries {
 }
 
 model creator_analytics {
-  id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  user_id             String    @db.Uuid
-  platform            String    @default("instagram")
-  handle              String
-
-  followers           Int       @default(0)
-  following           Int       @default(0)
-  total_posts         Int       @default(0)
-  avg_likes           Decimal   @default(0) @db.Decimal(10, 2)
-  avg_comments        Decimal   @default(0) @db.Decimal(10, 2)
-  avg_views           Decimal   @default(0) @db.Decimal(10, 2)
-  engagement_rate     Decimal   @default(0) @db.Decimal(5, 2)
-  posts_per_week      Decimal   @default(0) @db.Decimal(5, 2)
-  reel_count          Int       @default(0)
-  photo_count         Int       @default(0)
-  carousel_count      Int       @default(0)
-
-  health_score        Int       @default(0)
-  engagement_score    Int       @default(0)
-  consistency_score   Int       @default(0)
-  growth_score        Int       @default(0)
-  monetisation_score  Int       @default(0)
-
-  top_posts           Json      @default("[]")
-  top_hashtags        Json      @default("[]")
-  format_breakdown    Json      @default("{}")
-  best_posting_times  Json      @default("[]")
-  niche_benchmarks    Json      @default("{}")
-  growth_projection   Json      @default("{}")
-  monetisation        Json      @default("{}")
-
-  aria_diagnosis      String?
-  aria_top_insights   Json      @default("[]")
-  aria_action_items   Json      @default("[]")
-  aria_content_gaps   Json      @default("[]")
-
-  scraped_at          DateTime  @default(now()) @db.Timestamptz(6)
-  analysis_version    Int       @default(1)
-  created_at          DateTime  @default(now()) @db.Timestamptz(6)
-  updated_at          DateTime  @default(now()) @db.Timestamptz(6)
-
-  users               users     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  id                 String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id            String   @db.Uuid
+  platform           String   @default("instagram")
+  handle             String
+  followers          Int      @default(0)
+  following          Int      @default(0)
+  total_posts        Int      @default(0)
+  avg_likes          Decimal  @default(0) @db.Decimal(10, 2)
+  avg_comments       Decimal  @default(0) @db.Decimal(10, 2)
+  avg_views          Decimal  @default(0) @db.Decimal(10, 2)
+  engagement_rate    Decimal  @default(0) @db.Decimal(5, 2)
+  posts_per_week     Decimal  @default(0) @db.Decimal(5, 2)
+  reel_count         Int      @default(0)
+  photo_count        Int      @default(0)
+  carousel_count     Int      @default(0)
+  health_score       Int      @default(0)
+  engagement_score   Int      @default(0)
+  consistency_score  Int      @default(0)
+  growth_score       Int      @default(0)
+  monetisation_score Int      @default(0)
+  top_posts          Json     @default("[]")
+  top_hashtags       Json     @default("[]")
+  format_breakdown   Json     @default("{}")
+  best_posting_times Json     @default("[]")
+  niche_benchmarks   Json     @default("{}")
+  growth_projection  Json     @default("{}")
+  monetisation       Json     @default("{}")
+  aria_diagnosis     String?
+  aria_top_insights  Json     @default("[]")
+  aria_action_items  Json     @default("[]")
+  aria_content_gaps  Json     @default("[]")
+  scraped_at         DateTime @default(now()) @db.Timestamptz(6)
+  analysis_version   Int      @default(1)
+  created_at         DateTime @default(now()) @db.Timestamptz(6)
+  updated_at         DateTime @default(now()) @db.Timestamptz(6)
+  users              users    @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
   @@unique([user_id, platform], map: "creator_analytics_user_platform_key")
   @@index([user_id], map: "idx_creator_analytics_user")
 }
 
-
-// Credit System
-
 model credit_config {
-  id                  String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  action_key          String   @unique
-  display_name        String
-  credits_cost        Int      @default(10)
-  model_mini          String   @default("gpt-4o-mini")
-  model_heavy         String   @default("gpt-4o")
-  use_heavy           Boolean  @default(false)
-  max_per_day         Int?
-  max_per_month       Int?
-  free_tier_allowed   Boolean  @default(false)
-  pro_tier_allowed    Boolean  @default(true)
-  max_tier_allowed    Boolean  @default(true)
-  active              Boolean  @default(true)
-  notes               String?
-  updated_at          DateTime @default(now()) @db.Timestamptz(6)
+  id                   String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  action_key           String   @unique
+  display_name         String
+  credits_cost         Int      @default(10)
+  model_mini           String   @default("gpt-4o-mini")
+  model_heavy          String   @default("gpt-4o")
+  use_heavy            Boolean  @default(false)
+  max_per_day          Int?
+  max_per_month        Int?
+  free_tier_allowed    Boolean  @default(false)
+  pro_tier_allowed     Boolean  @default(true)
+  max_tier_allowed     Boolean  @default(true)
+  active               Boolean  @default(true)
+  notes                String?
+  updated_at           DateTime @default(now()) @db.Timestamptz(6)
+  starter_tier_allowed Boolean  @default(true)
 }
 
 model credit_wallets {
   id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   user_id          String   @unique @db.Uuid
-  balance          Decimal @db.Decimal(12,4)
-  total_granted    Decimal @db.Decimal(12,4) @default(0)
-  total_spent      Decimal @db.Decimal(12,4) @default(0)
-  plan_credits     Decimal @db.Decimal(12,4) @default(0)
-  rollover_credits Decimal @db.Decimal(12,4) @default(0)
-  topup_credits    Decimal @db.Decimal(12,4) @default(0)
+  balance          Decimal  @db.Decimal(12, 4)
+  total_granted    Decimal  @default(0) @db.Decimal(12, 4)
+  total_spent      Decimal  @default(0) @db.Decimal(12, 4)
+  plan_credits     Decimal  @default(0) @db.Decimal(12, 4)
+  rollover_credits Decimal  @default(0) @db.Decimal(12, 4)
+  topup_credits    Decimal  @default(0) @db.Decimal(12, 4)
   last_reset_at    DateTime @default(now()) @db.Timestamptz(6)
-  next_reset_at    DateTime @default(dbgenerated("NOW() + INTERVAL '30 days'")) @db.Timestamptz(6)
+  next_reset_at    DateTime @default(dbgenerated("(now() + '30 days'::interval)")) @db.Timestamptz(6)
   created_at       DateTime @default(now()) @db.Timestamptz(6)
   updated_at       DateTime @default(now()) @db.Timestamptz(6)
   users            users    @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
   @@index([user_id])
   @@index([next_reset_at])
+  @@index([user_id], map: "idx_credit_wallets_user")
 }
 
 model credit_transactions {
   id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   user_id       String   @db.Uuid
-  type          String   // 'debit' | 'grant' | 'topup' | 'rollover' | 'refund'
-  amount        Decimal @db.Decimal(12,4) // positive = in, negative = out
-  balance_after Decimal @db.Decimal(12,4)
+  type          String
+  amount        Decimal  @db.Decimal(12, 4)
+  balance_after Decimal  @db.Decimal(12, 4)
   action_key    String?
   model_used    String?
   tokens_input  Int?
@@ -951,13 +900,16 @@ model credit_transactions {
   @@index([user_id])
   @@index([user_id, created_at(sort: Desc)])
   @@index([action_key])
+  @@index([action_key], map: "idx_credit_transactions_action")
+  @@index([created_at(sort: Desc)], map: "idx_credit_transactions_time")
+  @@index([user_id], map: "idx_credit_transactions_user")
 }
 
 model credit_topups {
   id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   user_id        String   @db.Uuid
   credits        Int
-  amount_inr     Int      // in paise
+  amount_inr     Int
   payment_id     String?
   payment_status String   @default("pending")
   pack_id        String?
@@ -965,4 +917,47 @@ model credit_topups {
   users          users    @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
   @@index([user_id])
+  @@index([user_id], map: "idx_credit_topups_user")
+}
+
+model niche_benchmarks {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  niche      String   @unique
+  avg_er     Decimal  @default(3.0) @db.Decimal(5, 2)
+  top_er     Decimal  @default(6.0) @db.Decimal(5, 2)
+  cpm        Int      @default(90)
+  label      String
+  updated_at DateTime @default(now()) @db.Timestamptz(6)
+  updated_by String   @default("seed")
+}
+
+model rival_spy_sessions {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id    String    @db.Uuid
+  handles    String[]
+  platform   String    @default("auto")
+  result     Json?
+  created_at DateTime? @default(now()) @db.Timestamptz(6)
+  expires_at DateTime? @default(dbgenerated("(now() + '06:00:00'::interval)")) @db.Timestamptz(6)
+  users      users     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([expires_at], map: "idx_rival_spy_expires")
+  @@index([user_id], map: "idx_rival_spy_user")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model roadmap_actions {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id         String    @db.Uuid
+  roadmap_version String
+  week_number     Int
+  action_index    Int
+  action_text     String
+  completed_at    DateTime? @db.Timestamptz(6)
+  dismissed_at    DateTime? @db.Timestamptz(6)
+  created_at      DateTime  @default(now()) @db.Timestamptz(6)
+  users           users     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([user_id, roadmap_version, week_number, action_index], map: "roadmap_actions_unique")
+  @@index([user_id, roadmap_version], map: "idx_roadmap_actions_user")
 }
