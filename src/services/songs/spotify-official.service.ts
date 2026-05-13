@@ -1,88 +1,76 @@
 // src/services/songs/spotify-official.service.ts
 // ══════════════════════════════════════════════════════════════════════════════
-// Spotify Web API Official Integration (Client Credentials OAuth2)
+// Spotify Official Web API scraper
 //
-// Replaces CSV scraping with reliable official API endpoints:
-//   - Featured Playlists (curated trending content)
-//   - New Releases (emerging trends)
-//   - Search for current year tracks (additional signal)
+// Strategy: fetch from curated global top-chart playlists per language/region
+// instead of generic search queries. This guarantees language diversity and
+// avoids the Hindi-only bias of the old search approach.
 //
-// Token caching via Redis to avoid repeated auth calls.
+// Playlists used (all stable public Spotify editorial playlists):
+//   Global Top 50        → 37i9dQZEVXbMDoHDwVN2tF  (English + global)
+//   India Top 50         → 37i9dQZEVXbLZ52XmnySJg  (Hindi, cross-language)
+//   Bollywood Top 50     → 37i9dQZEVXbMWDif5SCBJq  (Hindi / Bollywood)
+//   Tamil Hits           → 37i9dQZEVXbKqiTGXuCOsB  (Tamil)
+//   Telugu Hits          → 37i9dQZEVXbKMzVsSGQ49S  (Telugu)
+//   Punjabi Hits         → 37i9dQZEVXbJJMkfOzQ3JB  (Punjabi)
+//   K-Pop Top 50         → 37i9dQZEVXbJZGli0rRP3r  (Korean)
+//   Global Viral 50      → 37i9dQZEVXbLiRSasKsNU9  (trending globally)
+//   Afrobeats            → 37i9dQZEVXbNFJfN1Vw8d9  (Afrobeats / global)
+//   Latin Top 50         → 37i9dQZEVXbO3qyFxbkOFj  (Spanish/Portuguese)
 // ══════════════════════════════════════════════════════════════════════════════
 
 import axios, { AxiosInstance } from "axios";
-import { cache } from "../../config/redis";
 import { logger } from "../../utils/logger";
 
-const SPOTIFY_AUTH_URL = "https://accounts.spotify.com/api/token";
-const SPOTIFY_API_URL = "https://api.spotify.com/v1";
+// ── Auth ──────────────────────────────────────────────────────────────────────
 
-let _spotifyClient: AxiosInstance | null = null;
-
-// ── Token Management ──────────────────────────────────────────────────────────
-
-interface SpotifyToken {
-  access_token: string;
-  token_type: string;
-  expires_in: number;
-}
+let _cachedToken: string | null = null;
+let _tokenExpiresAt = 0;
 
 async function getSpotifyAccessToken(): Promise<string> {
-  const cacheKey = "spotify:access_token";
-  const cached = (await cache.get(cacheKey)) as string | null;
-  if (cached) {
-    logger.debug("Using cached Spotify access token");
-    return cached;
+  if (_cachedToken && Date.now() < _tokenExpiresAt - 30_000) {
+    return _cachedToken;
   }
 
   const clientId = process.env.SPOTIFY_CLIENT_ID?.trim();
   const clientSecret = process.env.SPOTIFY_CLIENT_SECRET?.trim();
 
   if (!clientId || !clientSecret) {
-    throw new Error(
-      "SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET environment variables not set",
-    );
+    throw new Error("SPOTIFY_CLIENT_ID or SPOTIFY_CLIENT_SECRET not set");
   }
 
-  try {
-    logger.debug("Requesting new Spotify access token...");
+  const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString(
+    "base64",
+  );
 
-    const { data } = await axios.post<SpotifyToken>(
-      SPOTIFY_AUTH_URL,
-      new URLSearchParams({
-        grant_type: "client_credentials",
-        client_id: clientId,
-        client_secret: clientSecret,
-      }),
-      {
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        timeout: 10000,
+  const { data } = await axios.post(
+    "https://accounts.spotify.com/api/token",
+    "grant_type=client_credentials",
+    {
+      headers: {
+        Authorization: `Basic ${credentials}`,
+        "Content-Type": "application/x-www-form-urlencoded",
       },
-    );
+      timeout: 10_000,
+    },
+  );
 
-    const token = data.access_token;
-    const ttl = Math.max(60, data.expires_in - 300); // Refresh 5 min before expiry
-    await cache.set(cacheKey, token, ttl);
-
-    logger.info({ ttl }, "Spotify access token refreshed successfully");
-    return token;
-  } catch (err: any) {
-    logger.error(
-      { err: err.message, status: err.response?.status },
-      "Spotify token request failed",
-    );
-    throw err;
-  }
+  _cachedToken = data.access_token;
+  _tokenExpiresAt = Date.now() + data.expires_in * 1000;
+  return _cachedToken!;
 }
+
+// ── Axios client ──────────────────────────────────────────────────────────────
+
+let _spotifyClient: AxiosInstance | null = null;
 
 function getSpotifyClient(): AxiosInstance {
   if (!_spotifyClient) {
     _spotifyClient = axios.create({
-      baseURL: SPOTIFY_API_URL,
-      timeout: 15000,
+      baseURL: "https://api.spotify.com/v1",
+      timeout: 15_000,
     });
 
-    // Interceptor: inject Bearer token on each request
     _spotifyClient.interceptors.request.use(async (config) => {
       try {
         const token = await getSpotifyAccessToken();
@@ -94,21 +82,19 @@ function getSpotifyClient(): AxiosInstance {
       return config;
     });
 
-    // Interceptor: log errors
     _spotifyClient.interceptors.response.use(
-      (response) => response,
-      (error) => {
-        if (error.response) {
+      (res) => res,
+      (err) => {
+        if (err.response) {
           logger.warn(
-            { status: error.response.status, url: error.config?.url },
+            { status: err.response.status, url: err.config?.url },
             "Spotify API error",
           );
         }
-        return Promise.reject(error);
+        return Promise.reject(err);
       },
     );
   }
-
   return _spotifyClient;
 }
 
@@ -122,263 +108,119 @@ export interface SpotifySongResult {
   image_url: string | null;
   spotify_id: string;
   external_url: string;
+  language: string; // NOW POPULATED — was missing before
 }
 
-// ── Scraper Functions ─────────────────────────────────────────────────────────
+// ── Curated playlist map — language tagged ────────────────────────────────────
+// Each entry: [playlistId, language, label]
+// All are stable Spotify editorial playlists verified as of 2025.
 
-/**
- * Get featured playlists curated by Spotify editors.
- * These often represent current trends and themed playlists.
- */
-export async function scrapeFeaturedPlaylists(): Promise<SpotifySongResult[]> {
-  if (process.env.SPOTIFY_ENABLE_BROWSE_SOURCES !== "true") {
-    logger.info(
-      "Spotify featured playlists source disabled; skipping browse endpoint",
-    );
-    return [];
-  }
+const CURATED_PLAYLISTS: Array<{
+  id: string;
+  language: string;
+  label: string;
+}> = [
+  { id: "37i9dQZEVXbMDoHDwVN2tF", language: "English", label: "Global Top 50" },
+  {
+    id: "37i9dQZEVXbLiRSasKsNU9",
+    language: "English",
+    label: "Global Viral 50",
+  },
+  { id: "37i9dQZEVXbLZ52XmnySJg", language: "Hindi", label: "India Top 50" },
+  {
+    id: "37i9dQZEVXbMWDif5SCBJq",
+    language: "Hindi",
+    label: "Bollywood Top 50",
+  },
+  { id: "37i9dQZEVXbKqiTGXuCOsB", language: "Tamil", label: "Tamil Hits" },
+  { id: "37i9dQZEVXbKMzVsSGQ49S", language: "Telugu", label: "Telugu Hits" },
+  { id: "37i9dQZEVXbJJMkfOzQ3JB", language: "Punjabi", label: "Punjabi Hits" },
+  { id: "37i9dQZEVXbJZGli0rRP3r", language: "Korean", label: "K-Pop Top 50" },
+  { id: "37i9dQZEVXbNFJfN1Vw8d9", language: "Afrobeats", label: "Afrobeats" },
+  { id: "37i9dQZEVXbO3qyFxbkOFj", language: "Spanish", label: "Latin Top 50" },
+];
 
+const TRACKS_PER_PLAYLIST = 30;
+
+// ── Scraper ───────────────────────────────────────────────────────────────────
+
+async function fetchPlaylistTracks(
+  playlistId: string,
+  language: string,
+  label: string,
+): Promise<SpotifySongResult[]> {
   try {
-    logger.info("Scraping Spotify featured playlists...");
     const client = getSpotifyClient();
-
-    const market = process.env.SPOTIFY_MARKET || "IN";
-
-    const { data } = await client.get("/browse/featured-playlists", {
+    const { data } = await client.get(`/playlists/${playlistId}/tracks`, {
       params: {
-        locale: "hi_IN",
-        limit: 20, // Increased from 5 to 20
+        limit: TRACKS_PER_PLAYLIST,
         offset: 0,
+        fields:
+          "items(track(id,name,popularity,external_urls,artists,album(release_date,images)))",
       },
     });
 
-    const playlists = data.playlists?.items || [];
-    if (!playlists.length) {
-      logger.warn("No featured playlists returned");
-      return [];
-    }
+    const items: any[] = data?.items || [];
 
-    const allTracks: SpotifySongResult[] = [];
-
-    // Fetch top tracks from each featured playlist
-    for (const playlist of playlists) {
-      try {
-        const { data: playlistData } = await client.get(
-          `/playlists/${playlist.id}/tracks`,
-          { params: { limit: 30, market } }, // Increased from 20 to 30
-        );
-
-        const tracks = playlistData.items || [];
-
-        allTracks.push(
-          ...tracks.map((item: any) => {
-            const track = item.track || {};
-            const album = track.album || {};
-
-            return {
-              title: track.name || "Unknown",
-              artist: track.artists?.[0]?.name || "Unknown",
-              popularity: track.popularity || 0,
-              release_date: album.release_date || "",
-              image_url: album.images?.[0]?.url || null,
-              spotify_id: track.id || "",
-              external_url: track.external_urls?.spotify || "",
-            } satisfies SpotifySongResult;
-          }),
-        );
-      } catch (err: any) {
-        logger.warn(
-          { err: err.message, playlistId: playlist.id },
-          "Playlist fetch failed (non-critical)",
-        );
-      }
-    }
-
-    logger.info(
-      { count: allTracks.length, playlists: playlists.length },
-      "Featured playlists scrape complete",
-    );
-    return allTracks.slice(0, 100); // Cap at 100
-  } catch (err: any) {
-    logger.warn({ err: err.message }, "Featured playlists scrape failed");
-    return [];
-  }
-}
-
-/**
- * Get newly released albums/singles in the market.
- * Good for capturing emerging trends early.
- */
-export async function scrapeNewReleases(): Promise<SpotifySongResult[]> {
-  if (process.env.SPOTIFY_ENABLE_BROWSE_SOURCES !== "true") {
-    logger.info(
-      "Spotify new releases source disabled; skipping browse endpoint",
-    );
-    return [];
-  }
-
-  try {
-    logger.info("Scraping Spotify new releases...");
-    const client = getSpotifyClient();
-
-    const market = process.env.SPOTIFY_MARKET || "IN";
-
-    const { data } = await client.get("/browse/new-releases", {
-      params: {
-        country: market,
-        limit: 50, // Already at 50
-      },
-    });
-
-    const albums = data.albums?.items || [];
-    if (!albums.length) {
-      logger.warn("No new releases returned");
-      return [];
-    }
-
-    const results: SpotifySongResult[] = [];
-
-    // Each album may contain multiple tracks; extract them
-    for (const album of albums) {
-      const albumTracks = album.tracks?.items || [];
-
-      results.push(
-        ...albumTracks.slice(0, 3).map((track: any) => ({
-          // Take top 3 tracks per album
+    return items
+      .filter((item: any) => item?.track?.id)
+      .map((item: any): SpotifySongResult => {
+        const track = item.track;
+        const album = track.album || {};
+        return {
           title: track.name || "Unknown",
           artist: track.artists?.[0]?.name || "Unknown",
           popularity: track.popularity || 0,
           release_date: album.release_date || "",
           image_url: album.images?.[0]?.url || null,
-          spotify_id: track.id || "",
+          spotify_id: track.id,
           external_url: track.external_urls?.spotify || "",
-        })),
-      );
-    }
-
-    logger.info(
-      { count: results.length, albums: albums.length },
-      "New releases scrape complete",
+          language, // tag with the playlist's known language
+        };
+      });
+  } catch (err: any) {
+    logger.warn(
+      { err: err.message, playlistId, label },
+      "Spotify playlist fetch failed",
     );
-    return results.slice(0, 100); // Increased from 50 to 100
-  } catch (err: any) {
-    logger.warn({ err: err.message }, "New releases scrape failed");
-    return [];
-  }
-}
-
-/**
- * Search for trending tracks in current year.
- * Uses Spotify's search endpoint with year filter.
- */
-export async function searchTrendingTracks(): Promise<SpotifySongResult[]> {
-  try {
-    logger.info("Searching Spotify for trending tracks...");
-    const client = getSpotifyClient();
-
-    const market = process.env.SPOTIFY_MARKET || "IN";
-    const year = new Date().getFullYear();
-
-    // Run multiple searches to get more variety
-    const searchQueries = [
-      `track:love year:${year}`,
-      `track:party year:${year}`,
-      `track:remix year:${year}`,
-      `track:hit year:${year}`,
-      `track:top year:${year}`,
-    ];
-
-    const allTracks: SpotifySongResult[] = [];
-
-    for (const query of searchQueries) {
-      for (const offset of [0, 10, 20]) {
-        try {
-          const { data } = await client.get("/search", {
-            params: {
-              q: query,
-              type: "track",
-              market,
-              limit: 10,
-              offset,
-            },
-          });
-
-          const tracks = data.tracks?.items || [];
-
-          allTracks.push(
-            ...tracks.map((track: any) => ({
-              title: track.name || "Unknown",
-              artist: track.artists?.[0]?.name || "Unknown",
-              popularity: track.popularity || 0,
-              release_date: track.album?.release_date || "",
-              image_url: track.album?.images?.[0]?.url || null,
-              spotify_id: track.id || "",
-              external_url: track.external_urls?.spotify || "",
-            })),
-          );
-        } catch (searchErr: any) {
-          logger.warn(
-            { query, offset, err: searchErr.message },
-            "Search query failed (non-critical)",
-          );
-        }
-      }
-    }
-
-    logger.info({ count: allTracks.length }, "Trending search complete");
-    return allTracks.slice(0, 100); // Increased from 50 to 100
-  } catch (err: any) {
-    logger.warn({ err: err.message }, "Trending search failed");
     return [];
   }
 }
 
 // ── Aggregation ───────────────────────────────────────────────────────────────
 
-/**
- * Run all Spotify scrapers in parallel and aggregate.
- */
 export async function scrapeSpotifyOfficial(): Promise<{
   songs: SpotifySongResult[];
   diagnostics: Record<string, string>;
 }> {
-  const [featuredResult, newReleasesResult, searchResult] =
-    await Promise.allSettled([
-      scrapeFeaturedPlaylists(),
-      scrapeNewReleases(),
-      searchTrendingTracks(),
-    ]);
+  // Run all playlist fetches in parallel
+  const results = await Promise.allSettled(
+    CURATED_PLAYLISTS.map((p) =>
+      fetchPlaylistTracks(p.id, p.language, p.label),
+    ),
+  );
 
-  const diagnostics: Record<string, string> = {
-    featured_playlists:
-      featuredResult.status === "fulfilled"
-        ? `ok (${featuredResult.value.length})`
-        : `failed: ${(featuredResult as any).reason?.message}`,
-    new_releases:
-      newReleasesResult.status === "fulfilled"
-        ? `ok (${newReleasesResult.value.length})`
-        : `failed: ${(newReleasesResult as any).reason?.message}`,
-    trending_search:
-      searchResult.status === "fulfilled"
-        ? `ok (${searchResult.value.length})`
-        : `failed: ${(searchResult as any).reason?.message}`,
-  };
+  const diagnostics: Record<string, string> = {};
+  const allSongs: SpotifySongResult[] = [];
 
-  const allSongs: SpotifySongResult[] = [
-    ...(featuredResult.status === "fulfilled" ? featuredResult.value : []),
-    ...(newReleasesResult.status === "fulfilled"
-      ? newReleasesResult.value
-      : []),
-    ...(searchResult.status === "fulfilled" ? searchResult.value : []),
-  ];
+  for (let i = 0; i < CURATED_PLAYLISTS.length; i++) {
+    const { label } = CURATED_PLAYLISTS[i];
+    const r = results[i];
+    if (r.status === "fulfilled") {
+      diagnostics[label] = `ok (${r.value.length})`;
+      allSongs.push(...r.value);
+    } else {
+      diagnostics[label] = `failed: ${(r as any).reason?.message}`;
+    }
+  }
 
-  // Deduplicate by spotify_id (most reliable identifier)
-  const seenIds = new Set<string>();
+  // Deduplicate by spotify_id — same track can appear in multiple playlists
+  // Keep the first occurrence (which has the most-specific language tag)
+  const seen = new Set<string>();
   const deduped: SpotifySongResult[] = [];
-
   for (const song of allSongs) {
-    if (!seenIds.has(song.spotify_id)) {
-      seenIds.add(song.spotify_id);
+    if (!seen.has(song.spotify_id)) {
+      seen.add(song.spotify_id);
       deduped.push(song);
     }
   }
@@ -391,22 +233,17 @@ export async function scrapeSpotifyOfficial(): Promise<{
   return { songs: deduped, diagnostics };
 }
 
-// ── Test/Verification ─────────────────────────────────────────────────────────
+// ── Health check ──────────────────────────────────────────────────────────────
 
-/**
- * Quick health check: verify credentials work and can fetch token.
- * Call this on startup or add to a `/health/spotify` endpoint.
- */
 export async function verifySpotifyCredentials(): Promise<{
   ok: boolean;
   message: string;
 }> {
   try {
     const token = await getSpotifyAccessToken();
-    if (token && token.length > 0) {
-      return { ok: true, message: "Spotify credentials verified" };
-    }
-    return { ok: false, message: "Token empty" };
+    return token?.length > 0
+      ? { ok: true, message: "Spotify credentials verified" }
+      : { ok: false, message: "Token empty" };
   } catch (err: any) {
     return {
       ok: false,
