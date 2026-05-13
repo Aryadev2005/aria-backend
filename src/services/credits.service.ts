@@ -87,7 +87,7 @@ export async function getActionConfig(key: ActionKey): Promise<ActionConfig> {
       maxPerDay: row.max_per_day ?? undefined,
       maxPerMonth: row.max_per_month ?? undefined,
       freeTierAllowed: row.free_tier_allowed,
-      starterTierAllowed: row.pro_tier_allowed, // starter reuses pro_tier_allowed column
+      starterTierAllowed: row.starter_tier_allowed,
       proTierAllowed: row.pro_tier_allowed,
       maxTierAllowed: row.max_tier_allowed,
     };
