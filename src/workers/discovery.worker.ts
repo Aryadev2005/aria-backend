@@ -315,14 +315,13 @@ async function scrapeReddit(client: any): Promise<number> {
       batch.map(async (subreddit) => {
         try {
           const run = await client
-            .actor("fatihtahta/reddit-scraper-search-fast")
-            .call({
-              subreddits: [subreddit],
-              sort: "hot",
-              time: "day",
-              maxItems: REDDIT_PER_SUB,
-              skipComments: true,
-            });
+  .actor("fatihtahta/reddit-scraper-search-fast")
+  .call({
+    subredditName: subreddit,   // ✅ was: subreddits: [subreddit]
+    sort: "hot",
+    maxPostCount: REDDIT_PER_SUB, // ✅ was: maxItems
+    // remove: skipComments, time — not supported
+  });
           const dataset = await client
             .dataset(run.defaultDatasetId)
             .listItems({ limit: REDDIT_PER_SUB });
