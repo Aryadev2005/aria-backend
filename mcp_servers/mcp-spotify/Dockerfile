@@ -4,9 +4,11 @@ FROM node:20-alpine AS build
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm ci
+# Skip prepare script during install (it needs source files)
+RUN npm install --ignore-scripts
 
 COPY . .
+# Now run build after source files are available
 RUN npm run build
 
 FROM node:20-alpine AS runtime
@@ -14,7 +16,8 @@ FROM node:20-alpine AS runtime
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+# --ignore-scripts skips the 'prepare' script which tries to run tsc (not available in prod deps)
+RUN npm install --omit=dev --ignore-scripts && npm cache clean --force
 
 COPY --from=build /app/build ./build
 

@@ -113,21 +113,23 @@ export async function getOrCreateWallet(userId: string, tier: string = "free") {
   const cached = (await cache.get(cacheKey)) as any;
   if (cached) return cached;
 
-  let wallet = await prisma.credit_wallets.findUnique({
+  const planCredits = PLAN_CREDITS[tier] ?? PLAN_CREDITS.free;
+  let wallet = await prisma.credit_wallets.upsert({
     where: { user_id: userId },
+    update: {},
+    create: {
+      user_id: userId,
+      balance: planCredits,
+      plan_credits: planCredits,
+      total_granted: planCredits,
+      next_reset_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+    },
   });
 
-  if (!wallet) {
-    const planCredits = PLAN_CREDITS[tier] ?? PLAN_CREDITS.free;
-    wallet = await prisma.credit_wallets.create({
-      data: {
-        user_id: userId,
-        balance: planCredits,
-        plan_credits: planCredits,
-        total_granted: planCredits,
-        next_reset_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-      },
-    });
+  const isNew =
+    Number(wallet.total_granted) === planCredits &&
+    Number(wallet.balance) === planCredits;
+  if (isNew) {
     await prisma.credit_transactions.create({
       data: {
         user_id: userId,
@@ -417,9 +419,10 @@ export async function debitCredits(
     });
 
     const newBalance = Number(updatedWallet.balance);
-    const planLimit = Number(updatedWallet.plan_credits) > 0
-      ? Number(updatedWallet.plan_credits)
-      : PLAN_CREDITS.free;
+    const planLimit =
+      Number(updatedWallet.plan_credits) > 0
+        ? Number(updatedWallet.plan_credits)
+        : PLAN_CREDITS.free;
 
     // Recompute usedPct for response
     const totalGranted = Number(updatedWallet.total_granted);

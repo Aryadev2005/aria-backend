@@ -6,7 +6,7 @@
 
 import { FastifyInstance } from "fastify";
 import { authenticateFirebase } from "../middleware/auth.middleware";
-import { streamDeepAnalysis } from "../controllers/deepAnalysis.controller";
+import { streamScript } from "../controllers/studio.controller";
 
 export default async function deepAnalysisRoutes(app: FastifyInstance) {
   // POST /api/v1/studio/deep-analysis/stream
@@ -30,6 +30,6 @@ export default async function deepAnalysisRoutes(app: FastifyInstance) {
         },
       },
     },
-    streamDeepAnalysis as any,
+    streamScript as any,
   );
 }

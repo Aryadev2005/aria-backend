@@ -131,7 +131,12 @@ export const createOrder = async (
     });
   } catch (err: any) {
     logger.error(
-      { err: err.message, userId: user.id },
+      {
+        err: err.message,
+        errCode: err.statusCode,
+        errBody: err.error,
+        userId: user.id,
+      },
       "Razorpay order creation failed",
     );
     return errors.internal(reply);
