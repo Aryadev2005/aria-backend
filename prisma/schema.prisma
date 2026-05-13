@@ -691,6 +691,30 @@ model discovery_google_trends_raw {
   @@index([expires_at])
 }
 
+model discovery_youtube_raw {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  video_id      String   @unique
+  title         String
+  channel       String   @default("")
+  view_count    BigInt   @default(0)
+  like_count    BigInt   @default(0)
+  comment_count BigInt   @default(0)
+  category_id   String   @default("0")
+  velocity      Int      @default(0)
+  niche_tags    String[] @default([])
+  thumbnail_url String?
+  published_at  DateTime? @db.Timestamptz(6)
+  scraped_at    DateTime @default(now()) @db.Timestamptz(6)
+  expires_at    DateTime @db.Timestamptz(6)
+  raw_data      Json     @default("{}")
+
+  @@index([velocity(sort: Desc)])
+  @@index([view_count(sort: Desc)])
+  @@index([scraped_at(sort: Desc)])
+  @@index([expires_at])
+  @@index([category_id])
+}
+
 model creator_voice_profiles {
   id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   user_id         String   @unique @db.Uuid

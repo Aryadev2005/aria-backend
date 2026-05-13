@@ -60,20 +60,35 @@ export async function scheduleSongJobs(): Promise<void> {
 }
 
 // ── Discovery scrape schedule ─────────────────────────────────────────────────
-// Global TikTok + Pinterest + Google Trends scrape every 12 hours
+// Split into two queues:
+// discovery-fast (every 12h): YouTube + Google Trends
+// discovery-slow (every 24h): Reddit + TikTok + Pinterest
 
 export async function scheduleDiscoveryJobs(): Promise<void> {
   try {
-    const discoveryQueue = new Queue("discovery-queue", { connection: getConnection() });
+    // Queue A: discovery-queue → discovery-fast (YouTube + Google Trends every 12h)
+    const fastQueue = new Queue("discovery-queue", { connection: getConnection() });
 
-    await discoveryQueue.upsertJobScheduler(
-      "discovery-global-scheduled",
+    await fastQueue.upsertJobScheduler(
+      "discovery-fast-scheduled",
       { every: 12 * 60 * 60 * 1000 },  // every 12 hours
-      { name: "discovery-global", data: {} },
+      { name: "discovery-fast", data: {} },
     );
 
-    logger.info("Discovery jobs scheduled (every 12h)");
-    await discoveryQueue.close();
+    logger.info("Discovery FAST job scheduled (YouTube + Google Trends every 12h)");
+    await fastQueue.close();
+
+    // Queue B: discovery-slow → discovery-slow (Reddit + TikTok + Pinterest every 24h)
+    const slowQueue = new Queue("discovery-slow", { connection: getConnection() });
+
+    await slowQueue.upsertJobScheduler(
+      "discovery-slow-scheduled",
+      { every: 24 * 60 * 60 * 1000 },  // every 24 hours
+      { name: "discovery-slow", data: {} },
+    );
+
+    logger.info("Discovery SLOW job scheduled (Reddit + TikTok + Pinterest every 24h)");
+    await slowQueue.close();
   } catch (err: any) {
     logger.warn({ err: err.message }, "Failed to schedule discovery jobs");
   }

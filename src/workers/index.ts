@@ -42,7 +42,31 @@ export const startAllWorkers = async () => {
     const discoveryWorker = await startDiscoveryWorker();
     if (discoveryWorker) workers.push(discoveryWorker);
   } catch (err: any) {
-    logger.warn({ err: err.message }, "Discovery worker failed to start");
+    logger.warn({ err: err.message }, "Discovery worker (fast) failed to start");
+  }
+
+  // Start a second worker for the slow discovery queue
+  try {
+    const { Worker } = await import("bullmq");
+    const { processSlowJob } = await import("./discovery.worker");
+    const url    = process.env.REDIS_URL || "redis://localhost:6379";
+    const parsed = new URL(url);
+    const conn   = { host: parsed.hostname, port: parseInt(parsed.port || "6379") };
+
+    const slowWorker = new Worker("discovery-slow", processSlowJob, { connection: conn, concurrency: 1 });
+
+    slowWorker.on("completed", (job, result) => {
+      logger.info({ jobId: job.id, jobName: job.name, ...result }, "Discovery slow job completed");
+    });
+
+    slowWorker.on("failed", (job, err) => {
+      logger.error({ jobId: job?.id, jobName: job?.name, err: err.message }, "Discovery slow job failed");
+    });
+
+    workers.push(slowWorker);
+    logger.info("Discovery slow worker started");
+  } catch (err: any) {
+    logger.warn({ err: err.message }, "Discovery slow worker failed to start");
   }
 
   try {
