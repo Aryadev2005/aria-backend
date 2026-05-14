@@ -53,7 +53,13 @@ export const startAllWorkers = async () => {
     const parsed = new URL(url);
     const conn   = { host: parsed.hostname, port: parseInt(parsed.port || "6379") };
 
-    const slowWorker = new Worker("discovery-slow", processSlowJob, { connection: conn, concurrency: 1 });
+    const slowWorker = new Worker("discovery-slow", processSlowJob, {
+      connection: conn,
+      concurrency: 1,
+      lockDuration: 1800000,    // 30 min
+      stalledInterval: 300000,
+      maxStalledCount: 1,
+    });
 
     slowWorker.on("completed", (job, result) => {
       logger.info({ jobId: job.id, jobName: job.name, ...result }, "Discovery slow job completed");

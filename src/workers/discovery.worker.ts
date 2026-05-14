@@ -327,13 +327,12 @@ async function scrapeReddit(client: any): Promise<number> {
       batch.map(async (subreddit) => {
         try {
           const run = await client
-  .actor("fatihtahta/reddit-scraper-search-fast")
-  .call({
-    subredditName: subreddit,   // ✅ was: subreddits: [subreddit]
-    sort: "hot",
-    maxPostCount: REDDIT_PER_SUB, // ✅ was: maxItems
-    // remove: skipComments, time — not supported
-  });
+            .actor("fatihtahta/reddit-scraper-search-fast")
+            .call({
+              subredditName: subreddit,
+              sort: "hot",
+              maxPostCount: REDDIT_PER_SUB,
+            });
           const dataset = await client
             .dataset(run.defaultDatasetId)
             .listItems({ limit: REDDIT_PER_SUB });
@@ -1376,6 +1375,9 @@ export async function startDiscoveryWorker(): Promise<Worker | null> {
   worker = new Worker("discovery-queue", processJob, {
     connection: getConnection(),
     concurrency: 1,
+    lockDuration: 1200000,    // 20 min
+    stalledInterval: 300000,
+    maxStalledCount: 1,
   });
 
   worker.on("completed", (job, result) => {

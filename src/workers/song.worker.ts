@@ -143,8 +143,11 @@ export async function startSongWorker(): Promise<Worker | null> {
   }
 
   worker = new Worker("song-refresh", processJob, {
-    connection:  getConnection(),
-    concurrency: 1,  // only one song job at a time
+    connection:      getConnection(),
+    concurrency:     1,
+    lockDuration:    300000,     // 5 min
+    stalledInterval: 60000,
+    maxStalledCount: 2,
   });
 
   worker.on("completed", (job, result) => {
