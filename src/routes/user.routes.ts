@@ -35,7 +35,19 @@ export default async function userRoutes(app: FastifyInstance) {
         }
       });
       if (!dbUser) return errors.notFound(reply, 'User');
-      return success(reply, dbUser);
+
+      const niches: string[] = (dbUser.niches as string[]) ?? [];
+      const hasRealNiche = niches.length > 0 && niches[0] !== 'general';
+      const hasPlatform = !!(dbUser.instagram_handle || dbUser.youtube_handle);
+      const onboarding_status = dbUser.onboarding_step === 'complete'
+        ? 'complete'
+        : hasRealNiche
+          ? 'analysed'
+          : hasPlatform
+            ? 'pending'
+            : 'new';
+
+      return success(reply, { ...dbUser, onboarding_status });
     } catch (err) {
       return errors.internal(reply);
     }

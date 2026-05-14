@@ -396,6 +396,7 @@ export const getViralIdeas = async (
           cached: true,
           niche: activeNiche,
           isBrowsing: !!browseNiche,
+          updatedAt: new Date(),
         });
       }
     }
@@ -440,11 +441,18 @@ export const getViralIdeas = async (
       logger.warn({ err }, "Debit failed — non-fatal, ideas already returned"),
     );
 
+    const latestTrend = await (prisma as any).live_trends.findFirst({
+      where: { niche_tags: { has: activeNiche } },
+      orderBy: { fetched_at: "desc" },
+      select: { fetched_at: true },
+    });
+
     return success(reply, {
       ideas,
       cached: false,
       niche: activeNiche,
       isBrowsing: !!browseNiche,
+      updatedAt: latestTrend?.fetched_at ?? new Date(),
       refreshedAt: new Date().toISOString(),
       creditsUsed: req.creditCheck?.featureCharge ?? 0,
     });

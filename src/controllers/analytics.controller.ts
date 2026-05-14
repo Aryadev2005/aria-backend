@@ -114,7 +114,13 @@ export const getDashboard = async (
       TTL.DASHBOARD,
     );
 
-    return success(reply, dashboard);
+    const hasAnyData = !!(
+      (dashboard as any)?.growthRate ||
+      (dashboard as any)?.currentHealthScore ||
+      (dashboard as any)?.followers
+    );
+
+    return success(reply, { isEmpty: !hasAnyData, ...(dashboard as any) });
   } catch (err) {
     logger.error({ err }, "Dashboard failed");
     return errors.serviceDown(reply, "Analytics engine");

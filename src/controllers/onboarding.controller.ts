@@ -152,6 +152,9 @@ export const connectHandle = async (
       platform,
       isFirstTimeDetection,
       creditsUsed,
+      jobId: null,
+      estimatedSeconds: 45,
+      status: 'scraping',
       message: isFirstTimeDetection
         ? "First-time archetype analysis complete — FREE"
         : "Archetype re-detection complete",
