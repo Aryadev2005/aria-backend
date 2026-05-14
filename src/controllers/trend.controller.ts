@@ -391,12 +391,17 @@ export const getViralIdeas = async (
           { activeNiche, browseNiche, userId: user.id },
           "Viral ideas cache hit",
         );
+        const latestTrendCached = await (prisma as any).live_trends.findFirst({
+          where: { niche_tags: { has: activeNiche } },
+          orderBy: { fetched_at: "desc" },
+          select: { fetched_at: true },
+        });
         return success(reply, {
           ideas: cached,
           cached: true,
           niche: activeNiche,
           isBrowsing: !!browseNiche,
-          updatedAt: new Date(),
+          updatedAt: latestTrendCached?.fetched_at ?? new Date(),
         });
       }
     }
