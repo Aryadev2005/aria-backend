@@ -435,6 +435,75 @@ export const togglePin = async (
   }
 };
 
+/**
+ * Regenerate a single section of a script
+ */
+export const regenerateSection = async (
+  req: FastifyRequest<{ Body: any }>,
+  reply: FastifyReply,
+) => {
+  const user = req.user as User;
+  const {
+    sectionId,
+    sectionLabel,
+    sectionType,
+    currentContent,
+    userInstructions,
+    idea,
+    format,
+    mood,
+    angle,
+    researchBrief,
+    allSections,
+  } = req.body as any;
+  const modelToUse = req.creditCheck?.modelToUse ?? "gpt-4o-mini";
+
+  if (!sectionId || !userInstructions) {
+    return errors.validation(
+      reply,
+      "Missing required fields: sectionId, userInstructions",
+    );
+  }
+
+  try {
+    // Load voice portrait for context
+    const voicePortrait = await getVoicePortrait(user.id);
+    const voiceContext = voicePortrait
+      ? `Tone: ${voicePortrait.toneSignature}, Energy: ${voicePortrait.energyLevel}, Language: ${voicePortrait.preferredLanguage}, Style: ${voicePortrait.sentenceStyle}`
+      : undefined;
+
+    const result = await studioSvc.regenerateSection({
+      sectionId,
+      sectionLabel,
+      sectionType,
+      currentContent,
+      userInstructions,
+      idea,
+      platform: user.primary_platform || "instagram",
+      niche: user.niches?.[0] || "general",
+      format,
+      mood,
+      angle,
+      archetype: user.archetype || "EDUCATOR",
+      voiceContext,
+      researchBrief,
+      allSections,
+    });
+
+    await debitCredits(user.id, "script_writing", modelToUse, 800, 400).catch(
+      (err) => logger.warn({ err }, "Debit failed"),
+    );
+
+    return success(reply, {
+      ...result,
+      creditsUsed: req.creditCheck?.featureCharge ?? 0,
+    });
+  } catch (err) {
+    logger.error({ err }, "Section regeneration failed");
+    return errors.serviceDown(reply, "Section Regeneration");
+  }
+};
+
 // Fetch studio learnings (same helper as studio.service.ts uses internally)
 async function getStudioLearnings(userId: string): Promise<string> {
   try {
@@ -465,8 +534,17 @@ export const streamScript = async (
   reply: FastifyReply,
 ) => {
   const user = req.user as User;
-  const { idea, platform, niche, format, mood, angle, duration, userQuery, attachedNotes } =
-    req.body as any;
+  const {
+    idea,
+    platform,
+    niche,
+    format,
+    mood,
+    angle,
+    duration,
+    userQuery,
+    attachedNotes,
+  } = req.body as any;
 
   if (!idea?.trim()) {
     return reply.status(400).send({ error: "idea is required" });
@@ -474,32 +552,33 @@ export const streamScript = async (
 
   // ADD: format-duration contract enforcement
   const FORMAT_MAX_SECONDS: Record<string, number> = {
-    reel:     60,
-    story:    60,
-    post:     90,
+    reel: 60,
+    story: 60,
+    post: 90,
     carousel: Infinity, // slides, not time
-    video:    180 * 60, // 3 hours max
-    thread:   Infinity, // tweets, not time
+    video: 180 * 60, // 3 hours max
+    thread: Infinity, // tweets, not time
   };
 
   if (duration && format) {
     const lower = String(duration).toLowerCase().trim();
     let totalSeconds = 0;
 
-    const hr  = lower.match(/(\d+(?:\.\d+)?)\s*h(?:our|r)?/);
+    const hr = lower.match(/(\d+(?:\.\d+)?)\s*h(?:our|r)?/);
     const min = lower.match(/(\d+(?:\.\d+)?)\s*m(?:in)?/);
     const sec = lower.match(/(\d+(?:\.\d+)?)\s*s(?:ec)?/);
-    if (hr)  totalSeconds += parseFloat(hr[1])  * 3600;
+    if (hr) totalSeconds += parseFloat(hr[1]) * 3600;
     if (min) totalSeconds += parseFloat(min[1]) * 60;
     if (sec) totalSeconds += parseFloat(sec[1]);
 
     const maxSeconds = FORMAT_MAX_SECONDS[format] ?? Infinity;
     if (totalSeconds > 0 && totalSeconds > maxSeconds) {
-      const maxLabel = maxSeconds >= 3600
-        ? `${maxSeconds / 3600} hour(s)`
-        : maxSeconds >= 60
-          ? `${maxSeconds / 60} minute(s)`
-          : `${maxSeconds} seconds`;
+      const maxLabel =
+        maxSeconds >= 3600
+          ? `${maxSeconds / 3600} hour(s)`
+          : maxSeconds >= 60
+            ? `${maxSeconds / 60} minute(s)`
+            : `${maxSeconds} seconds`;
       return reply.status(400).send({
         error: `Max duration for a ${format} is ${maxLabel}. Reels are short-form content — maximum 60 seconds.`,
       });

@@ -518,6 +518,151 @@ Respond ONLY with valid JSON:
   return JSON.parse(clean);
 };
 
+export interface RegenerateSectionParams {
+  sectionId: string;
+  sectionLabel: string;
+  sectionType: string;
+  currentContent: string;
+  userInstructions: string;
+  idea: string;
+  platform: string;
+  niche: string;
+  format: string;
+  mood?: string;
+  angle?: string;
+  archetype: string;
+  voiceContext?: string;
+  researchBrief?: any;
+  allSections: Array<{
+    id: string;
+    label: string;
+    type: string;
+    content: string;
+  }>;
+}
+
+/**
+ * Regenerate a single section of a script with full context
+ */
+export const regenerateSection = async ({
+  sectionId,
+  sectionLabel,
+  sectionType,
+  currentContent,
+  userInstructions,
+  idea,
+  platform,
+  niche,
+  format,
+  mood,
+  angle,
+  archetype,
+  voiceContext,
+  researchBrief,
+  allSections,
+}: RegenerateSectionParams) => {
+  // Build context from other sections (before and after the target section)
+  const sectionIndex = allSections.findIndex((s) => s.id === sectionId);
+  const prevSection = sectionIndex > 0 ? allSections[sectionIndex - 1] : null;
+  const nextSection =
+    sectionIndex < allSections.length - 1
+      ? allSections[sectionIndex + 1]
+      : null;
+
+  const contextPrompt = `
+SCRIPT CONTEXT:
+- Idea: "${idea}" | Platform: ${platform} | Niche: ${niche} | Format: ${format}
+- Archetype: ${archetype}
+${mood ? `- Mood: ${mood}` : ""}
+${angle ? `- Angle: ${angle}` : ""}
+${voiceContext ? `- Voice: ${voiceContext}` : ""}
+
+${
+  researchBrief
+    ? `
+RESEARCH INSIGHTS:
+- Trend: ${researchBrief.trendStrength} — ${researchBrief.trendSummary}
+- Why it works: ${researchBrief.whyItWorks}
+- Top viral angles: ${researchBrief.topViralAngles?.join(" | ") || ""}
+- Hook patterns: ${researchBrief.hookPatterns?.join(" | ") || ""}
+- Audience: ${researchBrief.audienceInsights}
+`
+    : ""
+}
+
+SECTION CONTEXT:
+${prevSection ? `- Previous Section [${prevSection.label}]: ${prevSection.content.slice(0, 200)}...` : "- This is the FIRST section (hook)"}
+${nextSection ? `- Next Section [${nextSection.label}]: ${nextSection.content.slice(0, 200)}...` : "- This is the LAST section"}
+
+CURRENT SECTION TO REGENERATE:
+- Label: "${sectionLabel}"
+- Type: ${sectionType}
+- Current content: "${currentContent}"
+
+USER'S REGENERATION INSTRUCTIONS:
+"${userInstructions}"
+`;
+
+  const prompt = `You are ARIA — India's elite scriptwriter. You are regenerating ONE section of a script based on the creator's specific instructions.
+
+${contextPrompt}
+
+YOUR TASK:
+Regenerate the "${sectionLabel}" section following the user's instructions. 
+
+CRITICAL RULES:
+1. Maintain continuity with the previous and next sections
+2. Match the tone, style, and voice described in the context
+3. Follow the user's instructions precisely while keeping the script natural
+4. Keep similar length to the current content (don't drastically expand or shorten)
+5. Write spoken dialogue — the creator reads this word for word
+6. No headers, labels, or meta-commentary in the output
+7. Apply Indian creator context — Hinglish where natural, Indian examples, ₹ for prices
+${sectionType === "hook" ? "8. This is the HOOK — it MUST grab attention in the first 3 seconds. Use a proven hook pattern from research. NO 'Hey guys welcome back'." : ""}
+
+Return ONLY valid JSON:
+{
+  "content": "The regenerated spoken script for this section",
+  "tip": "A delivery tip specific to this regenerated content"
+}`;
+
+  const res = await groq().chat.completions.create({
+    model: OPENAI_MODEL,
+    max_tokens: 1500,
+    temperature: 0.75,
+    messages: [
+      {
+        role: "system",
+        content:
+          "You are ARIA. Return ONLY valid JSON. Write full spoken script — never summarise or truncate.",
+      },
+      { role: "user", content: prompt },
+    ],
+  });
+
+  const text = res.choices[0].message.content;
+  if (!text) throw new Error("Empty response from OpenAI");
+
+  const clean = text
+    .replace(/```json\n?/g, "")
+    .replace(/```\n?/g, "")
+    .trim();
+
+  try {
+    const parsed = JSON.parse(clean);
+    return {
+      content: parsed.content || currentContent,
+      tip: parsed.tip || "",
+    };
+  } catch {
+    // If JSON parsing fails, return the raw text
+    return {
+      content: clean || currentContent,
+      tip: "",
+    };
+  }
+};
+
 /**
  * Save studio session to DB
  */

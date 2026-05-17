@@ -3,7 +3,10 @@ import * as ctrl from "../controllers/studio.controller";
 import { authenticateFirebase } from "../middleware/auth.middleware";
 import { requireCredits } from "../middleware/credits.middleware";
 // At the top, add the import:
-import { streamScript } from "../controllers/studio.controller";
+import {
+  streamScript,
+  regenerateSection,
+} from "../controllers/studio.controller";
 
 export default async function studioRoutes(app: FastifyInstance) {
   const auth = { preHandler: [authenticateFirebase] };
@@ -229,5 +232,51 @@ export default async function studioRoutes(app: FastifyInstance) {
       },
     },
     streamScript as any,
+  );
+
+  // POST /api/v1/studio/script/regenerate-section — Regenerate a single section
+  app.post(
+    "/script/regenerate-section",
+    {
+      preHandler: [authenticateFirebase, requireCredits("script_writing")],
+      schema: {
+        body: {
+          type: "object",
+          required: [
+            "sectionId",
+            "userInstructions",
+            "idea",
+            "sectionLabel",
+            "sectionType",
+            "allSections",
+          ],
+          properties: {
+            sectionId: { type: "string" },
+            sectionLabel: { type: "string" },
+            sectionType: { type: "string" },
+            currentContent: { type: "string" },
+            userInstructions: { type: "string", minLength: 2, maxLength: 500 },
+            idea: { type: "string" },
+            format: { type: "string" },
+            mood: { type: "string" },
+            angle: { type: "string" },
+            researchBrief: { type: "object" },
+            allSections: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  id: { type: "string" },
+                  label: { type: "string" },
+                  type: { type: "string" },
+                  content: { type: "string" },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    regenerateSection as any,
   );
 }
