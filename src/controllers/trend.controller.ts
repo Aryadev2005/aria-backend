@@ -40,7 +40,9 @@ export const getTrends = async (
           where: {
             expires_at: { gt: new Date() },
             niche_tags: { has: niche },
-            platform_tags: { has: platform },
+            ...(platform && platform !== "all"
+              ? { platform_tags: { has: platform } }
+              : {}),
           },
           orderBy: { velocity: "desc" },
           take: limit,

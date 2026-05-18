@@ -257,6 +257,47 @@ async function scrapeGoogleTrends(client: any): Promise<number> {
   return res.inserted + res.updated;
 }
 
+// ── Niche derivation helpers ──────────────────────────────────────────────────
+
+const NICHE_MAP: Record<string, string[]> = {
+  fashion:    ["fashion", "ootd", "style", "outfit", "clothing", "wear", "trend", "aesthetic"],
+  beauty:     ["beauty", "makeup", "skincare", "glow", "cosmetic", "lipstick", "foundation"],
+  fitness:    ["fitness", "workout", "gym", "yoga", "exercise", "health", "training", "muscle"],
+  food:       ["food", "recipe", "cooking", "baking", "meal", "cuisine", "restaurant", "eat"],
+  travel:     ["travel", "trip", "vacation", "destination", "wanderlust", "explore", "adventure"],
+  tech:       ["tech", "technology", "gadget", "iphone", "coding", "programming", "ai", "software"],
+  home:       ["home", "decor", "interior", "room", "diy", "furniture", "design", "house"],
+  finance:    ["finance", "money", "invest", "wealth", "budget", "saving", "crypto"],
+  education:  ["education", "study", "learn", "school", "college", "tips", "knowledge"],
+  motivation: ["motivation", "mindset", "hustle", "success", "inspire", "goals", "quote"],
+  bollywood:  ["bollywood", "hindi", "india", "desi", "indian", "movie", "film", "actor"],
+  gaming:     ["gaming", "game", "esport", "stream", "playstation", "xbox", "nintendo"],
+  comedy:     ["comedy", "funny", "meme", "humor", "laugh", "joke"],
+  lifestyle:  ["lifestyle", "life", "daily", "routine", "vlog", "day", "morning"],
+};
+
+function derivePinterestNiches(
+  hashtags: string[],
+  boardName: string,
+  title: string,
+  description: string,
+): string[] {
+  const text = [...(hashtags || []), boardName || "", title || "", description || ""]
+    .join(" ").toLowerCase();
+
+  const matched = new Set<string>();
+  for (const [niche, keywords] of Object.entries(NICHE_MAP)) {
+    if (keywords.some(kw => text.includes(kw))) matched.add(niche);
+  }
+
+  const result = [...matched];
+  return result.length > 0 ? result.slice(0, 3) : ["lifestyle", "general"];
+}
+
+function deriveTikTokNiches(hashtags: string[], description: string): string[] {
+  return derivePinterestNiches(hashtags, "", "", description || "");
+}
+
 // ── normaliseIntoLiveTrends ───────────────────────────────────────────────────
 // Read from all raw discovery tables and upsert qualifying records into live_trends.
 
@@ -362,7 +403,7 @@ async function normaliseIntoLiveTrends(): Promise<number> {
           title:              v.description || v.sound_name || v.tiktok_id,
           search_volume:      views,
           velocity:           dec.unifiedScore,
-          niche_tags:         ["general"],
+          niche_tags:         deriveTikTokNiches(v.hashtags, v.description || v.sound_name || v.tiktok_id),
           platform_tags:      ["tiktok"],
           badge:              dec.isOverride ? "viral" : null,
           content_format:     "short_form",
@@ -394,10 +435,10 @@ async function normaliseIntoLiveTrends(): Promise<number> {
         if (!dec.shouldStore) continue;
         await upsertTrend({
           source:             "pinterest",
-          title:              pin.title || pin.description || pin.pinterest_id,
+          title:              (pin.title || (pin.description || "").slice(0, 100) || `Pin ${pin.pinterest_id}`).trim(),
           search_volume:      saves,
           velocity:           dec.unifiedScore,
-          niche_tags:         ["lifestyle"],
+          niche_tags:         derivePinterestNiches(pin.hashtags, pin.board_name, pin.title, pin.description),
           platform_tags:      ["pinterest"],
           badge:              dec.isOverride ? "high_intent" : null,
           content_format:     "pin",

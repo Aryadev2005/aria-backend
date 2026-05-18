@@ -448,7 +448,7 @@ model trend_embeddings {
 
   @@index([niche], map: "idx_trend_embeddings_niche")
   @@index([updated_at(sort: Desc)], map: "idx_trend_embeddings_updated")
-  @@index([embedding], map: "idx_trend_embeddings_vector")
+  // idx_trend_embeddings_vector is an HNSW index managed via raw SQL — not here
 }
 
 /// Tier 3 — Cold Knowledge Graph: Nodes representing niches, platforms, formats, archetypes.
