@@ -21,6 +21,7 @@ import { logger } from "../utils/logger";
 import { routerCall, parseRouterJSON } from "./model_router.service";
 import { generateHookVariants, HookEngineResult } from "./hook_engine.service";
 import { getPlatformContract } from "./platform_contracts.service";
+import { makeStructuralDecision, StructuralDecision } from "./narrative_decision.service";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -814,7 +815,7 @@ async function buildSectionBlueprints(
     const config = FORMAT_CONFIGS[format] || FORMAT_CONFIGS.reel;
     const perSection = Math.round(totalWords / config.sections.length);
     let cursor = 0;
-    return config.sections.map((s, i) => {
+    const result = config.sections.map((s, i) => {
       const words = (s.type === "hook" || s.type === "cta")
         ? Math.round(perSection * 0.5)
         : perSection;
@@ -832,6 +833,52 @@ async function buildSectionBlueprints(
       cursor = bp.endMin;
       return bp;
     });
+
+    // ADD re-hook injection for content > 45 seconds
+    if (totalMinutes > 0.75) { // > 45 seconds — inject re-hook slots
+      const contract = getPlatformContract(platform, format);
+      const rehookEveryMins = contract.rehookIntervalSeconds / 60;
+      const totalDuration = cursor;
+
+      // Find where to inject re-hooks (avoid first and last section)
+      const rehookPositions: number[] = [];
+      for (let t = rehookEveryMins; t < totalDuration - 0.3; t += rehookEveryMins) {
+        rehookPositions.push(t);
+      }
+
+      // Insert re-hook blueprint items at the right positions
+      const finalBlueprints: SectionBlueprint[] = [];
+      let bpCursor = 0;
+
+      for (const bp of result) { // 'result' = the sections array built above
+        finalBlueprints.push(bp);
+        bpCursor = bp.endMin;
+
+        // Check if a re-hook should be injected after this section
+        const nextRehook = rehookPositions.find(
+          (pos) => pos > bp.startMin && pos <= bp.endMin + 0.1
+        );
+
+        if (nextRehook && bp.type !== "cta" && bp.type !== "hook") {
+          const rehookWords = Math.round(0.15 * WORDS_PER_MINUTE); // ~9 words
+          finalBlueprints.push({
+            id: `rehook_${Math.round(nextRehook * 60)}`,
+            label: `Re-hook at ${Math.round(nextRehook * 60)}s`,
+            type: "transition",
+            placeholder: "Pattern interrupt — open a new micro-loop",
+            tip: "Use a question, a surprising stat, or 'But wait — there's one more thing...'",
+            targetWords: rehookWords,
+            startMin: parseFloat(bpCursor.toFixed(2)),
+            endMin: parseFloat((bpCursor + rehookWords / WORDS_PER_MINUTE).toFixed(2)),
+          });
+          bpCursor = finalBlueprints[finalBlueprints.length - 1].endMin;
+        }
+      }
+
+      return finalBlueprints;
+    }
+
+    return result;
   }
 
   // ── Long-form: AI plans the chapter structure ─────────────────────────────
@@ -985,11 +1032,27 @@ export async function generateScript(
     logger.warn({ err: err.message }, "[Studio] Hook engine failed — continuing without variants");
   }
 
-  // ── Resolve duration ──────────────────────────────────────────────────────
+  // ── Step 0.5 (NEW): Structural decision ──────────────────────────────────
+  onEvent({ type: "research_update", message: "Selecting optimal narrative structure…" });
+
+  // Resolve duration first (needed for structural decision)
   const totalMinutes   = parseDurationToMinutes(duration, format);
   const durationLabel  = formatDurationLabel(totalMinutes);
   const totalWords     = Math.round(totalMinutes * WORDS_PER_MINUTE);
   const isShortForm    = totalMinutes <= 3;
+
+  let structuralDecision: StructuralDecision | null = null;
+  try {
+    structuralDecision = await makeStructuralDecision({
+      idea, platform, niche, format, brief, totalMinutes,
+    });
+    onEvent({
+      type: "research_update",
+      message: `Framework: ${structuralDecision.frameworkLabel} — ${structuralDecision.whyThisFramework}`,
+    });
+  } catch (err: any) {
+    logger.warn({ err: err.message }, "[Studio] Structural decision failed — continuing");
+  }
 
   // Shared context injected into every section call
   const sharedCtx = `
@@ -1014,7 +1077,7 @@ RESEARCH INSIGHTS:
 PLATFORM CONTRACT (${platform.toUpperCase()}):
 ${contract.scriptInstructions}
 - Hook window: ${contract.hookWindowSeconds}s
-- Re-hook every: ${contract.rehookIntervalSeconds}s`.trim();
+- Re-hook every: ${contract.rehookIntervalSeconds}s${structuralDecision ? `\n\nNARRATIVE FRAMEWORK: ${structuralDecision.frameworkLabel}\n${structuralDecision.narrativeInstructions}\nOPEN LOOPS TO MAINTAIN: ${structuralDecision.openLoops.join(" | ")}\nPROMISES TO DELIVER: ${structuralDecision.payoffPromises.join(" | ")}` : ""}`.trim();
 
   // ── Step 1: Build section blueprints ─────────────────────────────────────
   onEvent({ type: "research_update", message: "Planning script structure…" });

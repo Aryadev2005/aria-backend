@@ -214,6 +214,21 @@ model creator_notes {
   @@index([user_id, is_pinned], map: "idx_creator_notes_pinned", where: raw("(is_pinned = true)"))
 }
 
+model hook_learnings {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id   String   @db.Uuid
+  niche     String
+  platform  String
+  archetype String
+  was_auto  Boolean  @default(false)
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  users     users    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id, niche, platform], map: "idx_hook_learnings_user_niche_platform")
+  @@index([archetype], map: "idx_hook_learnings_archetype")
+  @@index([created_at(sort: Desc)], map: "idx_hook_learnings_created")
+}
+
 model launch_packages {
   id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   user_id      String?   @db.Uuid
@@ -401,6 +416,7 @@ model users {
   credit_topups               credit_topups[]
   credit_transactions         credit_transactions[]
   credit_wallet               credit_wallets?
+  hook_learnings              hook_learnings[]
   launch_packages             launch_packages[]
   rate_cards                  rate_cards?
   rival_spy_sessions          rival_spy_sessions[]

@@ -2,6 +2,8 @@ import { FastifyInstance } from "fastify";
 import * as ctrl from "../controllers/studio.controller";
 import { authenticateFirebase } from "../middleware/auth.middleware";
 import { requireCredits } from "../middleware/credits.middleware";
+import { streamYouTubeScript } from "../controllers/youtube_studio.controller";
+import { prisma } from "../config/database";
 // At the top, add the import:
 import {
   streamScript,
@@ -278,5 +280,58 @@ export default async function studioRoutes(app: FastifyInstance) {
       },
     },
     regenerateSection as any,
+  );
+
+  // POST /api/v1/studio/youtube/stream — Long-form YouTube script pipeline
+  app.post(
+    "/youtube/stream",
+    {
+      preHandler: [authenticateFirebase, requireCredits("script_writing")],
+      schema: {
+        body: {
+          type: "object",
+          required: ["idea"],
+          properties: {
+            idea:     { type: "string", minLength: 2, maxLength: 400 },
+            niche:    { type: "string" },
+            duration: { type: "string", maxLength: 20 },
+            mood:     { type: "string" },
+            angle:    { type: "string" },
+            userQuery:{ type: "string", maxLength: 500 },
+          },
+        },
+      },
+    },
+    streamYouTubeScript as any,
+  );
+
+  // POST /api/v1/studio/hook/log — Log creator's hook archetype choice
+  app.post(
+    "/hook/log",
+    { preHandler: [authenticateFirebase] },
+    async (req: any, reply: any) => {
+      const user = req.user as any;
+      const { archetype, niche, platform, wasAuto = false } = req.body as any;
+
+      if (!archetype || !niche || !platform) {
+        return reply.status(400).send({ error: "archetype, niche, platform required" });
+      }
+
+      try {
+        await (prisma as any).hook_learnings.create({
+          data: {
+            user_id: user.id,
+            niche,
+            platform,
+            archetype,
+            was_auto: wasAuto,
+          },
+        });
+        return reply.send({ success: true });
+      } catch (err) {
+        console.warn({ err }, "Hook learning log failed");
+        return reply.send({ success: false });
+      }
+    },
   );
 }
