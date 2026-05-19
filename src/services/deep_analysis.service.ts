@@ -18,6 +18,7 @@ import { z } from "zod";
 import OpenAI from "openai";
 import { ApifyClient } from "apify-client";
 import { logger } from "../utils/logger";
+import { routerCall, parseRouterJSON } from "./model_router.service";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -990,18 +991,15 @@ Generate the meta elements for this script. Return ONLY valid JSON:
 
   let meta: any = {};
   try {
-    const metaRes = await oai().chat.completions.create({
-      model: "gpt-4o-mini",
-      max_tokens: 600,
+    const metaResult = await routerCall({
+      tier: "standard",
+      system: "You are ARIA — India's elite scriptwriter. Return ONLY valid JSON, no markdown fences.",
+      user: metaPrompt,
+      maxTokens: 700,
       temperature: 0.7,
-      messages: [
-        { role: "system", content: "You are ARIA. Return ONLY valid JSON, no markdown." },
-        { role: "user", content: metaPrompt },
-      ],
+      jsonMode: true,
     });
-    const raw = (metaRes.choices[0].message.content ?? "")
-      .replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
-    meta = JSON.parse(raw);
+    meta = parseRouterJSON(metaResult);
   } catch {
     meta = { hookLine: "", hookTip: "", caption: "", hashtags: [], trendInsight: brief.trendSummary };
   }
@@ -1046,18 +1044,20 @@ Return ONLY valid JSON:
     const sectionTokens = Math.min(Math.round(bp.targetWords * 1.4) + 200, 4000);
 
     try {
-      const sRes = await oai().chat.completions.create({
-        model: "gpt-4o-mini",
-        max_tokens: sectionTokens,
-        temperature: 0.72,
-        messages: [
-          { role: "system", content: "You are ARIA. Return ONLY valid JSON. Write the full spoken script — never summarise or truncate the content field." },
-          { role: "user", content: sectionPrompt },
-        ],
+      const sectionTier = (isFirst || isLast) ? "creative" : "standard";
+      const sResult = await routerCall({
+        tier: sectionTier,
+        system: "You are ARIA, India's best script writer. Return ONLY valid JSON. Write the full spoken script — never summarise or truncate the content field.",
+        user: sectionPrompt,
+        maxTokens: Math.max(bp.targetWords * 6, 800),
+        temperature: isFirst ? 0.85 : 0.75,
+        jsonMode: true,
       });
 
-      const raw = (sRes.choices[0].message.content ?? "")
-        .replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+      const raw = sResult.text
+        .replace(/```json\n?/g, "")
+        .replace(/```\n?/g, "")
+        .trim();
 
       let parsed: any = {};
       try {

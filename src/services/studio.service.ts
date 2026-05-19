@@ -3,6 +3,7 @@ import { prisma } from "../config/database";
 import { logger } from "../utils/logger";
 import { getSongsForBGM } from "./songs/song.rag.service";
 import { getVoicePortrait, VoicePortrait } from "./voice.service";
+import { routerCall } from "./model_router.service";
 
 // ── Fetch studio learnings for a user from aria_memory ────────────────────────
 const getStudioLearnings = async (userId: string): Promise<string> => {
@@ -626,22 +627,17 @@ Return ONLY valid JSON:
   "tip": "A delivery tip specific to this regenerated content"
 }`;
 
-  const res = await groq().chat.completions.create({
-    model: OPENAI_MODEL,
-    max_tokens: 1500,
+  const sResult = await routerCall({
+    tier: sectionType === "hook" ? "creative" : "standard",
+    system: "You are ARIA. Return ONLY valid JSON. Write full spoken script — never summarise or truncate.",
+    user: prompt,
+    maxTokens: 1500,
     temperature: 0.75,
-    messages: [
-      {
-        role: "system",
-        content:
-          "You are ARIA. Return ONLY valid JSON. Write full spoken script — never summarise or truncate.",
-      },
-      { role: "user", content: prompt },
-    ],
+    jsonMode: true,
   });
 
-  const text = res.choices[0].message.content;
-  if (!text) throw new Error("Empty response from OpenAI");
+  const text = sResult.text;
+  if (!text) throw new Error("Empty response from model");
 
   const clean = text
     .replace(/```json\n?/g, "")

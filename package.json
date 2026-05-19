@@ -24,7 +24,7 @@
   "license": "ISC",
   "type": "module",
   "dependencies": {
-    "aira-scrapers": "file:../aira-scrapers",
+    "@anthropic-ai/sdk": "^0.96.0",
     "@fastify/compress": "^8.3.1",
     "@fastify/cors": "^11.2.0",
     "@fastify/helmet": "^13.0.2",
@@ -40,6 +40,7 @@
     "@prisma/adapter-pg": "^7.8.0",
     "@prisma/client": "^7.8.0",
     "@types/pg": "^8.20.0",
+    "aira-scrapers": "file:../aira-scrapers",
     "apify-client": "^2.23.1",
     "axios": "^1.15.2",
     "bullmq": "^5.76.2",
