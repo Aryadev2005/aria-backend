@@ -19,6 +19,8 @@ import OpenAI from "openai";
 import { ApifyClient } from "apify-client";
 import { logger } from "../utils/logger";
 import { routerCall, parseRouterJSON } from "./model_router.service";
+import { generateHookVariants, HookEngineResult } from "./hook_engine.service";
+import { getPlatformContract } from "./platform_contracts.service";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -99,6 +101,13 @@ export type SSEEvent =
       totalDuration: string;
       trendInsight: string;
     }
+  | {
+      type: "hook_variants";
+      variants: import("./hook_engine.service").HookVariant[];
+      recommendedArchetype: import("./hook_engine.service").HookArchetype;
+      recommendationReason: string;
+    }
+  | { type: "hook_selected"; archetype: import("./hook_engine.service").HookArchetype }
   | { type: "done"; result: ScriptResult }
   | { type: "error"; message: string };
 
@@ -946,6 +955,36 @@ export async function generateScript(
 
   onEvent({ type: "phase", phase: "scripting", label: "Generating Script" });
 
+  // ── Step 0 (NEW): Generate hook variants ─────────────────────────────────
+  onEvent({ type: "research_update", message: "Generating hook variants…" });
+
+  const contract = getPlatformContract(platform, format);
+
+  let hookEngineResult: HookEngineResult | null = null;
+  try {
+    hookEngineResult = await generateHookVariants({
+      idea,
+      platform,
+      niche,
+      format,
+      brief,
+      preferredHookStyle: input.voiceContext
+        ? (/preferredHookStyle[:\s]+([^\n,]+)/i.exec(input.voiceContext)?.[1]?.trim())
+        : undefined,
+      voiceContext,
+      archetype,
+    });
+
+    onEvent({
+      type: "hook_variants",
+      variants: hookEngineResult.variants,
+      recommendedArchetype: hookEngineResult.recommendedArchetype,
+      recommendationReason: hookEngineResult.recommendationReason,
+    });
+  } catch (err: any) {
+    logger.warn({ err: err.message }, "[Studio] Hook engine failed — continuing without variants");
+  }
+
   // ── Resolve duration ──────────────────────────────────────────────────────
   const totalMinutes   = parseDurationToMinutes(duration, format);
   const durationLabel  = formatDurationLabel(totalMinutes);
@@ -970,7 +1009,12 @@ RESEARCH INSIGHTS:
 - Audience: ${brief.audienceInsights}
 - Proven hooks: ${brief.hookPatterns.join(" | ")}
 - Competitor gap: ${brief.competitorGaps}
-- Recommendation: ${brief.contentRecommendation}`.trim();
+- Recommendation: ${brief.contentRecommendation}
+
+PLATFORM CONTRACT (${platform.toUpperCase()}):
+${contract.scriptInstructions}
+- Hook window: ${contract.hookWindowSeconds}s
+- Re-hook every: ${contract.rehookIntervalSeconds}s`.trim();
 
   // ── Step 1: Build section blueprints ─────────────────────────────────────
   onEvent({ type: "research_update", message: "Planning script structure…" });
