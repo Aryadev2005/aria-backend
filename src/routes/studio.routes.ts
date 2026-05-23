@@ -190,7 +190,7 @@ export default async function studioRoutes(app: FastifyInstance) {
   app.post(
     "/deep-analysis/stream",
     {
-      preHandler: [authenticateFirebase],
+      preHandler: [authenticateFirebase, requireCredits("script_writing")],
       schema: {
         body: {
           type: "object",
@@ -333,5 +333,25 @@ export default async function studioRoutes(app: FastifyInstance) {
         return reply.send({ success: false });
       }
     },
+  );
+
+  // POST /api/v1/studio/shoot-plan — Director's Cut shot-by-shot guide
+  app.post(
+    "/shoot-plan",
+    {
+      preHandler: [authenticateFirebase, requireCredits("shoot_plan")],
+      schema: {
+        body: {
+          type: "object",
+          required: ["sessionId"],
+          properties: {
+            sessionId:                 { type: "string" },
+            soloMode:                  { type: "boolean" },
+            directorArchetypeOverride: { type: "string" },
+          },
+        },
+      },
+    },
+    ctrl.generateDirectorsCut as any,
   );
 }

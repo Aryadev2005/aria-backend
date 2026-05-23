@@ -46,6 +46,9 @@ export interface ScriptSection {
   tip: string;
   placeholder: string;
   durationEstimate?: string;
+  algoSignal?: string;                    // primary signal this section serves
+  shareableMoment?: string | null;        // line engineered for DM share
+  satisfactionSignal?: string | null;     // what earns viewer satisfaction here
 }
 
 export interface ScriptResult {
@@ -110,7 +113,10 @@ export type SSEEvent =
     }
   | { type: "hook_selected"; archetype: import("./hook_engine.service").HookArchetype }
   | { type: "done"; result: ScriptResult }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  | { type: "shoot_plan"; plan: import("./studioV2.types").ShootPlan }
+  | { type: "signal_map"; map: import("./studioV2.types").SignalMap }
+  | { type: "director_archetype"; archetype: import("./studioV2.types").DirectorArchetype; label: string };
 
 // ── Format configs ────────────────────────────────────────────────────────────
 
@@ -131,26 +137,44 @@ const FORMAT_CONFIGS: Record<
     durationRange: "15–60s",
     sections: [
       {
-        label: "Hook",
-        type: "hook",
-        placeholder: "First 2 seconds — must stop the scroll",
-        tip: "No intro. Open mid-action or with a bold claim.",
+        label: "Visual Hook",
+        type: "hook" as const,
+        placeholder: "First 1.5s — MUTE VIEWER STOP-SCROLL. No words needed. What do they SEE?",
+        tip: "50% watch on mute. Text overlay mandatory. Your face, low angle, filling the frame. This is the audition — non-followers decide your fate here.",
       },
       {
-        label: "Value Drop",
-        type: "body",
-        placeholder: "Deliver the core value fast",
-        tip: "One idea, maximum clarity. Cut every filler word.",
+        label: "Spoken Hook",
+        type: "hook" as const,
+        placeholder: "1.5s–3s — The line that confirms they should keep watching",
+        tip: "Contrarian claim OR curiosity gap OR identity hook. Max 12 words. No 'Hey guys'. Open mid-sentence.",
+      },
+      {
+        label: "Tension Build",
+        type: "body" as const,
+        placeholder: "3s–8s — Make them feel the problem or curiosity. Don't solve yet.",
+        tip: "Pattern interrupt here — change angle or cut to B-roll. The 8s mark is where 60% of drop-offs happen. Hit them with a visual change.",
+      },
+      {
+        label: "Value Core",
+        type: "body" as const,
+        placeholder: "8s–20s — Deliver the actual value. Punchy. One idea.",
+        tip: "This is what they came for. Short sentences. Real specifics. No filler. Indian examples > generic ones.",
+      },
+      {
+        label: "Share Trigger",
+        type: "body" as const,
+        placeholder: "20s–26s — The mic-drop line. Engineered for someone to DM this to a friend.",
+        tip: "This is the most important line in the reel. DM shares are 3-5x more powerful than likes for reach. Ask: would someone forward THIS specific line? Make it a stat, a truth, or a contrarian statement.",
       },
       {
         label: "CTA",
-        type: "cta",
-        placeholder: "One action: follow, save, or comment",
-        tip: "'Comment YES if you want part 2' > 'Let me know.'",
+        type: "cta" as const,
+        placeholder: "26s–30s — ONE action. Match the CTA to the growth stage.",
+        tip: "Pick ONE: 'Save this for when you need it' (saves) OR 'Send this to [specific person]' (DM shares) OR 'Comment [word] if this hit' (comments). Never ask for all three.",
       },
     ],
     scriptInstructions:
-      "Short-form vertical video. Every word must earn its place. Write like texting a friend with 3 seconds of patience.",
+      "Instagram Reel. 6-beat structure. Algorithm 2026: watch past 3s → DM shares → completion rate. Hook lands in 1.5s visually and 3s verbally. Share trigger at 20-26s must earn a DM forward. Final beat loops back visually to opening. Hinglish natural where it fits. Every word earns its place. Max 30s target.",
   },
   post: {
     durationRange: "read time 30–90s",
@@ -513,10 +537,42 @@ Use the task tool ONCE to delegate to the researcher subagent.
 Return the researcher's JSON output verbatim — no extra text.`,
   });
 
+  // ── Seasonal context injection ────────────────────────────────────
+  const today = new Date();
+  const month = today.getMonth() + 1; // 1-indexed
+  const day = today.getDate();
+
+  const INDIAN_CALENDAR: Array<{ name: string; month: number; dayStart: number; dayEnd: number }> = [
+    { name: "IPL Season",        month: 3,  dayStart: 20, dayEnd: 31 },
+    { name: "IPL Season",        month: 4,  dayStart: 1,  dayEnd: 30 },
+    { name: "IPL Season",        month: 5,  dayStart: 1,  dayEnd: 26 },
+    { name: "Exam Season",       month: 3,  dayStart: 1,  dayEnd: 31 },
+    { name: "Exam Season",       month: 4,  dayStart: 1,  dayEnd: 30 },
+    { name: "Diwali Season",     month: 10, dayStart: 15, dayEnd: 31 },
+    { name: "Diwali Season",     month: 11, dayStart: 1,  dayEnd: 10 },
+    { name: "Navratri Season",   month: 10, dayStart: 1,  dayEnd: 15 },
+    { name: "New Year Content",  month: 12, dayStart: 25, dayEnd: 31 },
+    { name: "New Year Content",  month: 1,  dayStart: 1,  dayEnd: 10 },
+    { name: "Holi Season",       month: 3,  dayStart: 1,  dayEnd: 25 },
+    { name: "Eid Season",        month: 3,  dayStart: 20, dayEnd: 31 }, // varies
+    { name: "Budget Season",     month: 2,  dayStart: 1,  dayEnd: 5  },
+    { name: "Independence Day",  month: 8,  dayStart: 10, dayEnd: 15 },
+    { name: "Wedding Season",    month: 11, dayStart: 15, dayEnd: 30 },
+    { name: "Wedding Season",    month: 12, dayStart: 1,  dayEnd: 20 },
+  ];
+
+  const activeSeasonalEvents = INDIAN_CALENDAR.filter(
+    (e) => e.month === month && day >= e.dayStart && day <= e.dayEnd,
+  ).map((e) => e.name);
+
+  const seasonalCtx = activeSeasonalEvents.length > 0
+    ? `\nACTIVE SEASONAL CONTEXT: ${activeSeasonalEvents.join(", ")}. Prioritise content angles that ride this cultural moment for Indian audiences.`
+    : "";
+
   const researchTask = `Research this for TrendAI:
 TOPIC: "${idea}"
 PLATFORM: ${platform}
-NICHE: ${niche}
+NICHE: ${niche}${seasonalCtx}
 FORMAT NEEDED: ${format}
 ${angle ? `DESIRED ANGLE: ${angle}` : ""}
 ${userQuery ? `CREATOR'S EXACT REQUEST: "${userQuery}"` : ""}
@@ -1132,6 +1188,20 @@ CURRENT SECTION:
 ${isFirst ? "- This is the HOOK. Grab attention in the first 3 seconds. Use one of the proven hook patterns from research. NO 'Hey guys welcome back'." : ""}
 ${isLast ? "- This is the OUTRO. End with ONE specific CTA. Warm, not salesy." : ""}
 
+ALGORITHM TARGET FOR THIS SECTION: ${
+  bp.type === "hook" && bp.label.includes("Visual")
+    ? "WATCH_PAST_3S signal — this section must pass the 3s audition. 50% of viewers are muted. Text overlay suggestion required."
+    : bp.type === "hook"
+    ? "WATCH_PAST_3S signal — verbal hook must confirm the visual promise in 1.5s."
+    : bp.label.includes("Share Trigger")
+    ? "DM_SHARE_TRIGGER signal — generate ONE mic-drop line. Ask yourself: would someone stop scrolling and DM this to a friend? If not, rewrite."
+    : bp.type === "transition"
+    ? "PATTERN_INTERRUPT signal — this is a re-hook. Change energy, angle, or topic abruptly."
+    : bp.type === "cta"
+    ? "FOLLOW_TRIGGER or COMMENT_BAIT or SAVE_TRIGGER — pick one signal, make the CTA serve it precisely."
+    : "COMPLETION_BOOST signal — earn the next second of watch time with every sentence."
+}
+
 RULES:
 1. Write FULL spoken dialogue — the creator reads this word for word
 2. Hit the word target: ~${bp.targetWords} words
@@ -1144,7 +1214,10 @@ Return ONLY valid JSON:
 {
   "content": "Full spoken script for this section. Must be ~${bp.targetWords} words.",
   "tip": "${bp.tip}",
-  "durationEstimate": "${bp.startMin.toFixed(1)}–${bp.endMin.toFixed(1)} min"
+  "durationEstimate": "${bp.startMin.toFixed(1)}–${bp.endMin.toFixed(1)} min",
+  "algoSignal": "primary algo signal this section serves (WATCH_PAST_3S|COMPLETION_BOOST|DM_SHARE_TRIGGER|SAVE_TRIGGER|REWATCH_LOOP|COMMENT_BAIT|FOLLOW_TRIGGER|PATTERN_INTERRUPT)",
+  "shareableMoment": "For body sections: the single most shareable line — null if no clear shareable moment",
+  "satisfactionSignal": "What in this section earns viewer satisfaction — null for transition/hook"
 }`;
 
     // Token budget: 1.4 tokens/word + 200 overhead for JSON structure, capped at 4000
@@ -1182,6 +1255,9 @@ Return ONLY valid JSON:
         tip: parsed.tip || bp.tip,
         placeholder: bp.placeholder,
         durationEstimate: parsed.durationEstimate || `${bp.startMin.toFixed(1)}–${bp.endMin.toFixed(1)} min`,
+        algoSignal: parsed.algoSignal || null,
+        shareableMoment: parsed.shareableMoment || null,
+        satisfactionSignal: parsed.satisfactionSignal || null,
       };
 
       generatedSections.push(section);

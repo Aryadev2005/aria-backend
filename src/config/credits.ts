@@ -45,7 +45,8 @@ export type ActionKey =
   | "voice_portrait"
   | "video_analysis"
   | "competitor_gap"
-  | "rival_spy";
+  | "rival_spy"
+  | "shoot_plan";
 
 export interface ActionConfig {
   key: ActionKey;
@@ -416,6 +417,18 @@ export const DEFAULT_ACTION_CONFIGS: Record<ActionKey, ActionConfig> = {
     useHeavy: true,
     maxPerDay: 200,
     freeTierAllowed: true,
+    starterTierAllowed: true,
+    proTierAllowed: true,
+    maxTierAllowed: true,
+  },
+  shoot_plan: {
+    key: "shoot_plan",
+    displayName: "Director's Shoot Plan",
+    featureCharge: 3,
+    modelMini: "gpt-4o-mini",
+    modelHeavy: "claude-sonnet-4-6",
+    useHeavy: false,
+    freeTierAllowed: false,
     starterTierAllowed: true,
     proTierAllowed: true,
     maxTierAllowed: true,

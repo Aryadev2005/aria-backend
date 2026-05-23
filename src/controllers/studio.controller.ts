@@ -15,6 +15,9 @@ import os from "os";
 import { User } from "../types";
 import { getVoicePortrait } from "../services/voice.service";
 import { runTwoPassStudio } from "../services/deep_analysis.service";
+import { generateShootPlan, resolveDirectorArchetype } from "../services/shootPlan.service";
+import { analyzeAlgoSignals } from "../services/algoSignalAnalyzer.service";
+import { DirectorArchetype } from "../services/studioV2.types";
 
 /**
  * Get script skeleton/structure based on idea and platform
@@ -663,5 +666,88 @@ export const streamScript = async (
   } finally {
     clearInterval(keepAlive);
     reply.raw.end();
+  }
+};
+
+/**
+ * POST /api/v1/studio/shoot-plan
+ * Generates a shot-by-shot Director's Cut for a completed script session.
+ * Requires the script session to exist in studio_scripts (sessionId param).
+ */
+export const generateDirectorsCut = async (
+  req: FastifyRequest<{ Body: any }>,
+  reply: FastifyReply,
+) => {
+  const user = req.user as User;
+  const { sessionId, soloMode = true, directorArchetypeOverride } = req.body as any;
+  const modelToUse = req.creditCheck?.modelToUse ?? "gpt-4o-mini";
+
+  if (!sessionId) return errors.validation(reply, "sessionId is required");
+
+  try {
+    // Load the session
+    const session = await (prisma as any).studio_scripts.findUnique({
+      where: { id: sessionId },
+      select: {
+        id: true, idea: true, platform: true, niche: true,
+        generated_script: true, user_id: true,
+      },
+    });
+
+    if (!session) return errors.notFound(reply, "Studio session");
+    if (session.user_id !== user.id) return errors.unauthorized(reply, "Not your session");
+
+    const generatedScript = session.generated_script as any;
+    if (!generatedScript?.sections?.length) {
+      return errors.validation(reply, "Session has no script sections. Generate a script first.");
+    }
+
+    // Load voice portrait for context
+    const voicePortrait = await getVoicePortrait(user.id);
+    const voiceContext = voicePortrait
+      ? `Tone: ${voicePortrait.toneSignature}, Energy: ${voicePortrait.energyLevel}, Language: ${voicePortrait.preferredLanguage}`
+      : undefined;
+
+    // Detect format from the script result
+    const format = generatedScript.format ?? "reel";
+
+    // Generate shoot plan
+    const shootPlan = await generateShootPlan({
+      scriptResult:     generatedScript,
+      brief:            generatedScript.researchBrief ?? {},
+      platform:         session.platform ?? user.primary_platform ?? "instagram",
+      niche:            session.niche ?? user.niches?.[0] ?? "general",
+      format,
+      creatorArchetype: directorArchetypeOverride ?? user.archetype ?? "EDUCATOR",
+      voiceContext,
+      soloMode,
+    });
+
+    // Analyze signals
+    const signalMap = analyzeAlgoSignals(
+      generatedScript.sections ?? [],
+      shootPlan,
+      session.platform ?? "instagram",
+    );
+
+    // Persist shoot plan back to the session
+    await (prisma as any).studio_scripts.update({
+      where: { id: sessionId },
+      data: { shot_list: { shootPlan, signalMap } as any },
+    });
+
+    // Debit credits
+    await debitCredits(user.id, "shoot_plan", modelToUse, 1200, 800).catch(
+      (err) => logger.warn({ err }, "Shoot plan debit failed"),
+    );
+
+    return success(reply, {
+      shootPlan,
+      signalMap,
+      creditsUsed: req.creditCheck?.featureCharge ?? 0,
+    });
+  } catch (err: any) {
+    logger.error({ err: err.message, userId: user.id }, "generateDirectorsCut failed");
+    return errors.serviceDown(reply, "Director's Cut");
   }
 };

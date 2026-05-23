@@ -64,6 +64,9 @@ export interface ChapterResult {
   productionNotes: ProductionNote[];
   tip: string;
   loopsClosed: string[];
+  shareableMoment: string | null;    // The specific line worth sharing via DM or screenshot
+  shareableMomentType: "stat" | "opinion" | "insight" | "story" | null;
+  satisfactionSignal: string;         // What in this chapter earns viewer satisfaction
 }
 
 export interface ProductionNote {
@@ -126,6 +129,9 @@ ARCHITECTURE RULES:
 6. Outro/CTA: 60–90 seconds. Close all open loops. ONE specific CTA.
 7. Total chapter count: 5–8 for 10–15min, 8–12 for 20–30min, 12+ for 45–60min.
 8. Title options must be search-optimised for Indian YouTube audience.
+9. Every body chapter must have a SATISFACTION PEAK — one specific moment where the viewer feels their time was well spent. This is the shareable moment. Mark it with 'satisfactionPeak': true in the chapter metadata.
+10. The first chapter after the intro MUST open with a pattern interrupt — a change of energy, angle, or pace from the intro.
+11. YouTube 2026 viewer satisfaction now outranks raw watch time. Design for repeat views and shares, not just watch minutes.
 
 Return ONLY valid JSON (NO markdown):
 {
@@ -199,6 +205,12 @@ ${voiceContext ? `Voice profile: ${voiceContext}` : ""}
 
 CURIOSITY LOOPS TO OPEN (must open ALL of these in first 90s):
 ${loops.map((l, i) => `${i + 1}. "${l.question}"`).join("\n")}
+
+SATISFACTION ENGINEERING (YouTube 2026 algorithm):
+The first 30 seconds NOW lock in the algorithm's satisfaction prediction for the entire video.
+The opening MUST deliver one mini-payoff in the first 30 seconds — a surprising fact, a specific number, or a bold claim that delivers immediate value BEFORE the full promise.
+This is NOT a tease. It's a genuine payoff that makes the viewer feel smart for clicking.
+The full promise can still be teased — but the viewer must receive something valuable by second 30.
 
 RESEARCH CONTEXT:
 - Trend: ${brief.trendSummary}
@@ -308,7 +320,10 @@ Return ONLY valid JSON:
     {"timestamp": "1:00–1:30", "type": "onscreen_text", "instruction": "Text overlay: [specific text]"}
   ],
   "tip": "Key delivery tip for this chapter",
-  "loopsClosed": ${JSON.stringify(chapter.loopsToClose)}
+  "loopsClosed": ${JSON.stringify(chapter.loopsToClose)},
+  "shareableMoment": "The single most shareable line from this chapter — a stat, opinion, or insight someone would screenshot",
+  "shareableMomentType": "stat|opinion|insight|story",
+  "satisfactionSignal": "What specific moment in this chapter earns viewer satisfaction — the payoff"
 }`;
 
   const result = await routerCall({
@@ -328,6 +343,9 @@ Return ONLY valid JSON:
     productionNotes: parsed.productionNotes || [],
     tip: parsed.tip || chapter.tip,
     loopsClosed: parsed.loopsClosed || [],
+    shareableMoment: parsed.shareableMoment || null,
+    shareableMomentType: parsed.shareableMomentType || null,
+    satisfactionSignal: parsed.satisfactionSignal || "",
   };
 }
 
@@ -410,6 +428,7 @@ export async function runYouTubeLongFormPipeline(
       const fallback: ChapterResult = {
         id: chapter.id, label: chapter.label, script: "",
         productionNotes: [], tip: chapter.tip, loopsClosed: [],
+        shareableMoment: null, shareableMomentType: null, satisfactionSignal: "",
       };
       generatedChapters.push(fallback);
       onEvent({ type: "chapter", chapter: fallback, index: i, total: totalChapters });
