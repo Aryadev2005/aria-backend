@@ -4,7 +4,7 @@ import { FastifyRequest, FastifyReply } from 'fastify';
 import { success, errors } from '../utils/response';
 import { logger } from '../utils/logger';
 import { User } from '../types';
-import { debitCredits } from '../services/credits.service';
+import { debitCredits, grantCredits } from '../services/credits.service';
 import { runRivalSpy, generateRivalScript } from '../services/rival.service';
 import { prisma } from '../config/database';
 
@@ -36,6 +36,27 @@ export const streamRivalSpy = async (req: FastifyRequest, reply: FastifyReply) =
     try { reply.raw.write(': ping\n\n'); } catch { clearInterval(keepAlive); }
   }, 15_000);
 
+  // Stop processing immediately if the client disconnects mid-stream
+  let clientClosed = false;
+  req.raw.on('close', () => {
+    clientClosed = true;
+    clearInterval(keepAlive);
+  });
+
+  const modelToUse = req.creditCheck?.modelToUse ?? 'gpt-4o-mini';
+  const featureCharge = req.creditCheck?.featureCharge ?? 0;
+
+  // Pre-reserve the feature charge before any AI work.
+  // If debit fails the user genuinely has no credits — abort early.
+  try {
+    await debitCredits(user.id, 'rival_spy', modelToUse, 0, 0);
+  } catch (preDebitErr: any) {
+    sendSSE({ type: 'error', message: 'Insufficient credits to run Rival Spy.' });
+    clearInterval(keepAlive);
+    reply.raw.end();
+    return;
+  }
+
   try {
     const niche = (user as any).niches?.[0] || 'general';
 
@@ -45,7 +66,7 @@ export const streamRivalSpy = async (req: FastifyRequest, reply: FastifyReply) =
       niche,
       user.id,
       (progress) => {
-        sendSSE({ type: 'progress', ...progress });
+        if (!clientClosed) sendSSE({ type: 'progress', ...progress });
       },
     );
 
@@ -64,15 +85,16 @@ export const streamRivalSpy = async (req: FastifyRequest, reply: FastifyReply) =
 
     sendSSE({ type: 'report', data: report });
 
-    // Debit after success (non-fatal)
-    const modelToUse = req.creditCheck?.modelToUse ?? 'gpt-4o-mini';
-    await debitCredits(user.id, 'rival_spy', modelToUse, 3500, 1500).catch(
-      (err: any) => logger.warn({ err }, 'rival: debit failed — non-fatal'),
+    // Debit AI token usage on top of the already-reserved feature charge (non-fatal)
+    await debitCredits(user.id, 'rival_spy', modelToUse, 3500, 1500, 0).catch(
+      (err: any) => logger.warn({ err }, 'rival: AI token debit failed — non-fatal'),
     );
 
     sendSSE({ type: 'done' });
   } catch (err: any) {
     logger.error({ err: err.message, userId: user.id }, 'streamRivalSpy failed');
+    // Refund the pre-reserved feature charge since the operation failed
+    await grantCredits(user.id, featureCharge, 'Rival Spy failed — refund').catch(() => {});
     sendSSE({ type: 'error', message: err.message || 'Rival Spy failed. Please try again.' });
   } finally {
     clearInterval(keepAlive);
@@ -108,6 +130,25 @@ export const streamRivalScript = async (req: FastifyRequest, reply: FastifyReply
     try { reply.raw.write(': ping\n\n'); } catch { clearInterval(keepAlive); }
   }, 15_000);
 
+  let clientClosed = false;
+  req.raw.on('close', () => {
+    clientClosed = true;
+    clearInterval(keepAlive);
+  });
+
+  const modelToUse = (req as any).creditCheck?.modelToUse ?? 'gpt-4o-mini';
+  const featureCharge = (req as any).creditCheck?.featureCharge ?? 0;
+
+  // Pre-reserve feature charge before AI work
+  try {
+    await debitCredits(user.id, 'rival_script', modelToUse, 0, 0);
+  } catch (preDebitErr: any) {
+    sendSSE({ type: 'error', message: 'Insufficient credits to generate script.' });
+    clearInterval(keepAlive);
+    reply.raw.end();
+    return;
+  }
+
   try {
     const userNiche = niche || (user as any).niches?.[0] || 'general';
     const archetype = (user as any).archetype || 'EDUCATOR';
@@ -118,19 +159,20 @@ export const streamRivalScript = async (req: FastifyRequest, reply: FastifyReply
       userNiche,
       archetype,
       cardIndex,
-      (progress) => sendSSE({ type: 'progress', ...progress }),
+      (progress) => { if (!clientClosed) sendSSE({ type: 'progress', ...progress }); },
     );
 
     sendSSE({ type: 'script_ready', data: result });
 
-    const modelToUse = (req as any).creditCheck?.modelToUse ?? 'gpt-4o-mini';
-    await debitCredits(user.id, 'rival_script', modelToUse, 4000, 2000).catch(
-      (err: any) => logger.warn({ err }, 'rival_script: debit failed — non-fatal'),
+    // Debit AI token usage on top of the already-reserved feature charge (non-fatal)
+    await debitCredits(user.id, 'rival_script', modelToUse, 4000, 2000, 0).catch(
+      (err: any) => logger.warn({ err }, 'rival_script: AI token debit failed — non-fatal'),
     );
 
     sendSSE({ type: 'done' });
   } catch (err: any) {
     logger.error({ err: err.message, userId: user.id }, 'streamRivalScript failed');
+    await grantCredits(user.id, featureCharge, 'Rival Script failed — refund').catch(() => {});
     sendSSE({ type: 'error', message: err.message || 'Script generation failed. Please try again.' });
   } finally {
     clearInterval(keepAlive);

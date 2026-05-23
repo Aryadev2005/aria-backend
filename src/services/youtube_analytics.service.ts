@@ -108,8 +108,8 @@ export async function fetchYouTubeAnalyticsWithToken(
   }
 
   // ── 2. Decrypt + refresh token if needed ──────────────────────────────────
+  // decryptToken throws on failure — no null check needed
   const decrypted = decryptToken(conn.encrypted_token);
-  if (!decrypted) throw new Error("Failed to decrypt YouTube token");
 
   const accessToken = await getValidYouTubeToken(
     decrypted,

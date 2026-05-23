@@ -194,7 +194,14 @@ export const verifyPayment = async (
     .update(`${razorpay_order_id}|${razorpay_payment_id}`)
     .digest("hex");
 
-  if (generatedSignature !== razorpay_signature) {
+  const generatedBuf = Buffer.from(generatedSignature, "hex");
+  const providedBuf  = Buffer.from(razorpay_signature,  "hex");
+  const signatureOk  =
+    generatedBuf.length > 0 &&
+    generatedBuf.length === providedBuf.length &&
+    crypto.timingSafeEqual(generatedBuf, providedBuf);
+
+  if (!signatureOk) {
     logger.warn(
       { userId: user.id, razorpay_order_id },
       "Razorpay signature verification FAILED",
@@ -343,12 +350,25 @@ export const handleWebhook = async (
       .send({ error: "Missing x-razorpay-signature header" });
   }
 
+  const rawBody = (req as any).rawBody as Buffer | undefined;
+  if (!rawBody) {
+    logger.warn("Razorpay webhook: rawBody unavailable — verify content-type parser");
+    return reply.code(400).send({ error: "Cannot verify webhook signature" });
+  }
+
   const generatedSignature = crypto
     .createHmac("sha256", webhookSecret)
-    .update(JSON.stringify(req.body))
+    .update(rawBody)
     .digest("hex");
 
-  if (generatedSignature !== receivedSignature) {
+  const generatedBuf = Buffer.from(generatedSignature, "hex");
+  const receivedBuf  = Buffer.from(receivedSignature,  "hex");
+  const signatureOk  =
+    generatedBuf.length > 0 &&
+    generatedBuf.length === receivedBuf.length &&
+    crypto.timingSafeEqual(generatedBuf, receivedBuf);
+
+  if (!signatureOk) {
     logger.warn("Razorpay webhook signature mismatch");
     return reply.code(400).send({ error: "Invalid webhook signature" });
   }

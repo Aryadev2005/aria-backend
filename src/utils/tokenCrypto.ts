@@ -22,9 +22,9 @@ export function encryptToken(token: string): string {
 }
 
 export function decryptToken(encryptedToken: string): string {
-  if (!encryptedToken) return "";
+  if (!encryptedToken) throw new Error("decryptToken: empty input");
   const [ivHex, encryptedHex] = encryptedToken.split(":");
-  if (!ivHex || !encryptedHex) return "";
+  if (!ivHex || !encryptedHex) throw new Error("decryptToken: malformed token");
   try {
     const iv = Buffer.from(ivHex, "hex");
     const encrypted = Buffer.from(encryptedHex, "hex");
@@ -39,6 +39,6 @@ export function decryptToken(encryptedToken: string): string {
     ]).toString("utf8");
   } catch (err) {
     logger.warn({ err }, "Token decryption failed");
-    return "";
+    throw new Error("decryptToken: decryption failed");
   }
 }

@@ -1,4 +1,5 @@
 import { FastifyRequest, FastifyReply } from "fastify";
+import crypto from "crypto";
 import { prisma } from "../config/database";
 import { cache, CacheKeys } from "../config/redis";
 import { success } from "../utils/response";
@@ -24,6 +25,7 @@ interface RevenueCatEvent {
   product_id?: string;
   expiration_at_ms?: number;
   store?: string;
+  transaction_id?: string; // used for idempotency
 }
 
 interface RevenueCatWebhookBody {
@@ -37,9 +39,17 @@ export const handleWebhook = async (
   reply: FastifyReply,
 ) => {
   try {
-    // 1. Verify the webhook secret
-    const secret = req.headers["authorization"];
-    if (secret !== process.env.REVENUECAT_WEBHOOK_SECRET) {
+    // 1. Verify the webhook secret (timing-safe to prevent timing oracle attacks)
+    const expectedSecret = process.env.REVENUECAT_WEBHOOK_SECRET;
+    const providedSecret = req.headers["authorization"] as string | undefined;
+    if (!expectedSecret || !providedSecret) {
+      logger.warn("RevenueCat webhook: missing secret");
+      return reply.code(401).send({ error: "Unauthorized" });
+    }
+    const expectedKey = Buffer.from("rc_secret_cmp");
+    const expectedHash = crypto.createHmac("sha256", expectedKey).update(expectedSecret).digest();
+    const providedHash  = crypto.createHmac("sha256", expectedKey).update(providedSecret).digest();
+    if (!crypto.timingSafeEqual(expectedHash, providedHash)) {
       logger.warn("RevenueCat webhook: invalid secret");
       return reply.code(401).send({ error: "Unauthorized" });
     }
@@ -55,12 +65,25 @@ export const handleWebhook = async (
       product_id,
       expiration_at_ms,
       store,
+      transaction_id,
     } = event;
 
     logger.info(
-      { type, app_user_id, product_id },
+      { type, app_user_id, product_id, transaction_id },
       "RevenueCat webhook received",
     );
+
+    // Idempotency check — RC retries on non-200 responses; skip duplicates
+    if (transaction_id) {
+      const idemKey = `rc_tx:${transaction_id}`;
+      const alreadyProcessed = await cache.get(idemKey);
+      if (alreadyProcessed) {
+        logger.info({ transaction_id }, "RevenueCat webhook: duplicate transaction — skipping");
+        return success(reply, { received: true, status: "already_processed" });
+      }
+      // Mark as processed for 7 days (longer than any RC retry window)
+      await cache.set(idemKey, "1", 7 * 24 * 60 * 60);
+    }
 
     switch (type) {
       // ── User purchased or renewed ─────────────────────────────────────

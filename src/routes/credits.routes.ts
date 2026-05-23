@@ -3,6 +3,7 @@ import { FastifyInstance } from "fastify";
 import * as ctrl from "../controllers/credits.controller";
 import * as rzpCtrl from "../controllers/razorpay.controller";
 import { authenticateFirebase } from "../middleware/auth.middleware";
+import { requireAdminSecret } from "../middleware/admin.middleware";
 
 export default async function creditRoutes(app: FastifyInstance) {
   const auth = { preHandler: [authenticateFirebase] };
@@ -26,6 +27,7 @@ export default async function creditRoutes(app: FastifyInstance) {
   app.post<{ Body: { planId?: string; packId?: string } }>(
     "/razorpay/create-order",
     {
+      config: { rateLimit: { max: 5, timeWindow: 60_000 } },
       preHandler: [authenticateFirebase],
       schema: {
         body: {
@@ -58,6 +60,7 @@ export default async function creditRoutes(app: FastifyInstance) {
   }>(
     "/razorpay/verify",
     {
+      config: { rateLimit: { max: 5, timeWindow: 60_000 } },
       preHandler: [authenticateFirebase],
       schema: {
         body: {
@@ -90,7 +93,8 @@ export default async function creditRoutes(app: FastifyInstance) {
   );
 
   // ── Admin routes ──────────────────────────────────────────────────────────
-  app.post("/admin/reset", ctrl.adminReset);
-  app.post("/admin/grant", ctrl.adminGrant);
-  app.post("/admin/flush-cache", ctrl.adminFlushCache);
+  const adminAuth = { preHandler: [requireAdminSecret] };
+  app.post("/admin/reset", adminAuth, ctrl.adminReset);
+  app.post("/admin/grant", adminAuth, ctrl.adminGrant);
+  app.post("/admin/flush-cache", adminAuth, ctrl.adminFlushCache);
 }

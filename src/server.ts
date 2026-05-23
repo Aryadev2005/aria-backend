@@ -5,6 +5,7 @@ import { logger } from './utils/logger'
 import { connectDB } from './config/database'
 import { connectRedis } from './config/redis'
 import { initFirebase } from './config/firebase'
+import { validateEnv } from './utils/validateEnv'
 import { FastifyInstance } from 'fastify'
 
 const PORT = parseInt(process.env.PORT || '3000', 10)
@@ -31,6 +32,14 @@ const shutdown = async (app: FastifyInstance, signal: string) => {
 }
 
 const start = async () => {
+  // 0. Env validation — fail fast with a clear message
+  try {
+    validateEnv()
+  } catch (err) {
+    console.error('[ARIA] Environment validation failed:', (err as Error).message)
+    process.exit(1)
+  }
+
   // 1. Firebase — synchronous, non-fatal
   try {
     initFirebase()

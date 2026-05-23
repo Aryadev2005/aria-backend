@@ -128,7 +128,7 @@ export default async function analyticsRoutes(app: FastifyInstance) {
           type: "object",
           required: ["handle", "platform"],
           properties: {
-            handle: { type: "string", minLength: 1 },
+            handle: { type: "string", minLength: 1, maxLength: 100, pattern: "^[a-zA-Z0-9._@-]{1,100}$" },
             platform: { type: "string", enum: ["instagram", "youtube"] },
           },
         },

@@ -169,7 +169,7 @@ export const getYoutubeAuthUrl = async (
         ? "onboarding"
         : "settings";
   const frontendBase = resolveFrontendBaseForOAuth(req);
-  const url = generateYouTubeAuthUrl(user.id, clientFlow, frontendBase);
+  const url = await generateYouTubeAuthUrl(user.id, clientFlow, frontendBase);
   return success(reply, { url });
 };
 
@@ -219,8 +219,15 @@ export const youtubeCallback = async (
     const decoded = JSON.parse(
       Buffer.from(state, "base64").toString(),
     ) as Record<string, unknown>;
-    userId = decoded.userId as string;
-    if (!userId) throw new Error("No userId in state");
+
+    // Validate nonce to prevent CSRF — nonce is single-use, stored in Redis
+    const nonce = decoded.nonce as string | undefined;
+    if (!nonce) throw new Error("Missing nonce in OAuth state");
+    const { validateOAuthNonce } = await import("../utils/oauthState");
+    const resolvedId = await validateOAuthNonce(nonce);
+    if (!resolvedId) throw new Error("Invalid or expired OAuth state");
+    userId = resolvedId;
+
     clientFlow = youtubeFlowFromStatePayload(decoded.flow);
     frontendUrl = pickFrontendBaseFromOAuthState(decoded.fe, envFrontendUrl);
   } catch {

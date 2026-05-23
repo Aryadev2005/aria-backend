@@ -12,7 +12,7 @@
 
 import OpenAI from "openai";
 import { prisma } from "../config/database";
-import { cache } from "../config/redis";
+import { cache, getRedisClient } from "../config/redis";
 import { logger } from "../utils/logger";
 import { getVoicePortrait } from "./voice.service";
 import { getMemory } from "./aria_memory.service";
@@ -310,6 +310,31 @@ export async function generatePersonalisedRoadmap(
       await cache.del(cacheKey);
     } catch {
       /* non-fatal */
+    }
+  }
+
+  // ── Distributed lock — prevents two concurrent force-refreshes from making
+  // duplicate AI calls for the same user (each call can cost ~$0.01 and takes
+  // 5–15 s). Lock TTL (60 s) is well above the expected generation time.
+  const lockKey = `lock:roadmap:${userId}`;
+  const redis = getRedisClient();
+  let lockAcquired = false;
+  if (redis) {
+    try {
+      const result = await (redis as any).set(lockKey, "1", "EX", 60, "NX") as string | null;
+      lockAcquired = result === "OK";
+      if (!lockAcquired) {
+        // Another request is already generating — return whatever is cached
+        logger.info({ userId }, "roadmap: lock busy — returning cached result");
+        const cached = (await cache.get(cacheKey)) as RoadmapResult | null;
+        if (cached) return { ...cached, fromCache: true } as any;
+        // No cache yet — wait a moment then fall through to generate without lock
+        await new Promise((r) => setTimeout(r, 3000));
+        const retryCache = (await cache.get(cacheKey)) as RoadmapResult | null;
+        if (retryCache) return { ...retryCache, fromCache: true } as any;
+      }
+    } catch {
+      // Redis lock unavailable — proceed without it (non-fatal)
     }
   }
 
@@ -735,6 +760,11 @@ Respond ONLY with valid JSON (no markdown, no preamble):
 
   // ── Cache for 6 hours ─────────────────────────────────────────────────────
   await cache.set(cacheKey, roadmap, 6 * 60 * 60);
+
+  // Release the distributed lock now that the result is in cache
+  if (redis && lockAcquired) {
+    await redis.del(lockKey).catch(() => {});
+  }
 
   const funcEndMs = Date.now();
   logger.info(

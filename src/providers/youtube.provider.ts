@@ -39,14 +39,17 @@ export type YouTubeOAuthClientFlow =
   | "dashboard"
   | "settings";
 
-export function generateYouTubeAuthUrl(
+// async so it can store the nonce in Redis before building the URL
+export async function generateYouTubeAuthUrl(
   userId: string,
   flow: YouTubeOAuthClientFlow = "dashboard",
   frontendBase?: string,
-): string {
+): Promise<string> {
+  const { createOAuthNonce } = await import("../utils/oauthState");
+  const nonce = await createOAuthNonce(userId);
   const client = makeYouTubeOAuthClient(getRedirectUri());
   const state = Buffer.from(
-    JSON.stringify({ userId, ts: Date.now(), flow, fe: frontendBase }),
+    JSON.stringify({ nonce, ts: Date.now(), flow, fe: frontendBase }),
   ).toString("base64");
   return client.generateAuthUrl({
     access_type: "offline",
@@ -140,7 +143,7 @@ export function isTokenExpired(expiresAt: Date | null): boolean {
 export async function getValidYouTubeToken(
   decryptedTokenPayload: string,
   tokenExpiresAt: Date | null,
-  onRefreshed?: (newToken: string, newExpiresAt: Date) => Promise<void>,
+  onRefreshed: (newToken: string, newExpiresAt: Date) => Promise<void>,
 ): Promise<string> {
   const payload = JSON.parse(decryptedTokenPayload) as {
     access_token: string;
@@ -154,15 +157,13 @@ export async function getValidYouTubeToken(
   const { accessToken, expiresAt } = await refreshYouTubeToken(
     payload.refresh_token,
   );
-  if (onRefreshed) {
-    await onRefreshed(
-      JSON.stringify({
-        access_token: accessToken,
-        refresh_token: payload.refresh_token,
-      }),
-      expiresAt,
-    );
-  }
+  await onRefreshed(
+    JSON.stringify({
+      access_token: accessToken,
+      refresh_token: payload.refresh_token,
+    }),
+    expiresAt,
+  );
   return accessToken;
 }
 

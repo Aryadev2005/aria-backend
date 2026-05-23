@@ -28,6 +28,11 @@ const CONFIG_CACHE_KEY = "credit_config:all";
 const CONFIG_TTL = 300;
 const WALLET_TTL = 60;
 
+// Round credits to 3 decimal places to prevent floating-point drift
+function roundCredits(n: number): number {
+  return Math.round(n * 1000) / 1000;
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface CreditCheckResult {
@@ -385,9 +390,10 @@ export async function checkCredits(
   };
 }
 
-// ── 6. Debit — UNIFIED feature charge + AI charge in one transaction ──────────
-// Call AFTER successful AI response.
-// totalDebited = featureCharge + usdToCredits(actualAiCost) — both floats.
+// ── 6. Debit — UNIFIED feature charge + AI charge in one atomic transaction ────
+// Uses a conditional UPDATE (WHERE balance >= totalDebited) to prevent TOCTOU
+// race conditions where two concurrent requests both pass the balance check.
+// Wraps wallet update + transaction record in a single DB transaction.
 
 export async function debitCredits(
   userId: string,
@@ -401,60 +407,77 @@ export async function debitCredits(
   const config = await getActionConfig(actionKey);
   const featureCharge = featureChargeOverride ?? config.featureCharge;
 
-  // AI dynamic cost in credits (float)
   const aiCostUsd = calculateOpenAICost(modelUsed, inputTokens, outputTokens);
   const aiCostCredits = usdToCredits(aiCostUsd);
+  const totalDebited = roundCredits(featureCharge + aiCostCredits);
 
-  // Total debit: feature value + actual AI cost
-  const totalDebited = featureCharge + aiCostCredits;
+  let newBalance = 0;
+  let totalGranted = 0;
+  let planLimit = PLAN_CREDITS.free;
+  let transactionId = "";
 
   try {
-    const updatedWallet = await prisma.credit_wallets.update({
-      where: { user_id: userId },
-      data: {
-        balance: { decrement: totalDebited },
-        total_spent: { increment: totalDebited },
-        updated_at: new Date(),
-      },
+    await prisma.$transaction(async (txn) => {
+      // Atomic check-and-decrement: only succeeds if balance >= totalDebited.
+      // Prevents negative balance under concurrent debit requests.
+      const rows = await txn.$queryRaw<
+        { balance: string; total_granted: string; plan_credits: string }[]
+      >`
+        UPDATE credit_wallets
+        SET
+          balance     = ROUND((balance - ${totalDebited})::numeric, 3),
+          total_spent = ROUND((total_spent + ${totalDebited})::numeric, 3),
+          updated_at  = NOW()
+        WHERE user_id = ${userId}
+          AND balance >= ${totalDebited}
+        RETURNING balance, total_granted, plan_credits
+      `;
+
+      if (rows.length === 0) {
+        const err = new Error("INSUFFICIENT_CREDITS");
+        (err as any).code = "INSUFFICIENT_CREDITS";
+        throw err;
+      }
+
+      newBalance   = Number(rows[0].balance);
+      totalGranted = Number(rows[0].total_granted);
+      planLimit    =
+        Number(rows[0].plan_credits) > 0
+          ? Number(rows[0].plan_credits)
+          : PLAN_CREDITS.free;
+
+      const tx = await txn.credit_transactions.create({
+        data: {
+          user_id:       userId,
+          type:          "debit",
+          amount:        -totalDebited,
+          balance_after: newBalance,
+          action_key:    actionKey,
+          model_used:    modelUsed,
+          tokens_input:  inputTokens,
+          tokens_output: outputTokens,
+          cost_usd:      aiCostUsd,
+          description:   `${config.displayName} — ${featureCharge.toFixed(1)} feature + ${aiCostCredits.toFixed(2)} AI`,
+          metadata: {
+            feature_charge: featureCharge,
+            ai_charge:      aiCostCredits,
+            total_debited:  totalDebited,
+            model:          modelUsed,
+            ...metadata,
+          },
+        },
+      });
+
+      transactionId = tx.id;
     });
 
-    const newBalance = Number(updatedWallet.balance);
-    const planLimit =
-      Number(updatedWallet.plan_credits) > 0
-        ? Number(updatedWallet.plan_credits)
-        : PLAN_CREDITS.free;
+    await cache.del(`wallet:${userId}`);
 
-    // Recompute usedPct for response
-    const totalGranted = Number(updatedWallet.total_granted);
-    const used = Math.max(0, totalGranted - newBalance);
+    const used    = Math.max(0, totalGranted - newBalance);
     const usedPct =
       planLimit > 0
         ? Math.min(100, Math.round((used / planLimit) * 1000) / 10)
         : 0;
-
-    const tx = await prisma.credit_transactions.create({
-      data: {
-        user_id: userId,
-        type: "debit",
-        amount: -totalDebited,
-        balance_after: newBalance,
-        action_key: actionKey,
-        model_used: modelUsed,
-        tokens_input: inputTokens,
-        tokens_output: outputTokens,
-        cost_usd: aiCostUsd,
-        description: `${config.displayName} — ${featureCharge.toFixed(1)} feature + ${aiCostCredits.toFixed(2)} AI`,
-        metadata: {
-          feature_charge: featureCharge,
-          ai_charge: aiCostCredits,
-          total_debited: totalDebited,
-          model: modelUsed,
-          ...metadata,
-        },
-      },
-    });
-
-    await cache.del(`wallet:${userId}`);
 
     logger.info(
       {
@@ -465,13 +488,13 @@ export async function debitCredits(
         outputTokens,
         featureCharge,
         aiCostCredits: aiCostCredits.toFixed(3),
-        totalDebited: totalDebited.toFixed(3),
-        aiCostUsd: aiCostUsd.toFixed(6),
+        totalDebited:  totalDebited.toFixed(3),
+        aiCostUsd:     aiCostUsd.toFixed(6),
       },
       "Credits debited (feature + AI)",
     );
 
-    return { success: true, usedPct, totalDebited, transactionId: tx.id };
+    return { success: true, usedPct, totalDebited, transactionId };
   } catch (err) {
     logger.error({ err, userId, actionKey }, "Credit debit failed");
     throw err;

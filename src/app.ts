@@ -54,6 +54,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
         `req_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
       );
     },
+    bodyLimit: 1_048_576, // 1 MB — prevents payload-flooding attacks
     trustProxy: true,
     ajv: {
       customOptions: {
@@ -65,9 +66,34 @@ export const buildApp = async (): Promise<FastifyInstance> => {
     },
   });
 
+  // Capture raw body as Buffer so HMAC-based webhook handlers can verify
+  // signatures against the exact bytes received (JSON.stringify re-serialises
+  // and can produce a different byte sequence, breaking HMAC verification).
+  app.addContentTypeParser(
+    "application/json",
+    { parseAs: "buffer" },
+    (req, body, done) => {
+      (req as any).rawBody = body as Buffer;
+      try {
+        done(null, JSON.parse((body as Buffer).toString("utf8")));
+      } catch (err: any) {
+        done(err, undefined);
+      }
+    },
+  );
+
   // ── Plugins ────────────────────────────────────────────────────────────────
   await app.register(helmet, {
-    contentSecurityPolicy: false,
+    // This is a JSON API — no HTML served. CSP headers still add defence-in-depth
+    // against browsers that render error pages or if a reverse proxy forwards them.
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc:    ["'none'"],
+        scriptSrc:     ["'none'"],
+        objectSrc:     ["'none'"],
+        frameAncestors:["'none'"],
+      },
+    },
     crossOriginEmbedderPolicy: false,
   });
 
@@ -95,6 +121,14 @@ export const buildApp = async (): Promise<FastifyInstance> => {
       ...devWildcardOrigins,
     ]);
   const allowAllOrigins = allowedOrigins.includes("*");
+
+  if (process.env.NODE_ENV === "production" && !process.env.ALLOWED_ORIGINS) {
+    // Warn early — CORS will reject all non-localhost origins in production
+    // without an explicit ALLOWED_ORIGINS list.
+    console.warn(
+      "[ARIA] ALLOWED_ORIGINS not set — production CORS will reject external origins",
+    );
+  }
 
   const isOriginAllowed = (origin: string): boolean => {
     if (allowAllOrigins) return true;
@@ -219,6 +253,13 @@ export const buildApp = async (): Promise<FastifyInstance> => {
       },
       "request error",
     );
+  });
+
+  // Remove server-identifying headers and stamp every response with the request ID
+  app.addHook("onSend", async (req, reply) => {
+    reply.header("x-request-id", req.id);
+    reply.removeHeader("server");
+    reply.removeHeader("x-powered-by");
   });
 
   // ── Health check ───────────────────────────────────────────────────────────
