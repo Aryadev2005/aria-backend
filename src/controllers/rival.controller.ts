@@ -5,6 +5,7 @@ import { success, errors } from '../utils/response';
 import { logger } from '../utils/logger';
 import { User } from '../types';
 import { debitCredits, grantCredits } from '../services/credits.service';
+import { markTrialUsed } from '../services/firstExperience.service';
 import { runRivalSpy, generateRivalScript } from '../services/rival.service';
 import { prisma } from '../config/database';
 
@@ -15,8 +16,16 @@ export const streamRivalSpy = async (req: FastifyRequest, reply: FastifyReply) =
   if (!handles || !Array.isArray(handles) || handles.length === 0) {
     return reply.status(400).send({ success: false, error: 'handles array is required' });
   }
-  if (handles.length > 8) {
-    return reply.status(400).send({ success: false, error: 'Maximum 8 handles per session' });
+
+  // ── TRIAL LOGIC: enforce max 3 handles for trials ──────────────────────
+  const isTrialRun = req.creditCheck?.isTrial;
+  const maxHandles = isTrialRun ? 3 : 8;
+  
+  if (handles.length > maxHandles) {
+    const message = isTrialRun 
+      ? 'Free trial supports up to 3 handles. Upgrade to Pro for 8.'
+      : 'Maximum 8 handles per session';
+    return reply.status(400).send({ success: false, error: message });
   }
 
   // SSE headers
@@ -48,6 +57,7 @@ export const streamRivalSpy = async (req: FastifyRequest, reply: FastifyReply) =
 
   // Pre-reserve the feature charge before any AI work.
   // If debit fails the user genuinely has no credits — abort early.
+  // (Trials have featureCharge = 0, so this is a no-op for trials)
   try {
     await debitCredits(user.id, 'rival_spy', modelToUse, 0, 0);
   } catch (preDebitErr: any) {
@@ -66,7 +76,14 @@ export const streamRivalSpy = async (req: FastifyRequest, reply: FastifyReply) =
       niche,
       user.id,
       (progress) => {
-        if (!clientClosed) sendSSE({ type: 'progress', ...progress });
+        if (!clientClosed) {
+          // Add trial flag to progress events
+          sendSSE({ 
+            type: 'progress', 
+            ...progress,
+            isTrial: isTrialRun 
+          });
+        }
       },
     );
 
@@ -83,19 +100,27 @@ export const streamRivalSpy = async (req: FastifyRequest, reply: FastifyReply) =
       })
       .catch((err: any) => logger.warn({ err }, 'rival: session save failed — non-fatal'));
 
-    sendSSE({ type: 'report', data: report });
+    sendSSE({ type: 'report', data: report, isTrial: isTrialRun });
 
     // Debit AI token usage on top of the already-reserved feature charge (non-fatal)
+    // For trials, this is also a no-op since modelToUse forces gpt-4o-mini
     await debitCredits(user.id, 'rival_spy', modelToUse, 3500, 1500, 0).catch(
       (err: any) => logger.warn({ err }, 'rival: AI token debit failed — non-fatal'),
     );
 
-    sendSSE({ type: 'done' });
+    sendSSE({ type: 'done', isTrial: isTrialRun });
+
+    // ── MARK TRIAL AS USED ───────────────────────────────────────────────
+    if (isTrialRun && req.creditCheck?.trialAction) {
+      const resultData = { handles, platform, report };
+      markTrialUsed(user.id, req.creditCheck.trialAction, resultData)
+        .catch(err => logger.warn({ err }, 'rival: trial mark failed — non-fatal'));
+    }
   } catch (err: any) {
     logger.error({ err: err.message, userId: user.id }, 'streamRivalSpy failed');
     // Refund the pre-reserved feature charge since the operation failed
     await grantCredits(user.id, featureCharge, 'Rival Spy failed — refund').catch(() => {});
-    sendSSE({ type: 'error', message: err.message || 'Rival Spy failed. Please try again.' });
+    sendSSE({ type: 'error', message: err.message || 'Rival Spy failed. Please try again.', isTrial: isTrialRun });
   } finally {
     clearInterval(keepAlive);
     reply.raw.end();

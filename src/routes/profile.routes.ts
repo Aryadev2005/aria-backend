@@ -1,6 +1,7 @@
 import { FastifyInstance } from "fastify";
 import * as ctrl from "../controllers/profile.controller";
 import * as identityCtrl from "../controllers/aria_identity.controller";
+import * as rivalWatchCtrl from "../controllers/rivalWatch.controller";
 import type {
   UpdatePlatformBody,
   SwitchPlatformBody,
@@ -112,5 +113,38 @@ export default async function profileRoutes(app: FastifyInstance) {
     "/voice-portrait/rebuild",
     { preHandler: [authenticateFirebase, requireCredits("voice_portrait")] },
     ctrl.rebuildVoicePortrait,
+  );
+
+  // ── RIVAL WATCH SETTINGS ───────────────────────────────────────────────────
+  // GET /api/v1/profile/settings/rival-watch
+  app.get("/settings/rival-watch", auth, rivalWatchCtrl.getRivalWatchSettings);
+
+  // PUT /api/v1/profile/settings/rival-watch
+  app.put<{ Body: { handles: string[] } }>(
+    "/settings/rival-watch",
+    {
+      ...auth,
+      schema: {
+        body: {
+          type: "object",
+          required: ["handles"],
+          properties: {
+            handles: {
+              type: "array",
+              items: { type: "string" },
+              maxItems: 3,
+            },
+          },
+        },
+      },
+    },
+    rivalWatchCtrl.updateRivalWatch,
+  );
+
+  // DELETE /api/v1/profile/settings/rival-watch/:handle
+  app.delete<{ Params: { handle: string } }>(
+    "/settings/rival-watch/:handle",
+    auth,
+    rivalWatchCtrl.removeRivalHandle,
   );
 }

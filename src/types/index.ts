@@ -18,3 +18,4 @@ declare module "fastify" {
 }
 
 export * from "./user";
+export * from "./thumbnail.types";

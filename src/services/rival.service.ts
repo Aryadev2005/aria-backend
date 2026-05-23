@@ -17,8 +17,13 @@ import { cache } from '../config/redis';
 import { logger } from '../utils/logger';
 import { computeVideoDNAReport } from './videoDnaScoring.service';
 import { getVoicePortrait } from './voice.service';
+import {
+  analyzeThumbnailVision,
+  scoreThumbnailFromVision,
+} from './thumbnailVision.service';
 import type { ScriptResult } from './deep_analysis.service';
 import type { ShootPlan } from './studioV2.types';
+import type { ThumbnailVisionAnalysis } from '../types/thumbnail.types';
 
 const YT_KEY = process.env.YOUTUBE_API_KEY;
 const YT_BASE = 'https://www.googleapis.com/youtube/v3';
@@ -64,6 +69,7 @@ export interface RivalPost {
   dnaGrade?: string;
   hookScore?: number;
   contentQualityScore?: number;
+  thumbnailAnalysis?: ThumbnailVisionAnalysis | null;  // NEW — vision analysis of thumbnail
 }
 
 export interface NichePattern {
@@ -342,12 +348,103 @@ export async function harvestTopContent(handles: RivalHandle[]): Promise<RivalPo
 
 // ── Stage 3: Score posts with Video DNA ───────────────────────────────────────
 
+// Simple semaphore for rate limiting thumbnail vision calls (max 3 concurrent)
+class Semaphore {
+  private permits: number;
+  private queue: Array<() => void> = [];
+
+  constructor(permits: number) {
+    this.permits = permits;
+  }
+
+  async acquire(): Promise<void> {
+    if (this.permits > 0) {
+      this.permits--;
+      return;
+    }
+    return new Promise((resolve) => {
+      this.queue.push(() => {
+        this.permits--;
+        resolve();
+      });
+    });
+  }
+
+  release(): void {
+    const next = this.queue.shift();
+    if (next) {
+      this.permits++;
+      next();
+    } else {
+      this.permits++;
+    }
+  }
+}
+
+const thumbnailVisionSemaphore = new Semaphore(3); // Max 3 concurrent vision calls
+
+/**
+ * Rate-limited thumbnail vision analysis
+ * Acquires semaphore permit, runs vision with 4s timeout, releases permit
+ */
+async function analyzeThumbnailVisionWithRateLimit(
+  thumbnailUrl: string,
+  videoTitle: string,
+  niche: string,
+): Promise<ThumbnailVisionAnalysis | null> {
+  await thumbnailVisionSemaphore.acquire();
+  try {
+    // Race against 4-second timeout to avoid blocking the rival analysis pipeline
+    return await Promise.race([
+      analyzeThumbnailVision(thumbnailUrl, videoTitle, niche),
+      new Promise<null>((_, reject) =>
+        setTimeout(
+          () => reject(new Error('Thumbnail vision timeout (4s)')),
+          4000,
+        ),
+      ),
+    ]);
+  } catch (err) {
+    // Log but don't fail the post — thumbnail vision is supplementary
+    logger.debug(
+      `[RivalThumbnailVision] Failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return null;
+  } finally {
+    thumbnailVisionSemaphore.release();
+  }
+}
+
 export async function scorePosts(posts: RivalPost[], niche: string): Promise<RivalPost[]> {
+  // Start thumbnail vision analysis in parallel for all posts with thumbnailUrl
+  // This runs in the background while we score the posts
+  const visionPromises = new Map<
+    string,
+    Promise<ThumbnailVisionAnalysis | null>
+  >();
+
+  for (const post of posts) {
+    if (post.thumbnailUrl && post.thumbnailUrl.trim().length > 0) {
+      // Start vision analysis (rate-limited via semaphore)
+      visionPromises.set(
+        post.postId,
+        analyzeThumbnailVisionWithRateLimit(
+          post.thumbnailUrl,
+          post.title,
+          niche,
+        ),
+      );
+    }
+  }
+
+  // Score posts with DNA report
   const scored = await Promise.allSettled(
     posts.map(async (post): Promise<RivalPost> => {
       try {
         const durationSecs =
           post.format === 'reel' || post.format === 'short' ? 30 : 300;
+
+        // Start with AI-inferred signals
         const report = await computeVideoDNAReport(
           {
             ariaInsight: '',
@@ -369,14 +466,39 @@ export async function scorePosts(posts: RivalPost[], niche: string): Promise<Riv
           '22',
           post.title,
         );
+
+        // Check if thumbnail vision is available for this post
+        let thumbnailAnalysis: ThumbnailVisionAnalysis | null = null;
+        if (visionPromises.has(post.postId)) {
+          try {
+            thumbnailAnalysis = await visionPromises.get(post.postId)!;
+            if (thumbnailAnalysis) {
+              logger.info(
+                { postId: post.postId, handle: post.competitorHandle },
+                'Thumbnail vision applied to rival post',
+              );
+            }
+          } catch (visionErr) {
+            // Vision failed — log but don't fail the post
+            logger.debug(
+              `[RivalPost] Vision failed for ${post.postId}: ${visionErr instanceof Error ? visionErr.message : String(visionErr)}`,
+            );
+          }
+        }
+
         return {
           ...post,
           dnaScore: report.overallScore,
           dnaGrade: report.grade,
           hookScore: report.hookScore,
           contentQualityScore: report.contentQualityScore,
+          thumbnailAnalysis: thumbnailAnalysis ?? undefined,
         };
-      } catch {
+      } catch (err) {
+        logger.warn(
+          { postId: post.postId, err: err instanceof Error ? err.message : String(err) },
+          'Failed to score rival post',
+        );
         return post;
       }
     }),

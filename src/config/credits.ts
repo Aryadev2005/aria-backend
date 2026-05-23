@@ -47,7 +47,8 @@ export type ActionKey =
   | "competitor_gap"
   | "rival_spy"
   | "rival_script"
-  | "shoot_plan";
+  | "shoot_plan"
+  | "thumbnail_variants";
 
 export interface ActionConfig {
   key: ActionKey;
@@ -431,6 +432,19 @@ export const DEFAULT_ACTION_CONFIGS: Record<ActionKey, ActionConfig> = {
     useHeavy: false,
     freeTierAllowed: false,
     starterTierAllowed: true,
+    proTierAllowed: true,
+    maxTierAllowed: true,
+  },
+  thumbnail_variants: {
+    key: "thumbnail_variants",
+    displayName: "Thumbnail Variants",
+    featureCharge: 15,
+    modelMini: "gpt-4o-mini",
+    modelHeavy: "gpt-4o",
+    useHeavy: false,
+    maxPerDay: 10,
+    freeTierAllowed: false,
+    starterTierAllowed: false,
     proTierAllowed: true,
     maxTierAllowed: true,
   },

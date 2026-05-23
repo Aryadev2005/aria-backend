@@ -9,6 +9,7 @@ import { prisma } from "../config/database";
 import { success, errors } from "../utils/response";
 import { logger } from "../utils/logger";
 import { debitCredits } from "../services/credits.service";
+import { markTrialUsed } from "../services/firstExperience.service";
 import path from "path";
 import fs from "fs";
 import os from "os";
@@ -686,6 +687,12 @@ export const streamScript = async (
       debitCredits(user.id, "script_writing", modelToUse, 3000, 1500).catch(
         (err: any) => logger.warn({ err }, "Debit failed — non-fatal"),
       );
+
+      // ── MARK TRIAL AS USED ───────────────────────────────────────────
+      if (req.creditCheck?.isTrial && req.creditCheck?.trialAction) {
+        markTrialUsed(user.id, req.creditCheck.trialAction, { idea, platform })
+          .catch(err => logger.warn({ err }, 'studio: trial mark failed — non-fatal'));
+      }
     }
     reply.raw.end();
   }

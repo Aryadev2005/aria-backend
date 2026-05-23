@@ -115,6 +115,15 @@ export default async function trendRoutes(app: FastifyInstance) {
     trendController.getViralIdeas,
   );
 
+  // GET /api/v1/trends/voice-fit-preview (free endpoint)
+  app.get(
+    "/voice-fit-preview",
+    {
+      preHandler: [authenticateFirebase],
+    },
+    trendController.getVoiceFitPreview,
+  );
+
   // POST /api/v1/trends/interaction
   app.post<{
     Body: {

@@ -23,6 +23,7 @@ import studioRoutes from "./routes/studio.routes";
 import launchRoutes from "./routes/launch.routes";
 import profileRoutes from "./routes/profile.routes";
 import webhookRoutes from "./routes/webhook.routes";
+import thumbnailRoutes from "./routes/thumbnail.routes";
 // import brainRoutes from "./routes/brain.routes";
 import videoDnaRoutes from "./routes/video_dna.routes";
 import dataDeletionRoutes from "./routes/dataDeletion.routes";
@@ -31,6 +32,7 @@ import creditRoutes from "./routes/credits.routes";
 import notesRoutes from "./routes/notes.routes";
 import deepAnalysisRoutes from "./routes/deepAnalysis.routes";
 import rivalRoutes from "./routes/rival.routes";
+import trialRoutes from "./routes/trials.routes";
 
 export const buildApp = async (): Promise<FastifyInstance> => {
   const app = Fastify({
@@ -290,6 +292,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
   await app.register(studioRoutes, { prefix: `${API_PREFIX}/studio` });
   await app.register(launchRoutes, { prefix: `${API_PREFIX}/launch` });
   await app.register(profileRoutes, { prefix: `${API_PREFIX}/profile` });
+  await app.register(thumbnailRoutes, { prefix: `${API_PREFIX}/thumbnail` });
   // await app.register(brainRoutes, { prefix: `${API_PREFIX}/brain` });
   await app.register(videoDnaRoutes, { prefix: `${API_PREFIX}/video-dna` });
   await app.register(integrationRoutes, {
@@ -298,6 +301,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
   await app.register(creditRoutes, { prefix: `${API_PREFIX}/credits` });
   await app.register(notesRoutes, { prefix: `${API_PREFIX}/notes` });
   await app.register(rivalRoutes, { prefix: `${API_PREFIX}/rival` });
+  await app.register(trialRoutes, { prefix: `${API_PREFIX}/trials` });
   await app.register(dataDeletionRoutes, {
     prefix: `${API_PREFIX}/data-deletion`,
   });

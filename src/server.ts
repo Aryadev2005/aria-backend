@@ -6,6 +6,7 @@ import { connectDB } from './config/database'
 import { connectRedis } from './config/redis'
 import { initFirebase } from './config/firebase'
 import { validateEnv } from './utils/validateEnv'
+import { startScheduler } from './jobs/scheduler'
 import { FastifyInstance } from 'fastify'
 
 const PORT = parseInt(process.env.PORT || '3000', 10)
@@ -75,7 +76,15 @@ const start = async () => {
     process.exit(1)
   }
 
-  // 5. Health check is handled in app.ts
+  // 5. Start background scheduler (cron jobs)
+  try {
+    startScheduler()
+  } catch (err) {
+    logger.warn({ err: (err as Error).message }, 'Scheduler failed to start')
+    // Non-fatal — continue anyway
+  }
+
+  // 6. Health check is handled in app.ts
 
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGUSR2']) {
     process.once(signal, () => shutdown(app, signal))

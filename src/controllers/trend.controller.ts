@@ -6,6 +6,8 @@ import { success, errors } from "../utils/response";
 import { logger } from "../utils/logger";
 import { User } from "../types";
 import { debitCredits } from "../services/credits.service";
+import { getVoicePortrait, buildVoicePortrait } from "../services/voice.service";
+import { rankTrendsByVoiceFit, VoiceFitScore, scoreVoiceFit } from "../services/voiceFit.service";
 
 export interface GetTrendsQuery {
   niche?: string;
@@ -31,6 +33,7 @@ export const getTrends = async (
   } = req.query;
 
   const cacheKey = CacheKeys.trends(niche, platform) + `:${badge}:${page}`;
+  const user = req.user as User | undefined;
 
   try {
     const trends = await cache.getOrSet(
@@ -72,7 +75,39 @@ export const getTrends = async (
       : (trends as any)?.trends || [];
     let data = trendsArray as any[];
     if (badge !== "ALL") data = data.filter((t) => t.badge === badge);
-    return success(reply, data.slice(0, limit));
+    data = data.slice(0, limit);
+
+    // ── Voice fit scoring (applies AFTER cache, per-user) ───────────────────
+    let voiceProfiled = false;
+    if (user) {
+      const portrait = await getVoicePortrait(user.id).catch((err) => {
+        logger.warn({ err }, "Failed to fetch voice portrait for getTrends");
+        return null;
+      });
+
+      if (portrait) {
+        voiceProfiled = true;
+        const rankedTrends = rankTrendsByVoiceFit(data, portrait);
+        return success(reply, { trends: rankedTrends, voiceProfiled });
+      }
+    }
+
+    // No voice portrait — add neutral voiceFit to each trend
+    const trendsWithNeutralFit = data.map((t) => ({
+      ...t,
+      voiceFit: {
+        score: 50,
+        grade: "B" as const,
+        topicMatch: 0,
+        toneMatch: 0,
+        formatMatch: 10,
+        languageMatch: 10,
+        avoidPenalty: 0,
+        reasons: ["Build your voice profile for personalized ranking"],
+      } as VoiceFitScore,
+    }));
+
+    return success(reply, { trends: trendsWithNeutralFit, voiceProfiled });
   } catch (err) {
     logger.error({ err }, "Get trends failed");
     return errors.serviceDown(reply, "Trend engine");
@@ -398,12 +433,43 @@ export const getViralIdeas = async (
           orderBy: { fetched_at: "desc" },
           select: { fetched_at: true },
         });
+
+        // ── Apply voice fit scoring to cached ideas (per-user) ────────────
+        let cachedIdeas = cached;
+        let voiceProfiled = false;
+        const portrait = await getVoicePortrait(user.id).catch((err) => {
+          logger.warn({ err }, "Failed to fetch voice portrait for cached viral ideas");
+          return null;
+        });
+
+        if (portrait) {
+          voiceProfiled = true;
+          const rankedIdeas = rankTrendsByVoiceFit(cached, portrait);
+          cachedIdeas = rankedIdeas;
+        } else {
+          // Add neutral voiceFit if no portrait
+          cachedIdeas = cached.map((idea: any) => ({
+            ...idea,
+            voiceFit: {
+              score: 50,
+              grade: "B" as const,
+              topicMatch: 0,
+              toneMatch: 0,
+              formatMatch: 10,
+              languageMatch: 10,
+              avoidPenalty: 0,
+              reasons: ["Build your voice profile for personalized ranking"],
+            } as VoiceFitScore,
+          }));
+        }
+
         return success(reply, {
-          ideas: cached,
+          ideas: cachedIdeas,
           cached: true,
           niche: activeNiche,
           isBrowsing: !!browseNiche,
           updatedAt: latestTrendCached?.fetched_at ?? new Date(),
+          voiceProfiled,
         });
       }
     }
@@ -454,18 +520,119 @@ export const getViralIdeas = async (
       select: { fetched_at: true },
     });
 
+    // ── Apply voice fit scoring to fresh ideas (per-user) ───────────────
+    let finalIdeas = ideas;
+    let voiceProfiled = false;
+    const portrait = await getVoicePortrait(user.id).catch((err) => {
+      logger.warn({ err }, "Failed to fetch voice portrait for fresh viral ideas");
+      return null;
+    });
+
+    if (portrait) {
+      voiceProfiled = true;
+      const rankedIdeas = rankTrendsByVoiceFit(ideas, portrait);
+      finalIdeas = rankedIdeas;
+    } else {
+      // Add neutral voiceFit if no portrait
+      finalIdeas = ideas.map((idea: any) => ({
+        ...idea,
+        voiceFit: {
+          score: 50,
+          grade: "B" as const,
+          topicMatch: 0,
+          toneMatch: 0,
+          formatMatch: 10,
+          languageMatch: 10,
+          avoidPenalty: 0,
+          reasons: ["Build your voice profile for personalized ranking"],
+        } as VoiceFitScore,
+      }));
+    }
+
     return success(reply, {
-      ideas,
+      ideas: finalIdeas,
       cached: false,
       niche: activeNiche,
       isBrowsing: !!browseNiche,
       updatedAt: latestTrend?.fetched_at ?? new Date(),
       refreshedAt: new Date().toISOString(),
       creditsUsed: req.creditCheck?.featureCharge ?? 0,
+      voiceProfiled,
     });
   } catch (err) {
     logger.error({ err }, "Viral ideas failed");
     return errors.serviceDown(reply, "Trend ideas engine");
+  }
+};
+
+// ── GET /api/v1/trends/voice-fit-preview ────────────────────────────────────
+/**
+ * Get the user's voice portrait summary and personalized recommendations
+ * Auth: authenticateFirebase (no credit check — this is free)
+ *
+ * Returns:
+ * - Voice portrait summary: toneSignature, primaryTopics, preferredFormats, contentTerritory, confidence
+ * - Top 3 "perfect fit" niches (based on portrait)
+ * - Top 3 "avoid" topics (based on portrait)
+ */
+export const getVoiceFitPreview = async (
+  req: FastifyRequest,
+  reply: FastifyReply,
+) => {
+  const user = req.user as User;
+
+  try {
+    // Try to fetch existing portrait first
+    let portrait = await getVoicePortrait(user.id).catch((err) => {
+      logger.warn({ err }, "Failed to fetch voice portrait for preview");
+      return null;
+    });
+
+    // If no portrait exists, try to build one (will be empty if no data)
+    if (!portrait) {
+      portrait = await buildVoicePortrait(user.id).catch((err) => {
+        logger.warn(
+          { err, userId: user.id },
+          "Failed to build voice portrait for preview",
+        );
+        return null;
+      });
+    }
+
+    if (!portrait) {
+      // No portrait data available
+      return success(reply, {
+        hasPortrait: false,
+        message: "No voice profile yet. Generate by completing Profile analysis.",
+      });
+    }
+
+    // Build perfect fit and avoid recommendations
+    const perfectFitNiches = portrait.primaryTopics?.slice(0, 3) || [];
+    const avoidTopics = portrait.avoidTopics?.slice(0, 3) || [];
+
+    return success(reply, {
+      hasPortrait: true,
+      portrait: {
+        toneSignature: portrait.toneSignature,
+        primaryTopics: portrait.primaryTopics,
+        preferredFormats: portrait.preferredFormats,
+        contentTerritory: portrait.contentTerritory,
+        confidence: portrait.confidence,
+        energyLevel: portrait.energyLevel,
+        vocabularyLevel: portrait.vocabularyLevel,
+        preferredLanguage: portrait.preferredLanguage,
+      },
+      recommendations: {
+        perfectFit: perfectFitNiches,
+        avoid: avoidTopics,
+      },
+      message:
+        "Your voice profile is active. ARIA ranks trends for your unique voice.",
+    });
+  } catch (err) {
+    logger.error({ err }, "Voice fit preview failed");
+    return errors.internal(reply);
   }
 };
 

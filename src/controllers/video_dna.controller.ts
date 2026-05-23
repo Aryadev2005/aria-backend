@@ -5,6 +5,7 @@ import { cache } from "../config/redis";
 import { success, errors } from "../utils/response";
 import { logger } from "../utils/logger";
 import { debitCredits } from "../services/credits.service";
+import { markTrialUsed } from "../services/firstExperience.service";
 import { YoutubeTranscript } from "youtube-transcript";
 import { User } from "../types";
 import {
@@ -12,6 +13,11 @@ import {
   RawSignals,
 } from "../services/videoDnaScoring.service";
 import { runCompetitorGapAnalysis } from "../services/competitorGap.service";
+import {
+  analyzeThumbnailVision,
+  scoreThumbnailFromVision,
+} from "../services/thumbnailVision.service";
+import type { ThumbnailVisionAnalysis } from "../types/thumbnail.types";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // OpenAI / Groq client — lazy singleton
@@ -786,12 +792,12 @@ export const analyseVideo = async (
   }
 
   try {
-    // ── PHASE 1: PARALLEL — YouTube fetch + user profile fetch + transcript ──
+    // ── PHASE 1: PARALLEL — YouTube fetch + user profile fetch + transcript + thumbnail vision ──
     // These have zero dependency on each other. Run simultaneously.
-    // YouTube is the critical path; user profile and transcript are supplementary.
+    // YouTube is the critical path; user profile, transcript, and thumbnail are supplementary.
     logger.info({ videoId, userId: user.id }, "Video DNA v4 analysis started");
 
-    const [videoDataResult, fullUserResult, transcriptResult] = await Promise.allSettled([
+    const [videoDataResult, fullUserResult, transcriptResult, thumbnailVisionResult] = await Promise.allSettled([
       fetchYouTubeData(videoId),
       prisma.users.findUnique({
         where:  { id: user.id },
@@ -806,6 +812,9 @@ export const analyseVideo = async (
         },
       }),
       fetchTranscript(videoId),  // ← runs in parallel, fails silently
+      // Thumbnail vision call will be completed after niche is detected in Phase 2.
+      // For now, we'll initialize it as a deferred promise placeholder.
+      Promise.resolve(null as ThumbnailVisionAnalysis | null),
     ]);
 
     // YouTube is non-negotiable — fail if it failed
@@ -826,7 +835,7 @@ export const analyseVideo = async (
       ? transcriptResult.value
       : "";
 
-    // ── PHASE 2: Niche derivation + Signal extraction ─────────────────────────
+    // ── PHASE 2: Niche derivation + Signal extraction + Thumbnail Vision ─────
     // Niche comes from the VIDEO — not the user profile.
     const detectedNiche = deriveNicheFromVideo(
       videoData.categoryId,
@@ -835,6 +844,28 @@ export const analyseVideo = async (
     );
 
     logger.info({ videoId, detectedNiche }, "Niche derived from video");
+
+    // THUMBNAIL VISION: Fetch thumbnail analysis with 4-second timeout to keep total pipeline <5s
+    let thumbnailAnalysis: ThumbnailVisionAnalysis | null = null;
+    try {
+      // Race against 4-second timeout to preserve latency SLA
+      thumbnailAnalysis = await Promise.race([
+        analyzeThumbnailVision(videoData.thumbnailUrl, videoData.videoTitle, detectedNiche),
+        new Promise<null>((_, reject) =>
+          setTimeout(
+            () => reject(new Error("Thumbnail vision timeout (4s)")),
+            4000,
+          ),
+        ),
+      ]);
+    } catch (visionErr) {
+      // Vision failed or timed out — log and continue. AI-inferred values are fallback.
+      logger.info(
+        { videoId, visionErr: visionErr instanceof Error ? visionErr.message : String(visionErr) },
+        "Thumbnail vision skipped — continuing with AI-inferred signals",
+      );
+      thumbnailAnalysis = null;
+    }
 
     const extractionPrompt = buildSignalExtractionPrompt(
       videoData,
@@ -846,6 +877,19 @@ export const analyseVideo = async (
 
     if (signalFallback) {
       logger.warn({ videoId }, "Using fallback signals — AI extraction failed");
+    }
+
+    // If vision succeeded, override AI-inferred thumbnail signals with real vision data
+    if (thumbnailAnalysis) {
+      const visionScores = scoreThumbnailFromVision(thumbnailAnalysis);
+      rawSignals.thumbnailTitleSync = visionScores.thumbnailTitleSync;
+      rawSignals.thumbnailClutter = visionScores.thumbnailClutter;
+      // Mark that vision was used — for frontend display and analytics
+      (rawSignals as any)._thumbnailVisionUsed = true;
+      logger.info(
+        { videoId, thumbnailVisionUsed: true },
+        "Thumbnail vision applied to DNA signals",
+      );
     }
 
     // ── PHASE 3: Deterministic scoring engine ─────────────────────────────────
@@ -916,6 +960,10 @@ export const analyseVideo = async (
       // Validated shorts — never undefined, always an array
       shortsOpportunities: validatedShorts,
 
+      // Thumbnail vision — full analysis breakdown + flag for frontend
+      thumbnailAnalysis:   thumbnailAnalysis ?? null,
+      thumbnailVisionUsed: thumbnailAnalysis !== null,
+
       // Analysis metadata
       detectedNiche,
       signalFallbackUsed:  signalFallback,
@@ -941,18 +989,20 @@ export const analyseVideo = async (
         .upsert({
           where:  { user_id_video_id: { user_id: user.id, video_id: videoId } },
           update: {
-            result_data:      result as any,
-            analysis_version: "v4",
-            analysed_at:      new Date(),
+            result_data:       result as any,
+            thumbnail_analysis: thumbnailAnalysis ?? undefined,
+            analysis_version:  "v4",
+            analysed_at:       new Date(),
           },
           create: {
-            user_id:          user.id,
-            video_id:         videoId,
-            video_title:      videoData.videoTitle,
-            channel_name:     videoData.channelName,
-            result_data:      result as any,
-            analysis_version: "v4",
-            analysed_at:      new Date(),
+            user_id:            user.id,
+            video_id:           videoId,
+            video_title:        videoData.videoTitle,
+            channel_name:       videoData.channelName,
+            result_data:        result as any,
+            thumbnail_analysis: thumbnailAnalysis ?? undefined,
+            analysis_version:   "v4",
+            analysed_at:        new Date(),
           },
         })
         .catch((err: any) => logger.warn({ err }, "Video DNA DB save failed — non-fatal"));
@@ -964,6 +1014,12 @@ export const analyseVideo = async (
         3000,
         1500,
       ).catch((err: any) => logger.warn({ err }, "Credit debit failed — non-fatal"));
+
+      // ── MARK TRIAL AS USED ───────────────────────────────────────────
+      if (req.creditCheck?.isTrial && req.creditCheck?.trialAction) {
+        markTrialUsed(user.id, req.creditCheck.trialAction, { videoId, videoTitle: videoData.videoTitle })
+          .catch(err => logger.warn({ err }, 'video_dna: trial mark failed — non-fatal'));
+      }
     });
 
     // Use the standard success() utility — same shape as every other endpoint.
