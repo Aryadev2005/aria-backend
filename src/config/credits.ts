@@ -46,6 +46,7 @@ export type ActionKey =
   | "video_analysis"
   | "competitor_gap"
   | "rival_spy"
+  | "rival_script"
   | "shoot_plan";
 
 export interface ActionConfig {

@@ -5,7 +5,7 @@ import { success, errors } from '../utils/response';
 import { logger } from '../utils/logger';
 import { User } from '../types';
 import { debitCredits } from '../services/credits.service';
-import { runRivalSpy } from '../services/rival.service';
+import { runRivalSpy, generateRivalScript } from '../services/rival.service';
 import { prisma } from '../config/database';
 
 export const streamRivalSpy = async (req: FastifyRequest, reply: FastifyReply) => {
@@ -74,6 +74,64 @@ export const streamRivalSpy = async (req: FastifyRequest, reply: FastifyReply) =
   } catch (err: any) {
     logger.error({ err: err.message, userId: user.id }, 'streamRivalSpy failed');
     sendSSE({ type: 'error', message: err.message || 'Rival Spy failed. Please try again.' });
+  } finally {
+    clearInterval(keepAlive);
+    reply.raw.end();
+  }
+};
+
+export const streamRivalScript = async (req: FastifyRequest, reply: FastifyReply) => {
+  const user = req.user as User;
+  const { stealCard, cardIndex, niche } = req.body as {
+    stealCard: any;
+    cardIndex: number;
+    niche?: string;
+  };
+
+  if (!stealCard || cardIndex === undefined) {
+    return reply.status(400).send({ success: false, error: 'stealCard and cardIndex required' });
+  }
+
+  reply.raw.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no',
+    'Access-Control-Allow-Origin': '*',
+  });
+
+  const sendSSE = (event: any) => {
+    try { reply.raw.write(`data: ${JSON.stringify(event)}\n\n`); } catch {}
+  };
+
+  const keepAlive = setInterval(() => {
+    try { reply.raw.write(': ping\n\n'); } catch { clearInterval(keepAlive); }
+  }, 15_000);
+
+  try {
+    const userNiche = niche || (user as any).niches?.[0] || 'general';
+    const archetype = (user as any).archetype || 'EDUCATOR';
+
+    const result = await generateRivalScript(
+      stealCard,
+      user.id,
+      userNiche,
+      archetype,
+      cardIndex,
+      (progress) => sendSSE({ type: 'progress', ...progress }),
+    );
+
+    sendSSE({ type: 'script_ready', data: result });
+
+    const modelToUse = (req as any).creditCheck?.modelToUse ?? 'gpt-4o-mini';
+    await debitCredits(user.id, 'rival_script', modelToUse, 4000, 2000).catch(
+      (err: any) => logger.warn({ err }, 'rival_script: debit failed — non-fatal'),
+    );
+
+    sendSSE({ type: 'done' });
+  } catch (err: any) {
+    logger.error({ err: err.message, userId: user.id }, 'streamRivalScript failed');
+    sendSSE({ type: 'error', message: err.message || 'Script generation failed. Please try again.' });
   } finally {
     clearInterval(keepAlive);
     reply.raw.end();

@@ -17,6 +17,8 @@ import { cache } from '../config/redis';
 import { logger } from '../utils/logger';
 import { computeVideoDNAReport } from './videoDnaScoring.service';
 import { getVoicePortrait } from './voice.service';
+import type { ScriptResult } from './deep_analysis.service';
+import type { ShootPlan } from './studioV2.types';
 
 const YT_KEY = process.env.YOUTUBE_API_KEY;
 const YT_BASE = 'https://www.googleapis.com/youtube/v3';
@@ -89,6 +91,39 @@ export interface RivalIntelReport {
   nichePatterns: NichePattern[];
   stealCards: StealCard[];   // top 5 posts with steal metadata
   gapOpportunities: string[]; // topics nobody covered
+  overservedTopics: string[];
+  avgDnaScore: number;
+  topDnaPost: RivalPost | null;
+  generatedAt: string;
+}
+
+export interface RivalScriptResult {
+  stealCardIndex: number;
+  rivalPostId: string;
+  rivalHandle: string;
+  rivalViews: number;
+  rivalHookText: string;
+  script: ScriptResult;
+  shootPlan: ShootPlan | null;
+  signalMap: any | null;
+  generatedAt: string;
+}
+
+export interface EnrichedStealCard extends StealCard {
+  outlierMultiplier: number;
+  hookType: string;
+  hookFormula: string;
+  velocityBadge: 'FAST_MOVER' | 'STEADY' | 'SLOW_BURN' | null;
+  script?: RivalScriptResult;
+  isGeneratingScript?: boolean;
+}
+
+export interface RivalIntelReportV2 {
+  handles: RivalHandle[];
+  totalPostsAnalysed: number;
+  nichePatterns: NichePattern[];
+  stealCards: EnrichedStealCard[];
+  gapOpportunities: string[];
   overservedTopics: string[];
   avgDnaScore: number;
   topDnaPost: RivalPost | null;
@@ -498,6 +533,192 @@ RESPOND ONLY with valid JSON, no markdown:
   }
 }
 
+// ── Classify hook type from hook text ────────────────────────────────────────
+export function classifyHook(hookText: string): { type: string; formula: string } {
+  const text = hookText.toLowerCase();
+  if (/\d/.test(text) && /(day|week|month|year|hour|minute|second|rs|₹|\$|%)/i.test(text)) {
+    return { type: 'number', formula: '[NUMBER] + [OUTCOME] + [TIMEFRAME]' };
+  }
+  if (text.includes('?') || /^(how|why|what|when|who|can|is |are |do |does )/i.test(text)) {
+    return { type: 'question', formula: '[QUESTION] that makes them feel unresolved' };
+  }
+  if (/(nobody|no one|stop|wrong|mistake|secret|truth|lie|shocked|never|don't)/i.test(text)) {
+    return { type: 'shock', formula: '[CONTRARIAN CLAIM] + [AUTHORITY SIGNAL]' };
+  }
+  if (/(i was|when i|my |we were|that time|remember)/i.test(text)) {
+    return { type: 'relatable', formula: '[SHARED EXPERIENCE] → [UNEXPECTED TURN]' };
+  }
+  if (/(before|after|from.*to|used to|now i)/i.test(text)) {
+    return { type: 'before_after', formula: '[BEFORE STATE] → [AFTER STATE] in [TIMEFRAME]' };
+  }
+  if (/(everyone|most people|they don't|industry|truth about)/i.test(text)) {
+    return { type: 'controversy', formula: '[COMMON BELIEF] + [CHALLENGE IT]' };
+  }
+  return { type: 'curiosity', formula: '[OPEN LOOP] that demands resolution' };
+}
+
+// ── Calculate outlier multiplier ─────────────────────────────────────────────
+export function calcOutlierMultiplier(postViews: number, allPostsForCreator: RivalPost[]): number {
+  if (allPostsForCreator.length < 2) return 1;
+  const avg = allPostsForCreator.reduce((s, p) => s + p.views, 0) / allPostsForCreator.length;
+  if (avg === 0) return 1;
+  return parseFloat((postViews / avg).toFixed(1));
+}
+
+// ── Build enriched steal cards ────────────────────────────────────────────────
+export async function buildEnrichedStealCards(
+  posts: RivalPost[],
+  voicePortrait: any | null,
+): Promise<EnrichedStealCard[]> {
+  const byHandle: Record<string, RivalPost[]> = {};
+  for (const p of posts) {
+    if (!byHandle[p.competitorHandle]) byHandle[p.competitorHandle] = [];
+    byHandle[p.competitorHandle].push(p);
+  }
+
+  const top5 = [...posts]
+    .sort((a, b) => (b.dnaScore || 0) - (a.dnaScore || 0))
+    .slice(0, 5);
+
+  return top5.map((post, idx): EnrichedStealCard => {
+    const creatorPosts = byHandle[post.competitorHandle] || [post];
+    const outlierMultiplier = calcOutlierMultiplier(post.views, creatorPosts);
+    const { type: hookType, formula: hookFormula } = classifyHook(post.hookText);
+
+    const ageMs = Date.now() - new Date(post.publishedAt).getTime();
+    const ageDays = ageMs / (1000 * 60 * 60 * 24);
+    const velocityBadge: EnrichedStealCard['velocityBadge'] =
+      ageDays <= 7 && outlierMultiplier >= 3 ? 'FAST_MOVER' :
+      ageDays <= 30 && outlierMultiplier >= 5 ? 'STEADY' :
+      outlierMultiplier >= 8 ? 'SLOW_BURN' : null;
+
+    const voiceRulesApplied: string[] = [];
+    if (voicePortrait) {
+      if (voicePortrait.preferredLanguage?.toLowerCase().includes('hindi')) voiceRulesApplied.push('Hinglish ✓');
+      if (voicePortrait.sentenceStyle?.toLowerCase().includes('short')) voiceRulesApplied.push('Short sentences ✓');
+      if (voicePortrait.preferredHookStyle) voiceRulesApplied.push(`${voicePortrait.preferredHookStyle} hook ✓`);
+      if (voicePortrait.energyLevel) voiceRulesApplied.push(`${voicePortrait.energyLevel} energy ✓`);
+    }
+
+    const stealAngle =
+      post.hookScore && post.hookScore > 70
+        ? `Hook structure (${post.hookScore}/100) — reuse the ${hookType} formula`
+        : post.dnaScore && post.dnaScore > 65
+        ? `Overall format worked at ${outlierMultiplier}x baseline — adapt the structure`
+        : `Topic angle — proven demand in your niche`;
+
+    const suggestedIdea = post.hookText.slice(0, 100);
+    const suggestedAngle = post.format === 'reel'
+      ? `30-second reel using ${hookType} hook, inspired by @${post.competitorHandle}'s ${outlierMultiplier}x outlier`
+      : `YouTube video on proven topic from @${post.competitorHandle}`;
+
+    return {
+      post,
+      stealAngle,
+      suggestedIdea,
+      suggestedAngle,
+      voiceRulesApplied,
+      outlierMultiplier,
+      hookType,
+      hookFormula,
+      velocityBadge,
+    };
+  });
+}
+
+// ── Generate rival script (the full pipeline) ─────────────────────────────────
+export async function generateRivalScript(
+  card: EnrichedStealCard,
+  userId: string,
+  niche: string,
+  userArchetype: string,
+  cardIndex: number,
+  onProgress: (event: { stage: string; message: string }) => void,
+): Promise<RivalScriptResult> {
+  const { getVoicePortrait: loadVoice, formatVoiceForPrompt } = await import('./voice.service');
+  const { runTwoPassStudio } = await import('./deep_analysis.service');
+  const { generateShootPlan } = await import('./shootPlan.service');
+  const { analyzeAlgoSignals } = await import('./algoSignalAnalyzer.service');
+
+  onProgress({ stage: 'voice', message: 'Loading your voice portrait...' });
+  const voicePortrait = await loadVoice(userId).catch(() => null);
+  const voiceContext = voicePortrait ? formatVoiceForPrompt(voicePortrait) : undefined;
+
+  const rivalContext = `
+RIVAL INTELLIGENCE (use this to inform the script structure):
+- Competitor: @${card.post.competitorHandle} on ${card.post.platform}
+- Their post got ${card.post.views.toLocaleString()} views (${card.outlierMultiplier}x their baseline — this is a genuine outlier)
+- Their hook: "${card.post.hookText}"
+- Hook type: ${card.hookType} | Hook formula: ${card.hookFormula}
+- Their DNA score: ${card.post.dnaScore}/100 | Hook score: ${card.post.hookScore}/100
+- What to steal: ${card.stealAngle}
+- What NOT to do: Do not copy their words. Translate the structure into the creator's voice and niche.
+- Engagement rate: ${card.post.engagementRate}% | Format: ${card.post.format}
+`.trim();
+
+  const platform = card.post.platform;
+  const format = card.post.format === 'short' ? 'reel' : card.post.format;
+
+  onProgress({ stage: 'research', message: 'Running deep research on rival topic...' });
+
+  const studioInput = {
+    idea: card.suggestedIdea,
+    platform,
+    niche,
+    format,
+    angle: card.suggestedAngle,
+    archetype: userArchetype,
+    voiceContext: voiceContext
+      ? `${voiceContext}\n\n${rivalContext}`
+      : rivalContext,
+    userQuery: `Create a ${format} inspired by this competitor's viral ${card.hookType} hook structure: "${card.post.hookText}"`,
+    duration: format === 'reel' ? '30s' : format === 'video' ? '8 min' : '30s',
+  };
+
+  let scriptResult: ScriptResult | null = null;
+  try {
+    scriptResult = await runTwoPassStudio(studioInput, (event) => {
+      if (event.type === 'research_update') onProgress({ stage: 'research', message: event.message });
+      if (event.type === 'phase') onProgress({ stage: event.phase, message: event.label });
+    });
+  } catch (err: any) {
+    throw new Error(`Script generation failed: ${err.message}`);
+  }
+
+  onProgress({ stage: 'shoot_plan', message: 'Building shot sequence...' });
+  let shootPlan: ShootPlan | null = null;
+  let signalMap: any = null;
+  try {
+    shootPlan = await generateShootPlan({
+      scriptResult,
+      brief: scriptResult.researchBrief,
+      platform,
+      niche,
+      format,
+      creatorArchetype: userArchetype,
+      voiceContext: voicePortrait
+        ? `Tone: ${voicePortrait.toneSignature}, Energy: ${voicePortrait.energyLevel}, Language: ${voicePortrait.preferredLanguage}`
+        : undefined,
+      soloMode: true,
+    });
+    signalMap = analyzeAlgoSignals(scriptResult.sections, shootPlan, platform);
+  } catch (err: any) {
+    logger.warn({ err: err.message }, 'rival: shoot plan generation failed — non-fatal');
+  }
+
+  return {
+    stealCardIndex: cardIndex,
+    rivalPostId: card.post.postId,
+    rivalHandle: card.post.competitorHandle,
+    rivalViews: card.post.views,
+    rivalHookText: card.post.hookText,
+    script: scriptResult,
+    shootPlan,
+    signalMap,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
 // ── Main orchestrator ─────────────────────────────────────────────────────────
 
 export async function runRivalSpy(
@@ -506,7 +727,7 @@ export async function runRivalSpy(
   niche: string,
   userId: string,
   onProgress: (event: { stage: string; message: string; done?: boolean }) => void,
-): Promise<RivalIntelReport> {
+): Promise<RivalIntelReportV2> {
   onProgress({ stage: 'resolve', message: 'Resolving competitor handles...' });
   const handles = await resolveHandles(
     rawHandles,
@@ -542,7 +763,7 @@ export async function runRivalSpy(
   const voicePortrait = await getVoicePortrait(userId).catch(() => null);
 
   onProgress({ stage: 'steal', message: 'Building Steal Cards...' });
-  const stealCards = await buildStealCards(scoredPosts, voicePortrait);
+  const stealCards = await buildEnrichedStealCards(scoredPosts, voicePortrait);
 
   const avgDnaScore =
     scoredPosts.length > 0
@@ -556,7 +777,7 @@ export async function runRivalSpy(
       ? scoredPosts.reduce((best, p) => ((p.dnaScore || 0) > (best.dnaScore || 0) ? p : best))
       : null;
 
-  const report: RivalIntelReport = {
+  const report: RivalIntelReportV2 = {
     handles,
     totalPostsAnalysed: scoredPosts.length,
     nichePatterns: patterns,
