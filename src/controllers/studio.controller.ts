@@ -327,6 +327,22 @@ export const saveSession = async (
       select: { id: true },
     });
 
+    // Auto-extract learnings if both generated and edited sections are present
+    const generatedSections = (generatedScript as any)?.sections;
+    const editedSections = (editedScript as any)?.sections;
+    if (
+      generatedSections?.length &&
+      editedSections?.length &&
+      generatedSections.length === editedSections.length
+    ) {
+      extractScriptLearnings({
+        userId: user.id,
+        generatedSections,
+        editedSections,
+        intentLabel: "other",
+      }).catch((err: any) => logger.warn({ err: err.message }, "Auto-learning extraction failed — non-fatal"));
+    }
+
     return success(reply, { sessionId: session.id });
   } catch (err) {
     logger.error({ err }, "saveSession failed");
@@ -549,6 +565,7 @@ export const streamScript = async (
     duration,
     userQuery,
     attachedNotes,
+    selectedHookArchetype,
   } = req.body as any;
 
   if (!idea?.trim()) {
@@ -613,6 +630,9 @@ export const streamScript = async (
     }
   }, 15_000);
 
+  let generationCompleted = false;
+  const modelToUse = req.creditCheck?.modelToUse ?? "gpt-4o-mini";
+
   try {
     // Load voice portrait and learned prefs in parallel
     const [vpResult, lpResult] = await Promise.allSettled([
@@ -645,15 +665,12 @@ export const streamScript = async (
         userQuery: userQuery?.trim() || undefined,
         duration: duration?.trim() || undefined,
         attachedNotes,
+        selectedHookArchetype: (selectedHookArchetype as string)?.trim() || undefined,
       },
       (event) => {
         sendSSE(event);
-
         if (event.type === "done") {
-          const modelToUse = req.creditCheck?.modelToUse ?? "gpt-4o-mini";
-          debitCredits(user.id, "script_writing", modelToUse, 3000, 1500).catch(
-            (err) => logger.warn({ err }, "Debit failed"),
-          );
+          generationCompleted = true;
         }
       },
     );
@@ -665,6 +682,11 @@ export const streamScript = async (
     });
   } finally {
     clearInterval(keepAlive);
+    if (generationCompleted) {
+      debitCredits(user.id, "script_writing", modelToUse, 3000, 1500).catch(
+        (err: any) => logger.warn({ err }, "Debit failed — non-fatal"),
+      );
+    }
     reply.raw.end();
   }
 };
@@ -749,5 +771,37 @@ export const generateDirectorsCut = async (
   } catch (err: any) {
     logger.error({ err: err.message, userId: user.id }, "generateDirectorsCut failed");
     return errors.serviceDown(reply, "Director's Cut");
+  }
+};
+
+export const getSession = async (
+  req: FastifyRequest<{ Params: { sessionId: string } }>,
+  reply: FastifyReply,
+) => {
+  const user = req.user as User;
+  const { sessionId } = req.params;
+  if (!sessionId) return errors.validation(reply, "sessionId is required");
+  try {
+    const session = await (prisma as any).studio_scripts.findUnique({
+      where: { id: sessionId },
+      select: {
+        id: true,
+        idea: true,
+        platform: true,
+        niche: true,
+        generated_script: true,
+        edited_script: true,
+        shot_list: true,
+        pinned: true,
+        created_at: true,
+        user_id: true,
+      },
+    });
+    if (!session) return errors.notFound(reply, "Studio session");
+    if (session.user_id !== user.id) return errors.unauthorized(reply, "Not your session");
+    return success(reply, session);
+  } catch (err: any) {
+    logger.error({ err: err.message, sessionId }, "getSession failed");
+    return errors.internal(reply);
   }
 };

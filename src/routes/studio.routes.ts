@@ -153,6 +153,8 @@ export default async function studioRoutes(app: FastifyInstance) {
 
   app.get("/history", auth, ctrl.getScriptHistory as any);
 
+  app.get("/session/:sessionId", { preHandler: [authenticateFirebase] }, ctrl.getSession as any);
+
   app.patch("/pin/:scriptId", auth, ctrl.togglePin as any);
 
   // ── Learning endpoint ──────────────────────────────────────────────────────
@@ -229,6 +231,7 @@ export default async function studioRoutes(app: FastifyInstance) {
             angle: { type: "string" },
             userQuery: { type: "string", maxLength: 500 },
             duration: { type: "string", maxLength: 50 },
+            selectedHookArchetype: { type: "string", maxLength: 50 },
           },
         },
       },

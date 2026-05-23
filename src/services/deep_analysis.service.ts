@@ -16,7 +16,6 @@ import { ChatOpenAI } from "@langchain/openai";
 import { createDeepAgent } from "deepagents";
 import { z } from "zod";
 import OpenAI from "openai";
-import { ApifyClient } from "apify-client";
 import { logger } from "../utils/logger";
 import { routerCall, parseRouterJSON } from "./model_router.service";
 import { generateHookVariants, HookEngineResult } from "./hook_engine.service";
@@ -85,6 +84,7 @@ export interface StudioInput {
   userQuery?: string;
   duration?: string;    // e.g. "5 minutes", "30 min", "1 hour", "45s"
   attachedNotes?: AttachedNote[];
+  selectedHookArchetype?: string;  // e.g. "PAIN_AMPLIFIER", "CURIOSITY_GAP"
 }
 
 export type SSEEvent =
@@ -419,73 +419,6 @@ export async function runDeepResearch(
     },
   );
 
-  // ── Apify scraper using apify-client (correct async pattern) ────────────────
-  const apifyScraperTool = tool(
-    async ({
-      platform: plt,
-      query,
-      maxItems = 8,
-    }: {
-      platform: string;
-      query: string;
-      maxItems?: number;
-    }): Promise<string> => {
-      const token = process.env.APIFY_API_TOKEN;  // ✅ correct env var name
-      if (!token) {
-        logger.warn("[DeepResearch] APIFY_API_TOKEN not set — skip");
-        return JSON.stringify({ error: "APIFY_API_TOKEN not set" });
-      }
-
-      const ACTOR_MAP: Record<string, string> = {
-        instagram: "apify/instagram-hashtag-scraper",
-        youtube: "streamers/youtube-scraper",
-        tiktok: "clockworks/free-tiktok-scraper",
-      };
-      const actorId = ACTOR_MAP[plt] ?? ACTOR_MAP.instagram;
-      logger.info({ plt, query, actorId }, "[DeepResearch] Apify scrape start");
-
-      try {
-        const client = new ApifyClient({ token });
-
-        // ✅ async run — works with slow actors, no sync timeout
-        const run = await client.actor(actorId).call(
-          {
-            hashtags: [query.replace(/^#/, "")],
-            resultsLimit: maxItems,
-            searchQuery: query,
-          },
-          { timeout: 60, memory: 256 },
-        );
-
-        const { items } = await client
-          .dataset(run.defaultDatasetId)
-          .listItems({ limit: maxItems });
-
-        const trimmed = items.slice(0, maxItems).map((it: any) => ({
-          title: it.title || it.caption?.slice(0, 100) || "",
-          views: it.viewCount || it.videoViewCount || it.likesCount || 0,
-          hashtags: (it.hashtags || []).slice(0, 6),
-        }));
-
-        logger.info({ count: trimmed.length }, "[DeepResearch] Apify success");
-        return JSON.stringify({ platform: plt, query, results: trimmed });
-      } catch (err: any) {
-        logger.warn({ err: err.message }, "[DeepResearch] Apify scrape failed");
-        return JSON.stringify({ error: err.message });
-      }
-    },
-    {
-      name: "apify_trend_scraper",
-      description:
-        "Scrape trending posts from Instagram or YouTube. Use this to get real engagement data. Use AFTER web searches.",
-      schema: z.object({
-        platform: z.enum(["instagram", "youtube", "tiktok"]),
-        query: z.string().describe("Topic or hashtag to search"),
-        maxItems: z.number().optional(),
-      }),
-    },
-  );
-
   // ── Researcher subagent ───────────────────────────────────────────────────
   const researcherSubagent = {
     name: "researcher",
@@ -500,14 +433,13 @@ Step 1: web_search → "${idea} trending ${platform} India 2025"
 Step 2: web_search → "${niche} viral content ${platform} India 2025"
 Step 3: web_search → "${idea} Indian audience pain points ${niche}"
 Step 4: web_search → "best hooks ${niche} creators ${platform} India"
-Step 5: apify_trend_scraper → platform="${platform}", query="${idea}" (call ONCE, accept any result)
+Step 5: web_search → "${idea} viral reels creators India ${niche}"
 Step 6: STOP all tool calls. Write the JSON brief immediately.
  
 CRITICAL RULES:
-- If apify_trend_scraper returns skipped:true — that is fine, do NOT retry, go to Step 6
-- Do NOT run more than 4 web_search calls
+- Do NOT run more than 5 web_search calls
 - Do NOT call any tool more than once
-- After Step 5 (or if it fails), output the JSON immediately — no more tool calls
+- After Step 5, output the JSON immediately — no more tool calls
  
 Return ONLY this JSON — no markdown, no explanation, start with { end with }:
 {
@@ -523,9 +455,9 @@ Return ONLY this JSON — no markdown, no explanation, start with { end with }:
   "rawSources": "Key sources and data points found in your searches"
 }`,
     model: new ChatOpenAI({ model: "gpt-4o-mini", temperature: 0.2 }).bindTools(
-      [webSearchTool, apifyScraperTool],  // ✅ both tools in the LLM manifest
+      [webSearchTool],
     ),
-    tools: [webSearchTool, apifyScraperTool],
+    tools: [webSearchTool],
   };
 
   // ── Main deep agent — with recursion_limit ────────────────────────────────
@@ -613,7 +545,6 @@ ${userQuery ? `- Pay special attention to the creator's specific ask: "${userQue
       let finalContent = "";
       let lastEmitted = "";
       let searchCount = 0;
-      let apifyCalled = false;
 
       const emit = (msg: string) => {
         if (msg !== lastEmitted) {
@@ -684,15 +615,6 @@ ${userQuery ? `- Pay special attention to the creator's specific ask: "${userQue
               searchCount++;
               const q: string = tc.args?.query ?? "";
               emit(`Search ${searchCount}: "${q.slice(0, 55)}"`);
-            } else if (tc.name === "apify_trend_scraper") {
-              if (!apifyCalled) {
-                apifyCalled = true;
-                emit(`Scraping ${tc.args?.platform ?? "platform"} data…`);
-              } else {
-                logger.warn(
-                  "[DeepResearch] Apify called >1 time — potential loop",
-                );
-              }
             }
           }
         }
@@ -706,17 +628,6 @@ ${userQuery ? `- Pay special attention to the creator's specific ask: "${userQue
 
           if (toolName === "web_search") {
             emit(`Search ${searchCount} complete…`);
-          } else if (toolName === "apify_trend_scraper") {
-            try {
-              const parsed = JSON.parse(content);
-              emit(
-                parsed.skipped
-                  ? "Platform data unavailable — using web results…"
-                  : "Platform data received…",
-              );
-            } catch {
-              emit("Platform data processed…");
-            }
           } else if (toolName === "task") {
             emit("Subagent complete — extracting brief…");
           }
