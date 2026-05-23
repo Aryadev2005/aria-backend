@@ -6,6 +6,7 @@ import { logger } from "../utils/logger";
 import { prisma } from "../config/database";
 import { User } from "../types";
 import { debitCredits } from "../services/credits.service";
+import { alertDebitFailed } from "../utils/alerting";
 import {
   listSessions,
   getSession,
@@ -92,10 +93,7 @@ export const sendMessage = async (
       2000, // approx input tokens
       800, // approx output tokens
     ).catch((err) =>
-      logger.warn(
-        { err },
-        "Debit failed — non-fatal, response already returned",
-      ),
+      alertDebitFailed(user.id, "aria_chat", err),
     );
 
     return success(reply, {
@@ -197,10 +195,7 @@ export const streamMessage = async (
       2000, // approx input tokens
       1200, // approx output tokens (streaming can be longer)
     ).catch((err) =>
-      logger.warn(
-        { err },
-        "Debit failed — non-fatal, stream already completed",
-      ),
+      alertDebitFailed(user.id, "aria_chat", err),
     );
 
     // Persist the assistant reply after streaming completes

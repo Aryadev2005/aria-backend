@@ -9,8 +9,9 @@ import { startEmbeddingWorker,  stopEmbeddingWorker  } from "./embedding.worker"
 import { startTrajectoryWorker, stopTrajectoryWorker } from "./trajectory.worker";
 import { startSongWorker,       stopSongWorker       } from "./song.worker";
 import { startDiscoveryWorker,  stopDiscoveryWorker  } from "./discovery.worker";
-import { startVoiceWorker,      stopVoiceWorker      } from "./voice.worker";
-import { scheduleEmbedJobs, scheduleSongJobs, scheduleDiscoveryJobs, scheduleVoiceJobs } from "../config/queue.additions";
+import { startVoiceWorker,        stopVoiceWorker        } from "./voice.worker";
+import { startWeeklyReportWorker, stopWeeklyReportWorker } from "./weekly_report.worker";
+import { scheduleEmbedJobs, scheduleSongJobs, scheduleDiscoveryJobs, scheduleVoiceJobs, scheduleWeeklyReportJobs } from "../config/queue.additions";
 
 const workers: any[] = [];
 
@@ -82,11 +83,19 @@ export const startAllWorkers = async () => {
     logger.warn({ err: err.message }, "Voice worker failed to start");
   }
 
+  try {
+    const weeklyReportWorker = await startWeeklyReportWorker();
+    if (weeklyReportWorker) workers.push(weeklyReportWorker);
+  } catch (err: any) {
+    logger.warn({ err: err.message }, "Weekly report worker failed to start");
+  }
+
   // Schedule recurring jobs
   await scheduleEmbedJobs();
   await scheduleSongJobs();
   await scheduleDiscoveryJobs();
   await scheduleVoiceJobs();
+  await scheduleWeeklyReportJobs();
 
   logger.info({ workerCount: workers.length }, "All workers started");
 };
@@ -99,6 +108,7 @@ export const stopAllWorkers = async () => {
     stopSongWorker(),
     stopDiscoveryWorker(),
     stopVoiceWorker(),
+    stopWeeklyReportWorker(),
   ]);
   logger.info("All workers stopped");
 };

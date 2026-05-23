@@ -3,6 +3,7 @@ import * as profileSvc from "../services/profile.service";
 import { success, errors } from "../utils/response";
 import { logger } from "../utils/logger";
 import { debitCredits } from "../services/credits.service";
+import { alertDebitFailed } from "../utils/alerting";
 import { prisma } from "../config/database";
 import { cache, CacheKeys } from "../config/redis";
 import { User } from "../types";
@@ -411,7 +412,7 @@ export const rebuildVoicePortrait = async (
 
     // Debit AFTER successful voice portrait rebuild
     await debitCredits(user.id, "voice_portrait", modelToUse, 4000, 2000).catch(
-      (err) => logger.warn({ err }, "Debit failed — non-fatal"),
+      (err) => alertDebitFailed(user.id, "voice_portrait", err),
     );
 
     return success(reply, {

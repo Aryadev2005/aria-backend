@@ -7,6 +7,8 @@ import { success, errors } from "../utils/response";
 import { logger } from "../utils/logger";
 import { User } from "../types";
 import { debitCredits } from "../services/credits.service";
+import { alertDebitFailed } from "../utils/alerting";
+import { getOrGenerateWeeklyReport } from "../services/weeklyReport.service";
 
 /**
  * GET /api/v1/analytics/dashboard
@@ -190,10 +192,7 @@ Respond ONLY with valid JSON:
       800, // approx output tokens
      
     ).catch((err) =>
-      logger.warn(
-        { err },
-        "Debit failed — non-fatal, prediction already returned",
-      ),
+      alertDebitFailed(user.id, "growth_roadmap", err),
     );
 
     return success(reply, {
@@ -267,7 +266,7 @@ Respond ONLY with valid JSON:
       400, // approx output tokens
       
     ).catch((err) =>
-      logger.warn({ err }, "Debit failed — non-fatal, times already returned"),
+      alertDebitFailed(user.id, "posting_package", err),
     );
 
     return success(reply, {
@@ -340,10 +339,7 @@ Respond ONLY with valid JSON:
       600, // approx output tokens
      
     ).catch((err) =>
-      logger.warn(
-        { err },
-        "Debit failed — non-fatal, insights already returned",
-      ),
+      alertDebitFailed(user.id, "competitor_gap", err),
     );
 
     return success(reply, {
@@ -357,7 +353,7 @@ Respond ONLY with valid JSON:
 };
 
 /**
- * Get weekly performance report — AI generated
+ * Get weekly performance report — served from worker-pre-generated cache when available
  */
 export const getWeeklyReport = async (
   req: FastifyRequest,
@@ -367,63 +363,10 @@ export const getWeeklyReport = async (
   const modelToUse = req.creditCheck?.modelToUse ?? "gpt-4o-mini";
 
   try {
-    const cacheKey = `weekly-report:${user.id}`;
+    const report = await getOrGenerateWeeklyReport(user.id);
 
-    const report = await cache.getOrSet(
-      cacheKey,
-      async () => {
-        const prompt = `You are ARIA — India's creator intelligence engine.
-
-Creator:
-- Niche: ${user.niches?.[0] || "general"}
-- Platform: ${user.primary_platform || "instagram"}
-- Followers: ${user.follower_range || "Under 1K"}
-- Archetype: ${user.archetype || "CREATOR"}
-
-Generate a motivating weekly performance summary and next-week plan for this Indian creator.
-
-Respond ONLY with valid JSON:
-{
-  "week": "current week date range",
-  "summary": "One sentence headline about this week",
-  "highlights": [
-    "Specific highlight 1",
-    "Specific highlight 2",
-    "Specific highlight 3"
-  ],
-  "topPost": {
-    "caption": "Example top post caption relevant to their niche",
-    "views": 0,
-    "likes": 0,
-    "saves": 0,
-    "comments": 0
-  },
-  "nextWeekPlan": [
-    "Specific action 1 with day and time in IST",
-    "Specific action 2 referencing Indian trends",
-    "Specific action 3 with format recommendation"
-  ]
-}`;
-
-        return await groqService._callGroq(prompt, {
-          useLlama: false,
-          maxTokens: 600,
-          model: modelToUse,
-        });
-      },
-      TTL.DASHBOARD,
-    );
-
-    // Debit AFTER successful response
-    await debitCredits(
-      user.id,
-      "weekly_report",
-      modelToUse,
-      1000, // approx input tokens
-      700, // approx output tokens
-  
-    ).catch((err) =>
-      logger.warn({ err }, "Debit failed — non-fatal, report already returned"),
+    await debitCredits(user.id, "weekly_report", modelToUse, 1000, 700).catch(
+      (err) => alertDebitFailed(user.id, "weekly_report", err),
     );
 
     return success(reply, {

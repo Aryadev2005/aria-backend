@@ -54,6 +54,7 @@ export interface ScriptParams {
   angle?: string;
   followerRange?: string;
   userId: string;
+  attachedNotes?: Array<{ title: string; content: string; tags: string[] }>;
 }
 
 /**
@@ -70,6 +71,7 @@ export const generateScriptStructure = async ({
   angle,
   followerRange,
   userId,
+  attachedNotes,
 }: ScriptParams) => {
   const isYouTube = platform?.toLowerCase() === "youtube";
   // const isShortForm = !isYouTube || format?.includes('Short');
@@ -103,6 +105,16 @@ If they are a faceless creator, every visual direction should not require showin
 Write it as if you know this person and their audience personally.`
     : "";
 
+  const notesBlock =
+    attachedNotes && attachedNotes.length > 0
+      ? `\nCREATOR'S ATTACHED NOTES (use these as raw material — ideas, research, angles the creator wants to use):\n${attachedNotes
+          .map(
+            (n, i) =>
+              `[Note ${i + 1}] ${n.title ? `"${n.title}" ` : ""}${n.tags?.length ? `(${n.tags.join(", ")}) ` : ""}\n${n.content}`,
+          )
+          .join("\n\n")}\nWeave these notes into the script naturally. Do not quote them verbatim — transform them.\n`
+      : "";
+
   const prompt = `You are ARIA — India's top content strategist.
 
 Creator: ${archetype} | Niche: ${niche} | Platform: ${platform}
@@ -111,7 +123,7 @@ Format: ${format || (isYouTube ? "YouTube 8min" : "Reel 30s")}
 Mood: ${mood || "informative"} | Collab: ${collaboration || "solo"}
 Angle: "${angle || "general"}"
 Followers: ${followerRange || "10K-50K"}
-${learnedPreferences}
+${learnedPreferences}${notesBlock}
 RULES:
 - Give EXACT words for the hook (first 3 seconds). This is the most important line.
 - Each section has: duration, what to say/show, ARIA tip

@@ -9,6 +9,7 @@ import { prisma } from "../config/database";
 import { success, errors } from "../utils/response";
 import { logger } from "../utils/logger";
 import { debitCredits } from "../services/credits.service";
+import { alertDebitFailed } from "../utils/alerting";
 import { markTrialUsed } from "../services/firstExperience.service";
 import path from "path";
 import fs from "fs";
@@ -28,7 +29,7 @@ export const getScriptStructure = async (
   reply: FastifyReply,
 ) => {
   const user = req.user as User;
-  const { idea, platform, niche, format, mood, collaboration, angle } =
+  const { idea, platform, niche, format, mood, collaboration, angle, attachedNotes } =
     req.body as any;
   const modelToUse = req.creditCheck?.modelToUse ?? "gpt-4o-mini";
 
@@ -44,10 +45,11 @@ export const getScriptStructure = async (
       angle,
       followerRange: user.follower_range || undefined,
       userId: user.id,
+      attachedNotes: attachedNotes?.length ? attachedNotes : undefined,
     });
 
     await debitCredits(user.id, "script_writing", modelToUse, 1500, 1000).catch(
-      (err) => logger.warn({ err }, "Debit failed"),
+      (err) => alertDebitFailed(user.id, "script_writing", err),
     );
 
     return success(reply, {
@@ -85,7 +87,7 @@ export const adviseSection = async (
     });
 
     await debitCredits(user.id, "script_writing", modelToUse, 1200, 800).catch(
-      (err) => logger.warn({ err }, "Debit failed"),
+      (err) => alertDebitFailed(user.id, "script_writing", err),
     );
 
     return success(reply, {
@@ -126,7 +128,7 @@ export const matchBGM = async (
       modelToUse,
       800,
       400,
-    ).catch((err) => logger.warn({ err }, "Debit failed"));
+    ).catch((err) => alertDebitFailed(user.id, "song_recommendations", err));
 
     return success(reply, {
       ...result,
@@ -159,7 +161,7 @@ export const getShotList = async (
     });
 
     await debitCredits(user.id, "script_writing", modelToUse, 1000, 600).catch(
-      (err) => logger.warn({ err }, "Debit failed"),
+      (err) => alertDebitFailed(user.id, "script_writing", err),
     );
 
     return success(reply, {
@@ -192,7 +194,7 @@ export const getEditingHelp = async (
     });
 
     await debitCredits(user.id, "script_writing", modelToUse, 800, 400).catch(
-      (err) => logger.warn({ err }, "Debit failed"),
+      (err) => alertDebitFailed(user.id, "script_writing", err),
     );
 
     return success(reply, {
@@ -226,7 +228,7 @@ export const analyseVideoUrl = async (
     });
 
     await debitCredits(user.id, "video_analysis", modelToUse, 3000, 1500).catch(
-      (err) => logger.warn({ err }, "Debit failed"),
+      (err) => alertDebitFailed(user.id, "video_analysis", err),
     );
 
     return success(reply, {
@@ -277,7 +279,7 @@ export const analyseVideoUpload = async (req: any, reply: FastifyReply) => {
     }
 
     await debitCredits(user.id, "video_analysis", modelToUse, 3500, 1500).catch(
-      (err) => logger.warn({ err }, "Debit failed"),
+      (err) => alertDebitFailed(user.id, "video_analysis", err),
     );
 
     return success(reply, {
@@ -513,7 +515,7 @@ export const regenerateSection = async (
     });
 
     await debitCredits(user.id, "script_writing", modelToUse, 800, 400).catch(
-      (err) => logger.warn({ err }, "Debit failed"),
+      (err) => alertDebitFailed(user.id, "script_writing", err),
     );
 
     return success(reply, {
@@ -685,7 +687,7 @@ export const streamScript = async (
     clearInterval(keepAlive);
     if (generationCompleted) {
       debitCredits(user.id, "script_writing", modelToUse, 3000, 1500).catch(
-        (err: any) => logger.warn({ err }, "Debit failed — non-fatal"),
+        (err: any) => alertDebitFailed(user.id, "script_writing", err),
       );
 
       // ── MARK TRIAL AS USED ───────────────────────────────────────────
@@ -767,7 +769,7 @@ export const generateDirectorsCut = async (
 
     // Debit credits
     await debitCredits(user.id, "shoot_plan", modelToUse, 1200, 800).catch(
-      (err) => logger.warn({ err }, "Shoot plan debit failed"),
+      (err) => alertDebitFailed(user.id, "shoot_plan", err),
     );
 
     return success(reply, {

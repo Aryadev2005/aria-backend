@@ -5,6 +5,7 @@ import { cache } from "../config/redis";
 import { success, errors } from "../utils/response";
 import { logger } from "../utils/logger";
 import { debitCredits } from "../services/credits.service";
+import { alertDebitFailed } from "../utils/alerting";
 import { markTrialUsed } from "../services/firstExperience.service";
 import { YoutubeTranscript } from "youtube-transcript";
 import { User } from "../types";
@@ -1013,7 +1014,7 @@ export const analyseVideo = async (
         req.creditCheck?.modelToUse ?? "gpt-4o-mini",
         3000,
         1500,
-      ).catch((err: any) => logger.warn({ err }, "Credit debit failed — non-fatal"));
+      ).catch((err: any) => alertDebitFailed(user.id, "video_analysis", err));
 
       // ── MARK TRIAL AS USED ───────────────────────────────────────────
       if (req.creditCheck?.isTrial && req.creditCheck?.trialAction) {
@@ -1092,7 +1093,7 @@ export const getCompetitorGap = async (
     const modelToUse  = req.creditCheck?.modelToUse ?? "gpt-4o-mini";
 
     await debitCredits(user.id, "competitor_gap", modelToUse, 2000, 800)
-      .catch((err: any) => logger.warn({ err }, "Debit failed — non-fatal"));
+      .catch((err: any) => alertDebitFailed(user.id, "competitor_gap", err));
 
     return success(reply, {
       ...report,

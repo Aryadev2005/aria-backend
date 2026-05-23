@@ -63,4 +63,12 @@ export default async function calendarEntryRoutes(app: FastifyInstance) {
       params: { type: 'object', properties: { id: { type: 'string' } } },
     },
   }, ctrl.deleteEntry as any);
+
+  // GET /api/v1/calendar/entries/:id/timing-suggestion
+  app.get('/entries/:id/timing-suggestion', {
+    ...auth,
+    schema: {
+      params: { type: 'object', properties: { id: { type: 'string' } } },
+    },
+  }, ctrl.getTimingSuggestion as any);
 }

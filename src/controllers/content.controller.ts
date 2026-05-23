@@ -5,6 +5,7 @@ import { success, errors, paginated } from "../utils/response";
 import { logger } from "../utils/logger";
 import { User } from "../types";
 import { debitCredits } from "../services/credits.service";
+import { alertDebitFailed } from "../utils/alerting";
 
 export interface GenerateContentBody {
   trendTitle: string;
@@ -48,10 +49,7 @@ export const generateContent = async (
       1000, // approx output tokens
       
     ).catch((err) =>
-      logger.warn(
-        { err },
-        "Debit failed — non-fatal, content already returned",
-      ),
+      alertDebitFailed(user.id, "content_generation", err),
     );
 
     // Save to history async — don't block response
@@ -120,7 +118,7 @@ export const generateHooks = async (
       400, // approx output tokens
      
     ).catch((err) =>
-      logger.warn({ err }, "Debit failed — non-fatal, hooks already returned"),
+      alertDebitFailed(user.id, "hook_rewrite", err),
     );
 
     return success(reply, {
@@ -168,7 +166,7 @@ export const rewriteHook = async (
       300, // approx output tokens
       
     ).catch((err) =>
-      logger.warn({ err }, "Debit failed — non-fatal, hook already returned"),
+      alertDebitFailed(user.id, "hook_rewrite", err),
     );
 
     return success(reply, {
@@ -215,10 +213,7 @@ export const repurposeContent = async (
       1500, // approx output tokens (repurposed content)
      
     ).catch((err) =>
-      logger.warn(
-        { err },
-        "Debit failed — non-fatal, content already returned",
-      ),
+      alertDebitFailed(user.id, "content_generation", err),
     );
 
     return success(reply, {
@@ -266,10 +261,7 @@ export const analyseContent = async (
       800, // approx output tokens (analysis)
      
     ).catch((err) =>
-      logger.warn(
-        { err },
-        "Debit failed — non-fatal, analysis already returned",
-      ),
+      alertDebitFailed(user.id, "caption_analysis", err),
     );
 
     return success(reply, {

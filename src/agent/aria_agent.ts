@@ -17,6 +17,8 @@ import { hybridTools } from "./tools.hybrid";
 import { observeTurn } from "../services/aria_observer.service";
 
 import { buildARIASystemPrompt } from "../services/aria_prompt.service";
+import { classifyIntent } from "../services/aria_intent.service";
+import { preRunToolData } from "../services/aria_prerun.service";
 import {
   getMemory,
   extractLearningsFromTurn,
@@ -183,6 +185,8 @@ export const buildARIAAgent = async (
   streaming = false,
   entryScreen = "direct",
   sessionContext: Record<string, any> = {},
+  intentResult?: import('../services/aria_intent.service').IntentResult,
+  preRunData?: import('../services/aria_prerun.service').PreRunData,
 ) => {
   const llm = createLLM(streaming);
   const checkpointer = await getCheckpointer(); // null-safe — may be null if DB slow
@@ -228,6 +232,8 @@ export const buildARIAAgent = async (
     entryScreen,
     pendingSuggestions: resolvedPendingSuggestions,
     voicePortrait:      resolvedPortrait,
+    intentResult,
+    preRunData,
   });
 
   const agentConfig: any = {
@@ -273,12 +279,33 @@ export const invokeARIAAgent = async ({
   try {
     logger.info({ userId: user.id, sessionId }, "ARIA agent invoked");
 
+    const userNiche = Array.isArray(user.niches) ? user.niches[0] : (user.niches ?? 'general');
+    const userPlatform = user.primary_platform ?? 'instagram';
+
+    // Run classifier + initial pre-run in parallel
+    const [intentResult, initialPreRun] = await Promise.all([
+      classifyIntent(message),
+      preRunToolData('general_chat', user.id, userNiche, userPlatform),
+    ]);
+
+    // Re-run pre-fetch with real intent when confidence is high enough
+    const refinedPreRun = intentResult.confidence >= 60
+      ? await preRunToolData(intentResult.intent, user.id, userNiche, userPlatform)
+      : initialPreRun;
+
+    logger.info(
+      { intent: intentResult.intent, confidence: intentResult.confidence, sources: refinedPreRun.sources, empty: refinedPreRun.empty },
+      'ARIA pre-run complete',
+    );
+
     const agent = await buildARIAAgent(
       db,
       user,
       false,
       entryScreen ?? "direct",
       sessionContext ?? {},
+      intentResult,
+      refinedPreRun,
     );
     const config = {
       configurable: { thread_id: sessionId },

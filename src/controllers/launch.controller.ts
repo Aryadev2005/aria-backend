@@ -3,6 +3,7 @@ import * as launchSvc from "../services/launch.service";
 import { success, errors } from "../utils/response";
 import { logger } from "../utils/logger";
 import { debitCredits } from "../services/credits.service";
+import { alertDebitFailed } from "../utils/alerting";
 import { getPlatformContext } from "../utils/platformRouter";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -75,7 +76,7 @@ export const getPostingPackage = async (
       1500,
       800,
      
-    ).catch((err) => logger.warn({ err }, "Debit failed — non-fatal"));
+    ).catch((err) => alertDebitFailed(user.id, "posting_package", err));
 
     return success(reply, { ...pkg, creditsUsed: req.creditCheck?.featureCharge ?? 0 });
   } catch (err) {
@@ -133,7 +134,7 @@ export const getTimingIntelligence = async (
       1000,
       600,
      
-    ).catch((err) => logger.warn({ err }, "Debit failed — non-fatal"));
+    ).catch((err) => alertDebitFailed(user.id, "posting_package", err));
 
     return success(reply, {
       ...timing,
@@ -188,7 +189,7 @@ export const getBrandAlert = async (
       1200,
       700,
     
-    ).catch((err) => logger.warn({ err }, "Debit failed — non-fatal"));
+    ).catch((err) => alertDebitFailed(user.id, "posting_package", err));
 
     return success(reply, {
       ...alert,

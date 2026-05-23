@@ -9,6 +9,7 @@ import {
 import { User } from "../types";
 import { ChatOpenAI } from "@langchain/openai";
 import { debitCredits } from "../services/credits.service";
+import { alertDebitFailed } from "../utils/alerting";
 
 // Dynamic import for agent logic to avoid issues if they are not yet TS or have circular deps
 // But since we are switching to ES Modules/TS, we can use import.
@@ -83,10 +84,7 @@ export const chat = async (
       800, // approx output tokens
     
     ).catch((err) =>
-      logger.warn(
-        { err },
-        "Debit failed — non-fatal, response already returned",
-      ),
+      alertDebitFailed(user.id, "aria_chat", err),
     );
 
     return success(reply, {
@@ -246,12 +244,7 @@ export const chatStream = async (
           2000, // approx input tokens (with context)
           1200, // approx output tokens (streaming can be longer)
     
-        ).catch((err) =>
-          logger.warn(
-            { err },
-            "Debit failed — non-fatal, stream already completed",
-          ),
-        );
+        ).catch((err) => alertDebitFailed(user.id, "aria_chat", err));
 
         reply.raw.write(
           `data: ${JSON.stringify({ type: "creditsUsed", credits: req.creditCheck?.featureCharge ?? 0 })}\n\n`,

@@ -5,6 +5,7 @@ import { success, errors } from '../utils/response';
 import { logger } from '../utils/logger';
 import { User } from '../types';
 import { debitCredits, grantCredits } from '../services/credits.service';
+import { alertDebitFailed } from '../utils/alerting';
 import { markTrialUsed } from '../services/firstExperience.service';
 import { runRivalSpy, generateRivalScript } from '../services/rival.service';
 import { prisma } from '../config/database';
@@ -105,7 +106,7 @@ export const streamRivalSpy = async (req: FastifyRequest, reply: FastifyReply) =
     // Debit AI token usage on top of the already-reserved feature charge (non-fatal)
     // For trials, this is also a no-op since modelToUse forces gpt-4o-mini
     await debitCredits(user.id, 'rival_spy', modelToUse, 3500, 1500, 0).catch(
-      (err: any) => logger.warn({ err }, 'rival: AI token debit failed — non-fatal'),
+      (err: any) => alertDebitFailed(user.id, 'rival_spy', err),
     );
 
     sendSSE({ type: 'done', isTrial: isTrialRun });
@@ -191,7 +192,7 @@ export const streamRivalScript = async (req: FastifyRequest, reply: FastifyReply
 
     // Debit AI token usage on top of the already-reserved feature charge (non-fatal)
     await debitCredits(user.id, 'rival_script', modelToUse, 4000, 2000, 0).catch(
-      (err: any) => logger.warn({ err }, 'rival_script: AI token debit failed — non-fatal'),
+      (err: any) => alertDebitFailed(user.id, 'rival_script', err),
     );
 
     sendSSE({ type: 'done' });

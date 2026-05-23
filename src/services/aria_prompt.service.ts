@@ -2,6 +2,7 @@ import { User } from "../types";
 import { buildMemoryBlock } from "./aria_memory.service";
 import { formatVoiceForPrompt } from "./voice.service";
 import { ariaLibraryNode } from "./aria-openui-library.node";
+import { buildCulturalCalendarBlock } from "./culturalCalendar.service";
 const OPENUI_SYSTEM_PROMPT = ariaLibraryNode.prompt();
 
 // ── Token budget helpers ─────────────────────────────────────────────────────
@@ -112,6 +113,8 @@ export interface PromptParams {
   entryScreen?: string;
   pendingSuggestions?: any[];
   voicePortrait?: any;
+  intentResult?: import('./aria_intent.service').IntentResult;
+  preRunData?: import('./aria_prerun.service').PreRunData;
 }
 
 // ── Main prompt builder ──────────────────────────────────────────────────────
@@ -122,6 +125,8 @@ export const buildARIASystemPrompt = ({
   entryScreen = "direct",
   pendingSuggestions = [],
   voicePortrait = null,
+  intentResult,
+  preRunData,
 }: PromptParams) => {
   const archetype = user?.archetype || "TRENDSETTER";
   const archetypeData =
@@ -298,6 +303,8 @@ Data available:
   budgetedContext += analysisResult.text;
   usedTokens = analysisResult.tokens;
 
+  const culturalBlock = buildCulturalCalendarBlock();
+
   return `You are ARIA — the world-class AI content strategist inside TrendAI, India's first creator OS built for 40 lakh Indian content creators.
 
 ════════════════════════════════════════
@@ -349,7 +356,7 @@ ${analyticsBlock}
 CONTEXT
 ════════════════════════════════════════
 SCREEN: ${SCREEN_CONTEXT[entryScreen] || SCREEN_CONTEXT.direct}
-${budgetedContext}
+${culturalBlock}${budgetedContext}
 ${freshAnalysisBlock}
 ${emotionalRegister}
 
@@ -429,5 +436,6 @@ When the user asks something out of scope, respond with a single warm but firm r
 
 "Yaar, that's outside my lane! 😄 I'm ARIA — your content strategy brain. I'm built specifically to help you grow your creator brand on Instagram, YouTube, and beyond. Ask me about your content, trends, scripts, or growth strategy and I'll go all in for you. 🎯"
 
-Then offer one specific thing ARIA CAN help with right now based on their profile.`;
+Then offer one specific thing ARIA CAN help with right now based on their profile.${preRunData?.block ?? ''}
+${intentResult ? `\nYour response budget for this message: ${intentResult.tokenBudget} tokens max. Intent detected: ${intentResult.intent}. Be appropriately thorough — not padded, not truncated.` : ''}`;
 };

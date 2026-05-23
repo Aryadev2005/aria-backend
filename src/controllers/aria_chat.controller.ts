@@ -5,6 +5,8 @@ import { success, errors } from "../utils/response";
 import { logger } from "../utils/logger";
 
 import { buildARIASystemPrompt } from "../services/aria_prompt.service";
+import { classifyIntent } from "../services/aria_intent.service";
+import { preRunToolData } from "../services/aria_prerun.service";
 import { ARIA_TOOLS, dispatchTool } from "../services/aria_tools.service";
 import {
   getMemory,
@@ -196,12 +198,26 @@ export const chat = async (
       scraped_summary: user.scraped_summary || null,
     };
 
+    const userNiche = Array.isArray(resolvedUser.niches) ? resolvedUser.niches[0] : 'general';
+    const userPlatform = (resolvedUser.primary_platform as string) ?? 'instagram';
+
+    // Classifier + pre-run in parallel
+    const [intentResult, initialPreRun] = await Promise.all([
+      classifyIntent(message),
+      preRunToolData('general_chat', user.id, userNiche, userPlatform),
+    ]);
+    const refinedPreRun = intentResult.confidence >= 60
+      ? await preRunToolData(intentResult.intent, user.id, userNiche, userPlatform)
+      : initialPreRun;
+
     const systemPrompt = buildARIASystemPrompt({
       user: resolvedUser as any,
       memory,
       sessionContext,
       entryScreen,
       pendingSuggestions,
+      intentResult,
+      preRunData: refinedPreRun,
     });
 
     // ── 3. Build message history ─────────────────────────────────────────────
@@ -233,7 +249,7 @@ export const chat = async (
 
     const firstCall = await groq().chat.completions.create({
       model: MODEL,
-      max_tokens: 1200,
+      max_tokens: intentResult.tokenBudget,
       messages,
       tools: ARIA_TOOLS as any,
       tool_choice: "auto",

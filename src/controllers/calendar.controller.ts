@@ -5,6 +5,7 @@ import { prisma } from "../config/database";
 import { User } from "../types";
 import { logger } from "../utils/logger";
 import { debitCredits } from "../services/credits.service";
+import { alertDebitFailed } from "../utils/alerting";
 
 interface GenerateCalendarBody {
   niche: string;
@@ -72,7 +73,7 @@ export const generate = async (
         2500,
         1200,
      
-      ).catch((err) => logger.warn({ err }, "Debit failed — non-fatal"));
+      ).catch((err) => alertDebitFailed(userId, "content_calendar", err));
     }
 
     return reply.send({

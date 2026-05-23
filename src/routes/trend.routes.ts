@@ -6,6 +6,7 @@ import type {
 } from "../controllers/trend.controller";
 import { authenticateFirebase } from "../middleware/auth.middleware";
 import { requireCredits } from "../middleware/credits.middleware";
+import { getUpcomingEvents, getEventContentAngles } from "../services/culturalCalendar.service";
 
 export default async function trendRoutes(app: FastifyInstance) {
   app.get<{ Querystring: GetTrendsQuery }>(
@@ -155,5 +156,28 @@ export default async function trendRoutes(app: FastifyInstance) {
       },
     },
     trendController.recordTrendInteraction,
+  );
+
+  // ── GET /api/v1/trends/cultural-calendar ─────────────────────────────────
+  app.get('/cultural-calendar', { preHandler: [authenticateFirebase] }, (_req, reply) => {
+    try {
+      const events = getUpcomingEvents(30);
+      return reply.send({ success: true, data: { events } });
+    } catch (err) {
+      return reply.status(500).send({ success: false, error: 'cultural calendar failed' });
+    }
+  });
+
+  // ── GET /api/v1/trends/cultural-calendar/:id/angles ───────────────────────
+  app.get<{ Params: { id: string } }>(
+    '/cultural-calendar/:id/angles',
+    { preHandler: [authenticateFirebase] },
+    (req, reply) => {
+      const angles = getEventContentAngles(req.params.id);
+      if (!angles.length) {
+        return reply.status(404).send({ success: false, error: 'Event not found' });
+      }
+      return reply.send({ success: true, data: { angles } });
+    },
   );
 }

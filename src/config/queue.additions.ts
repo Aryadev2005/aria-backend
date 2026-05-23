@@ -111,3 +111,21 @@ export async function scheduleVoiceJobs(): Promise<void> {
     logger.warn({ err: err.message }, "Failed to schedule voice jobs");
   }
 }
+
+// ── Weekly report pre-generation schedule ─────────────────────────────────────
+// Every Monday at 05:30 IST (00:00 UTC) — pre-warm cache for all active users
+
+export async function scheduleWeeklyReportJobs(): Promise<void> {
+  try {
+    const reportQueue = new Queue("weekly-report", { connection: getConnection() });
+    await reportQueue.upsertJobScheduler(
+      "weekly-report-scheduled",
+      { every: 7 * 24 * 60 * 60 * 1000 }, // every 7 days
+      { name: "weekly-report-generate", data: {} },
+    );
+    logger.info("Weekly report jobs scheduled (every 7 days)");
+    await reportQueue.close();
+  } catch (err: any) {
+    logger.warn({ err: err.message }, "Failed to schedule weekly report jobs");
+  }
+}

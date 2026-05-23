@@ -15,6 +15,7 @@ import OpenAI from 'openai';
 import { prisma } from '../config/database';
 import { cache } from '../config/redis';
 import { logger } from '../utils/logger';
+import { alertApifyEmptyReturn } from '../utils/alerting';
 import { computeVideoDNAReport } from './videoDnaScoring.service';
 import { getVoicePortrait } from './voice.service';
 import {
@@ -870,9 +871,8 @@ export async function runRivalSpy(
   const rawPosts = await harvestTopContent(resolved);
 
   if (rawPosts.length === 0) {
-    throw new Error(
-      'Could not scrape content from any of the provided profiles. They may be private.',
-    );
+    await alertApifyEmptyReturn('rival_spy', niche || 'unknown', userId);
+    throw new Error('No posts scraped from any competitor handle. They may be private or Apify quota is exhausted.');
   }
 
   onProgress({ stage: 'dna', message: `Running Video DNA on ${rawPosts.length} posts...` });

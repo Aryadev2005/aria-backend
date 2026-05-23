@@ -8,6 +8,7 @@ import { prisma } from "../config/database";
 import { success, errors } from "../utils/response";
 import { logger } from "../utils/logger";
 import { debitCredits } from "../services/credits.service";
+import { alertDebitFailed } from "../utils/alerting";
 import { User } from "../types";
 import {
   generateThumbnailVariants,
@@ -114,7 +115,7 @@ export const generateVariants = async (
 
     // Debit credits (non-fatal)
     await debitCredits(user.id, "thumbnail_variants", modelToUse, 800, 400).catch(
-      (err: any) => logger.warn({ err }, "Credit debit failed — non-fatal"),
+      (err: any) => alertDebitFailed(user.id, "thumbnail_variants", err),
     );
 
     const responsePayload = {

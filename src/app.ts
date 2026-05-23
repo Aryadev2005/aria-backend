@@ -33,6 +33,7 @@ import notesRoutes from "./routes/notes.routes";
 import deepAnalysisRoutes from "./routes/deepAnalysis.routes";
 import rivalRoutes from "./routes/rival.routes";
 import trialRoutes from "./routes/trials.routes";
+import adminRoutes from "./routes/admin.routes";
 
 export const buildApp = async (): Promise<FastifyInstance> => {
   const app = Fastify({
@@ -302,6 +303,7 @@ export const buildApp = async (): Promise<FastifyInstance> => {
   await app.register(notesRoutes, { prefix: `${API_PREFIX}/notes` });
   await app.register(rivalRoutes, { prefix: `${API_PREFIX}/rival` });
   await app.register(trialRoutes, { prefix: `${API_PREFIX}/trials` });
+  await app.register(adminRoutes, { prefix: `${API_PREFIX}/admin` });
   await app.register(dataDeletionRoutes, {
     prefix: `${API_PREFIX}/data-deletion`,
   });

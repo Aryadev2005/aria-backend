@@ -4,7 +4,9 @@ import { ApifyClient } from 'apify-client';
 import { prisma } from '../config/database';
 import { cache } from '../config/redis';
 import { logger } from '../utils/logger';
+import { randomUUID } from 'crypto';
 import type { CompetitorGapReport } from '../types/videoIntelligence.types';
+import { alertApifyEmptyReturn } from '../utils/alerting';
 
 // ── AI client ──────────────────────────────────────────────────────────────────
 let _openai: OpenAI | null = null;
@@ -254,16 +256,24 @@ export const runCompetitorGapAnalysis = async (
       : Promise.resolve([]),
   ]);
 
-  // 3. Merge and rank by views
+  // 3. Alert on empty sources and guard against hallucination
+  if (reels.length === 0) {
+    await alertApifyEmptyReturn('instagram_reels', niche, userId);
+  }
+  if (videos.length === 0) {
+    await alertApifyEmptyReturn('youtube', niche, userId);
+  }
+  if (reels.length === 0 && videos.length === 0) {
+    logger.warn({ niche, userId }, 'Both sources empty — returning empty gap report, skipping hallucination-prone GPT call');
+    return buildEmptyGapReport(niche);
+  }
+
+  // 4. Merge and rank by views
   const allItems: ContentItem[] = [...reels, ...videos]
     .sort((a, b) => b.views - a.views)
     .slice(0, 15);
 
-  if (allItems.length === 0) {
-    return buildEmptyGapReport(niche);
-  }
-
-  // 4. Track contributing platforms
+  // 5. Track contributing platforms
   const platforms: string[] = [];
   if (reels.length > 0)  platforms.push('Instagram Reels');
   if (videos.length > 0) platforms.push('YouTube');
@@ -305,6 +315,13 @@ export const runCompetitorGapAnalysis = async (
   await cache.set(cacheKey, report, 3600 * 6);
 
   // 8. Persist (fire-and-forget)
+  // UUID validation guard before DB write
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!UUID_RE.test(userId)) {
+    logger.error({ userId }, 'competitorGap: userId is not a valid UUID — skipping DB persist');
+    return report; // return the in-memory report, don't crash
+  }
+
   prisma.competitor_analyses.upsert({
     where: { user_id_niche: { user_id: userId, niche } },
     update: {

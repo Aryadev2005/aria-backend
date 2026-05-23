@@ -1,9 +1,11 @@
 // src/controllers/calendarEntry.controller.ts
 import { FastifyRequest, FastifyReply } from 'fastify';
 import { prisma } from '../config/database';
+import { cache } from '../config/redis';
 import { success, errors } from '../utils/response';
 import { logger } from '../utils/logger';
 import { User } from '../types';
+import { getTimingIntelligence } from '../services/launch.service';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /api/v1/calendar/entries  — create a single entry
@@ -54,9 +56,59 @@ export const createEntry = async (
       },
     });
 
+    // Fire-and-forget: generate timing suggestion and cache it by entry ID
+    const entryId = entry.id;
+    getTimingIntelligence({
+      archetype: user.archetype || 'EDUCATOR',
+      niche:     body.niche || (user.niches as any)?.[0] || 'general',
+      platform:  body.platform || user.primary_platform || 'instagram',
+      followerRange: user.follower_range || '10K-50K',
+    }).then((timing) =>
+      cache.set(`timing:entry:${entryId}`, JSON.stringify(timing), 'EX', 43200),
+    ).catch((err) => logger.warn({ err, entryId }, 'Entry timing suggestion failed — non-fatal'));
+
     return success(reply, entry);
   } catch (err) {
     logger.error({ err, userId: user.id }, 'createEntry failed');
+    return errors.internal(reply);
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/v1/calendar/entries/:id/timing-suggestion
+// ─────────────────────────────────────────────────────────────────────────────
+export const getTimingSuggestion = async (
+  req: FastifyRequest<{ Params: { id: string } }>,
+  reply: FastifyReply,
+) => {
+  const user = req.user as User;
+  const { id } = req.params;
+
+  try {
+    const entry = await (prisma as any).calendar_entries.findFirst({
+      where: { id, user_id: user.id },
+      select: { id: true, platform: true, niche: true },
+    });
+    if (!entry) return errors.notFound(reply, 'Calendar entry');
+
+    const cacheKey = `timing:entry:${id}`;
+    const cached = await cache.get(cacheKey);
+    if (cached) {
+      return success(reply, { timing: JSON.parse(cached as string), fromCache: true });
+    }
+
+    // On-demand generation if not yet cached
+    const timing = await getTimingIntelligence({
+      archetype:    user.archetype || 'EDUCATOR',
+      niche:        entry.niche    || (user.niches as any)?.[0] || 'general',
+      platform:     entry.platform || user.primary_platform    || 'instagram',
+      followerRange: user.follower_range || '10K-50K',
+    });
+
+    await cache.set(cacheKey, JSON.stringify(timing), 'EX', 43200).catch(() => {});
+    return success(reply, { timing, fromCache: false });
+  } catch (err) {
+    logger.error({ err, userId: user.id }, 'getTimingSuggestion failed');
     return errors.internal(reply);
   }
 };
