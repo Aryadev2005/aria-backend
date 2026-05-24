@@ -8,7 +8,7 @@ import {
 import { prisma } from "../config/database";
 import { success, errors } from "../utils/response";
 import { logger } from "../utils/logger";
-import { debitCredits } from "../services/credits.service";
+import { debitCredits, DebitResult } from "../services/credits.service";
 import { alertDebitFailed } from "../utils/alerting";
 import { markTrialUsed } from "../services/firstExperience.service";
 import path from "path";
@@ -20,6 +20,31 @@ import { runTwoPassStudio } from "../services/deep_analysis.service";
 import { generateShootPlan, resolveDirectorArchetype } from "../services/shootPlan.service";
 import { analyzeAlgoSignals } from "../services/algoSignalAnalyzer.service";
 import { DirectorArchetype } from "../services/studioV2.types";
+import { ActionKey } from "../config/credits";
+
+// Retries debitCredits up to 3 times with exponential back-off.
+// On permanent failure it alerts and returns null instead of propagating — the
+// caller already delivered the content, so we never block the response.
+async function debitWithRetry(
+  userId: string,
+  actionKey: ActionKey,
+  modelUsed: string,
+  inputTokens: number,
+  outputTokens: number,
+): Promise<DebitResult | null> {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      return await debitCredits(userId, actionKey, modelUsed, inputTokens, outputTokens);
+    } catch (err: any) {
+      if (attempt === 3 || err.code === "INSUFFICIENT_CREDITS") {
+        await alertDebitFailed(userId, actionKey, err);
+        return null;
+      }
+      await new Promise((r) => setTimeout(r, attempt * 200));
+    }
+  }
+  return null;
+}
 
 /**
  * Get script skeleton/structure based on idea and platform
@@ -48,13 +73,11 @@ export const getScriptStructure = async (
       attachedNotes: attachedNotes?.length ? attachedNotes : undefined,
     });
 
-    await debitCredits(user.id, "script_writing", modelToUse, 1500, 1000).catch(
-      (err) => alertDebitFailed(user.id, "script_writing", err),
-    );
+    const debitResult = await debitWithRetry(user.id, "script_writing", modelToUse, 1500, 1000);
 
     return success(reply, {
       ...result,
-      creditsUsed: req.creditCheck?.featureCharge ?? 0,
+      creditsUsed: debitResult?.totalDebited ?? req.creditCheck?.featureCharge ?? 0,
     });
   } catch (err) {
     logger.error({ err }, "Script structure failed");
@@ -86,13 +109,11 @@ export const adviseSection = async (
       archetype: user.archetype || "EDUCATOR",
     });
 
-    await debitCredits(user.id, "script_writing", modelToUse, 1200, 800).catch(
-      (err) => alertDebitFailed(user.id, "script_writing", err),
-    );
+    const debitResult = await debitWithRetry(user.id, "script_writing", modelToUse, 1200, 800);
 
     return success(reply, {
       ...result,
-      creditsUsed: req.creditCheck?.featureCharge ?? 0,
+      creditsUsed: debitResult?.totalDebited ?? req.creditCheck?.featureCharge ?? 0,
     });
   } catch (err) {
     logger.error({ err }, "Section advice failed");
@@ -122,17 +143,11 @@ export const matchBGM = async (
       userId: user.id,
     });
 
-    await debitCredits(
-      user.id,
-      "song_recommendations",
-      modelToUse,
-      800,
-      400,
-    ).catch((err) => alertDebitFailed(user.id, "song_recommendations", err));
+    const debitResult = await debitWithRetry(user.id, "song_recommendations", modelToUse, 800, 400);
 
     return success(reply, {
       ...result,
-      creditsUsed: req.creditCheck?.featureCharge ?? 0,
+      creditsUsed: debitResult?.totalDebited ?? req.creditCheck?.featureCharge ?? 0,
     });
   } catch (err) {
     logger.error({ err }, "BGM match failed");
@@ -160,13 +175,11 @@ export const getShotList = async (
       archetype: user.archetype || "EDUCATOR",
     });
 
-    await debitCredits(user.id, "script_writing", modelToUse, 1000, 600).catch(
-      (err) => alertDebitFailed(user.id, "script_writing", err),
-    );
+    const debitResult = await debitWithRetry(user.id, "script_writing", modelToUse, 1000, 600);
 
     return success(reply, {
       ...result,
-      creditsUsed: req.creditCheck?.featureCharge ?? 0,
+      creditsUsed: debitResult?.totalDebited ?? req.creditCheck?.featureCharge ?? 0,
     });
   } catch (err) {
     logger.error({ err }, "Shot list failed");
@@ -193,13 +206,11 @@ export const getEditingHelp = async (
       archetype: user.archetype || "EDUCATOR",
     });
 
-    await debitCredits(user.id, "script_writing", modelToUse, 800, 400).catch(
-      (err) => alertDebitFailed(user.id, "script_writing", err),
-    );
+    const debitResult = await debitWithRetry(user.id, "script_writing", modelToUse, 800, 400);
 
     return success(reply, {
       ...result,
-      creditsUsed: req.creditCheck?.featureCharge ?? 0,
+      creditsUsed: debitResult?.totalDebited ?? req.creditCheck?.featureCharge ?? 0,
     });
   } catch (err) {
     logger.error({ err }, "Editing help failed");
@@ -227,13 +238,11 @@ export const analyseVideoUrl = async (
       mood,
     });
 
-    await debitCredits(user.id, "video_analysis", modelToUse, 3000, 1500).catch(
-      (err) => alertDebitFailed(user.id, "video_analysis", err),
-    );
+    const debitResult = await debitWithRetry(user.id, "video_analysis", modelToUse, 3000, 1500);
 
     return success(reply, {
       ...result,
-      creditsUsed: req.creditCheck?.featureCharge ?? 0,
+      creditsUsed: debitResult?.totalDebited ?? req.creditCheck?.featureCharge ?? 0,
     });
   } catch (err) {
     logger.error({ err }, "Video URL analysis failed");
@@ -278,13 +287,11 @@ export const analyseVideoUpload = async (req: any, reply: FastifyReply) => {
       /* ignore */
     }
 
-    await debitCredits(user.id, "video_analysis", modelToUse, 3500, 1500).catch(
-      (err) => alertDebitFailed(user.id, "video_analysis", err),
-    );
+    const debitResult = await debitWithRetry(user.id, "video_analysis", modelToUse, 3500, 1500);
 
     return success(reply, {
       ...result,
-      creditsUsed: req.creditCheck?.featureCharge ?? 0,
+      creditsUsed: debitResult?.totalDebited ?? req.creditCheck?.featureCharge ?? 0,
     });
   } catch (err) {
     logger.error({ err }, "Video upload analysis failed");
@@ -514,13 +521,11 @@ export const regenerateSection = async (
       allSections,
     });
 
-    await debitCredits(user.id, "script_writing", modelToUse, 800, 400).catch(
-      (err) => alertDebitFailed(user.id, "script_writing", err),
-    );
+    const debitResult = await debitWithRetry(user.id, "script_writing", modelToUse, 800, 400);
 
     return success(reply, {
       ...result,
-      creditsUsed: req.creditCheck?.featureCharge ?? 0,
+      creditsUsed: debitResult?.totalDebited ?? req.creditCheck?.featureCharge ?? 0,
     });
   } catch (err) {
     logger.error({ err }, "Section regeneration failed");
@@ -634,6 +639,7 @@ export const streamScript = async (
   }, 15_000);
 
   let generationCompleted = false;
+  let scriptResult: import("../services/deep_analysis.service").ScriptResult | null = null;
   const modelToUse = req.creditCheck?.modelToUse ?? "gpt-4o-mini";
 
   try {
@@ -652,7 +658,7 @@ export const streamScript = async (
       ? `Tone: ${voicePortrait.toneSignature}, Energy: ${voicePortrait.energyLevel}, Language: ${voicePortrait.preferredLanguage}, Style: ${voicePortrait.sentenceStyle}`
       : undefined;
 
-    await runTwoPassStudio(
+    scriptResult = await runTwoPassStudio(
       {
         idea: idea.trim(),
         platform: platform || user.primary_platform || "instagram",
@@ -686,14 +692,14 @@ export const streamScript = async (
   } finally {
     clearInterval(keepAlive);
     if (generationCompleted) {
-      debitCredits(user.id, "script_writing", modelToUse, 3000, 1500).catch(
-        (err: any) => alertDebitFailed(user.id, "script_writing", err),
-      );
+      const inTok  = scriptResult?.inputTokens  ?? 3000;
+      const outTok = scriptResult?.outputTokens ?? 1500;
+      await debitWithRetry(user.id, "script_writing", modelToUse, inTok, outTok);
 
-      // ── MARK TRIAL AS USED ───────────────────────────────────────────
+      // trial mark stays fire-and-forget — non-revenue path
       if (req.creditCheck?.isTrial && req.creditCheck?.trialAction) {
         markTrialUsed(user.id, req.creditCheck.trialAction, { idea, platform })
-          .catch(err => logger.warn({ err }, 'studio: trial mark failed — non-fatal'));
+          .catch(err => logger.warn({ err }, "studio: trial mark failed — non-fatal"));
       }
     }
     reply.raw.end();
@@ -767,15 +773,12 @@ export const generateDirectorsCut = async (
       data: { shot_list: { shootPlan, signalMap } as any },
     });
 
-    // Debit credits
-    await debitCredits(user.id, "shoot_plan", modelToUse, 1200, 800).catch(
-      (err) => alertDebitFailed(user.id, "shoot_plan", err),
-    );
+    const debitResult = await debitWithRetry(user.id, "shoot_plan", modelToUse, 1200, 800);
 
     return success(reply, {
       shootPlan,
       signalMap,
-      creditsUsed: req.creditCheck?.featureCharge ?? 0,
+      creditsUsed: debitResult?.totalDebited ?? req.creditCheck?.featureCharge ?? 0,
     });
   } catch (err: any) {
     logger.error({ err: err.message, userId: user.id }, "generateDirectorsCut failed");

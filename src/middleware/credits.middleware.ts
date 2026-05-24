@@ -92,12 +92,42 @@ export function requireCredits(actionKey: ActionKey) {
         { userId: user.id, actionKey, reason: check.reason },
         "Credit check failed",
       );
+
+      const suggestedPlan =
+        tier === "free" ? "starter" : tier === "starter" ? "pro" : "max";
+
+      let upsell: Record<string, string> | null = null;
+
+      if (check.reason?.includes("monthly allowance")) {
+        upsell = {
+          currentPlan: tier,
+          suggestedPlan,
+          message:
+            tier === "free"
+              ? "You've used your free allowance. Starter plan gives you 5× more credits."
+              : "Upgrade to unlock more credits and rollover.",
+          ctaLabel: "See plans",
+          ctaPath: "/settings?tab=credits",
+        };
+      } else if (check.reason?.includes("requires the")) {
+        const requiredMatch = check.reason.match(/requires the (\w+) plan/);
+        const requiredPlan = requiredMatch?.[1] ?? suggestedPlan;
+        upsell = {
+          currentPlan: tier,
+          suggestedPlan,
+          message: `${check.config?.displayName ?? "This feature"} is available on the ${requiredPlan} plan.`,
+          ctaLabel: "See plans",
+          ctaPath: "/settings?tab=credits",
+        };
+      }
+
       return reply.code(402).send({
         success: false,
-        error: "INSUFFICIENT_CREDITS",
-        message: check.reason,
+        error: "CREDITS_EXHAUSTED",
+        reason: check.reason,
         required: check.featureCharge,
         actionKey,
+        ...(upsell ? { upsell } : {}),
       });
     }
 

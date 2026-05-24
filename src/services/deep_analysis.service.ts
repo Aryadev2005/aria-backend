@@ -60,6 +60,8 @@ export interface ScriptResult {
   researchBrief: ResearchBrief;
   trendInsight: string;
   format: string;
+  inputTokens?: number;   // actual prompt tokens consumed across all LLM calls
+  outputTokens?: number;  // actual completion tokens consumed across all LLM calls
 }
 
 export interface AttachedNote {
@@ -969,6 +971,9 @@ export async function generateScript(
 
   onEvent({ type: "phase", phase: "scripting", label: "Generating Script" });
 
+  let totalInputTokens  = 0;
+  let totalOutputTokens = 0;
+
   // ── Step 0 (NEW): Generate hook variants ─────────────────────────────────
   onEvent({ type: "research_update", message: "Generating hook variants…" });
 
@@ -1073,6 +1078,8 @@ Generate the meta elements for this script. Return ONLY valid JSON:
       temperature: 0.7,
       jsonMode: true,
     });
+    totalInputTokens  += metaResult.inputTokens;
+    totalOutputTokens += metaResult.outputTokens;
     meta = parseRouterJSON(metaResult);
   } catch {
     meta = { hookLine: "", hookTip: "", caption: "", hashtags: [], trendInsight: brief.trendSummary };
@@ -1144,6 +1151,8 @@ Return ONLY valid JSON:
         temperature: isFirst ? 0.85 : 0.75,
         jsonMode: true,
       });
+      totalInputTokens  += sResult.inputTokens;
+      totalOutputTokens += sResult.outputTokens;
 
       const raw = sResult.text
         .replace(/```json\n?/g, "")
@@ -1214,6 +1223,8 @@ Return ONLY valid JSON:
     researchBrief: brief,
     trendInsight: meta.trendInsight || brief.trendSummary,
     format,
+    inputTokens:  totalInputTokens  > 0 ? totalInputTokens  : undefined,
+    outputTokens: totalOutputTokens > 0 ? totalOutputTokens : undefined,
   };
 
   onEvent({ type: "done", result });

@@ -13,6 +13,7 @@
 import { prisma } from "../config/database";
 import { cache } from "../config/redis";
 import { logger } from "../utils/logger";
+import { alertDebitFailed } from "../utils/alerting";
 import {
   ActionKey,
   ActionConfig,
@@ -146,9 +147,30 @@ export async function getOrCreateWallet(userId: string, tier: string = "free") {
       },
     });
     logger.info({ userId, planCredits, tier }, "Credit wallet created");
+
+    // One-time 50cr welcome bonus for new free signups — effective balance 150cr.
+    // Idempotent: isNew is false once balance diverges from planCredits after grant.
+    if (tier === "free") {
+      try {
+        const existingWelcome = await prisma.credit_transactions.count({
+          where: { user_id: userId, description: "Welcome bonus" },
+        });
+        if (existingWelcome === 0) {
+          await grantCredits(userId, 50, "Welcome bonus");
+          logger.info({ userId }, "Welcome bonus granted");
+        }
+      } catch (err) {
+        logger.warn({ err, userId }, "Welcome bonus failed — non-fatal");
+      }
+    }
   }
 
-  await cache.set(cacheKey, wallet, WALLET_TTL);
+  // Don't cache a newly-created wallet — grantCredits (welcome bonus) clears
+  // the cache, but the local `wallet` variable still holds the pre-grant value.
+  // Skip caching so the next read fetches the authoritative post-grant DB state.
+  if (!isNew) {
+    await cache.set(cacheKey, wallet, WALLET_TTL);
+  }
   return wallet;
 }
 
@@ -183,8 +205,7 @@ export async function getWalletSummary(
             100,
         )
       : 0;
-  const effectiveRollover =
-    tier === "free" || tier === "starter" ? 0 : rollover;
+  const effectiveRollover = tier === "free" ? 0 : rollover;
   const rolloverPct = planLimit > 0 ? (effectiveRollover / planLimit) * 100 : 0;
   const topupPct = planLimit > 0 ? (topup / planLimit) * 100 : 0;
 
@@ -225,11 +246,17 @@ export async function resetMonthlyCredits(
   const topupCredits = Number(wallet.topup_credits);
 
   // Rollover logic:
-  // free/starter: no rollover
-  // pro: rollover up to 1× plan credits
-  // max/brand: unlimited rollover
+  // free:          no rollover
+  // starter:       rollover up to 0.5× plan credits (250cr max)
+  // pro:           rollover up to 1× plan credits
+  // max/brand:     unlimited rollover
   let rollover = 0;
-  if (tier === "pro") {
+  if (tier === "starter") {
+    rollover = Math.min(
+      Math.max(0, currentBalance - topupCredits),
+      newPlanCredits * 0.5,
+    );
+  } else if (tier === "pro") {
     rollover = Math.min(
       Math.max(0, currentBalance - topupCredits),
       newPlanCredits,
@@ -237,7 +264,7 @@ export async function resetMonthlyCredits(
   } else if (tier === "max" || tier === "brand") {
     rollover = Math.max(0, currentBalance - topupCredits);
   }
-  // free and starter: rollover stays 0 (default)
+  // free: rollover stays 0 (default)
   rollover = Math.max(0, rollover);
 
   const newBalance = newPlanCredits + rollover + topupCredits;
@@ -411,10 +438,10 @@ export async function debitCredits(
   const aiCostCredits = usdToCredits(aiCostUsd);
   const totalDebited = roundCredits(featureCharge + aiCostCredits);
 
-  let newBalance = 0;
+  let newBalance: number | null = null;
   let totalGranted = 0;
   let planLimit = PLAN_CREDITS.free;
-  let transactionId = "";
+  let transactionId: string | null = null;
 
   try {
     await prisma.$transaction(async (txn) => {
@@ -446,6 +473,10 @@ export async function debitCredits(
           ? Number(rows[0].plan_credits)
           : PLAN_CREDITS.free;
 
+      if (newBalance === null) {
+        throw new Error("DEBIT_INTERNAL: balance not set after UPDATE");
+      }
+
       const tx = await txn.credit_transactions.create({
         data: {
           user_id:       userId,
@@ -473,7 +504,8 @@ export async function debitCredits(
 
     await cache.del(`wallet:${userId}`);
 
-    const used    = Math.max(0, totalGranted - newBalance);
+    const finalBalance = newBalance as number; // narrowed: guard above throws if null
+    const used    = Math.max(0, totalGranted - finalBalance);
     const usedPct =
       planLimit > 0
         ? Math.min(100, Math.round((used / planLimit) * 1000) / 10)
@@ -494,9 +526,10 @@ export async function debitCredits(
       "Credits debited (feature + AI)",
     );
 
-    return { success: true, usedPct, totalDebited, transactionId };
+    return { success: true, usedPct, totalDebited, transactionId: transactionId as string };
   } catch (err) {
     logger.error({ err, userId, actionKey }, "Credit debit failed");
+    await alertDebitFailed(userId, actionKey, err).catch(() => {});
     throw err;
   }
 }
