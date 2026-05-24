@@ -355,12 +355,12 @@ async function normaliseIntoLiveTrends(): Promise<number> {
           velocity:           dec.unifiedScore,
           niche_tags:         [(p.raw_data as any)?.niche || "general"],
           platform_tags:      ["reddit"],
+          geo_tags:           ['GLOBAL'],
           badge:              p.is_breakout ? "breakout" : null,
           content_format:     "article",
           platform_raw_score: p.score,
           is_override:        dec.isOverride,
           override_reason:    dec.overrideReason,
-          geo_tags:           ['GLOBAL'],
           raw_data:           { post_id: p.post_id, subreddit: p.subreddit, ...(p.raw_data as any) },
         });
       } catch { /* skip malformed record */ }
@@ -781,7 +781,7 @@ async function runWikipedia(): Promise<number> {
           source:             'wikipedia',
           title:              a.title.slice(0, 255),
           search_volume:      a.views,
-          velocity:           Math.min(100, Math.round((50 - a.rank) * 2)),
+          velocity:           Math.max(10, Math.min(100, Math.round((51 - a.rank) * 2))),
           niche_tags:         deriveNicheTags(a.title),
           platform_tags:      ['wikipedia', 'web'],
           geo_tags:           ['GLOBAL'],
@@ -795,7 +795,7 @@ async function runWikipedia(): Promise<number> {
         },
         update: {
           search_volume:      a.views,
-          velocity:           Math.min(100, Math.round((50 - a.rank) * 2)),
+          velocity:           Math.max(10, Math.min(100, Math.round((51 - a.rank) * 2))),
           badge:              a.rank <= 10 ? 'HOT' : a.rank <= 25 ? 'RISING' : 'NEW',
           platform_raw_score: a.views,
           expires_at:         expiresAt,
@@ -871,12 +871,71 @@ async function processFastJob(job: Job): Promise<Record<string, any>> {
   return { youtube, googleTrends, wikipedia, normalised, diagnostics };
 }
 
+// ── processRealtimeJob ────────────────────────────────────────────────────────
+
+async function processRealtimeJob(job: Job): Promise<Record<string, any>> {
+  const diagnostics: Record<string, string> = {};
+
+  logger.info({ jobId: job.id }, 'discovery-realtime started (Google realtime trends only)');
+  await job.updateProgress(10);
+
+  let realtimeTrends = 0;
+  try {
+    const { scrapeRealtimeTrends } = await import('../scrapers/googleTrendsFree.service');
+    const stories = await scrapeRealtimeTrends();
+    const expiresAt = new Date(Date.now() + 2 * 60 * 60 * 1000); // 2h TTL — realtime data is very fresh
+
+    for (const rt of stories) {
+      if (!rt.title) continue;
+      try {
+        await (prisma as any).live_trends.upsert({
+          where:  { title_source: { title: rt.title.slice(0, 255), source: 'google_realtime' } },
+          create: {
+            source:             'google_realtime',
+            title:              rt.title.slice(0, 255),
+            search_volume:      0,
+            velocity:           65,
+            niche_tags:         deriveNicheTags(rt.title + ' ' + rt.entityNames.join(' ')),
+            platform_tags:      ['google'],
+            geo_tags:           ['US', 'GLOBAL'],
+            badge:              'RISING',
+            content_format:     'unknown',
+            platform_raw_score: 0,
+            is_override:        false,
+            override_reason:    null,
+            expires_at:         expiresAt,
+            raw_data:           { entityNames: rt.entityNames, articles: rt.articles },
+          },
+          update: {
+            velocity:   65,
+            badge:      'RISING',
+            expires_at: expiresAt,
+            fetched_at: new Date(),
+          },
+        });
+        realtimeTrends++;
+      } catch { /* non-fatal */ }
+    }
+
+    diagnostics['realtimeTrends'] = `ok (${realtimeTrends} upserted)`;
+    logger.info({ realtimeTrends }, 'Google realtime trends upserted');
+  } catch (err: any) {
+    diagnostics['realtimeTrends'] = `failed: ${err.message}`;
+    logger.warn({ err: err.message }, 'discovery-realtime failed — continuing');
+  }
+
+  await job.updateProgress(100);
+  logger.info({ realtimeTrends, diagnostics }, 'discovery-realtime complete');
+  return { realtimeTrends, diagnostics };
+}
+
 // ── processJob (dispatcher) ───────────────────────────────────────────────────
 
 async function processJob(job: Job): Promise<Record<string, any>> {
   switch (job.name) {
-    case "discovery-fast": return processFastJob(job);
-    case "discovery-slow": return processSlowJob(job);
+    case "discovery-fast":     return processFastJob(job);
+    case "discovery-slow":     return processSlowJob(job);
+    case "discovery-realtime": return processRealtimeJob(job);
     default: {
       logger.warn({ jobName: job.name }, "Unknown discovery job name — skipping");
       return { error: `Unknown job: ${job.name}` };

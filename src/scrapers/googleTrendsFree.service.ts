@@ -56,7 +56,7 @@ export async function scrapeDailyTrends(geo: GeoTarget): Promise<DailyTrend[]> {
     const resp = await axios.get(url, {
       timeout: 15_000,
       headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; TrendAI/2.0)',
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
         'Accept-Language': geo.hl,
         'Accept': 'application/json, text/plain, */*',
       },
@@ -108,7 +108,7 @@ export async function scrapeRealtimeTrends(): Promise<RealtimeTrend[]> {
     const resp = await axios.get(url, {
       timeout: 15_000,
       headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; TrendAI/2.0)',
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
         'Accept': 'application/json, text/plain, */*',
       },
     });

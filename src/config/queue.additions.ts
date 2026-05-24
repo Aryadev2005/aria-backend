@@ -61,7 +61,7 @@ export async function scheduleSongJobs(): Promise<void> {
 
 // ── Discovery scrape schedule ─────────────────────────────────────────────────
 // Split into two queues:
-// discovery-fast (every 12h): YouTube + Google Trends
+// discovery-fast (every 4h): YouTube + Google Trends + Wikipedia
 // discovery-slow (every 24h): Reddit + TikTok + Pinterest
 
 export async function scheduleDiscoveryJobs(): Promise<void> {
@@ -71,11 +71,11 @@ export async function scheduleDiscoveryJobs(): Promise<void> {
 
     await fastQueue.upsertJobScheduler(
       "discovery-fast-scheduled",
-      { every: 12 * 60 * 60 * 1000 },  // every 12 hours
+      { every: 4 * 60 * 60 * 1000 },   // every 4 hours — Google Trends refreshes every 2-3h
       { name: "discovery-fast", data: {} },
     );
 
-    logger.info("Discovery FAST job scheduled (YouTube + Google Trends every 12h)");
+    logger.info("Discovery FAST job scheduled (YouTube + Google Trends + Wikipedia every 4h)");
     await fastQueue.close();
 
     // Queue B: discovery-slow → discovery-slow (Reddit + TikTok + Pinterest every 24h)
