@@ -1,12 +1,13 @@
 // src/services/songs/song.scraper.service.ts
 // ══════════════════════════════════════════════════════════════════════════════
-// Song Scraper — multi-language, multi-region, 3 sources every 6 hours
+// Song Scraper — multi-language, multi-region, 4 sources every 6 hours
 //
 // Sources:
-//   1. Spotify  — 10 curated editorial playlists, language-tagged at source
-//   2. JioSaavn — trending across Hindi, English, Punjabi, Tamil, Telugu,
-//                 Bhojpuri, Malayalam, Marathi, Bengali, Kannada
-//   3. YouTube Music — trending music across IN, US, KR, NG, BR regions
+//   1. Spotify        — 10 curated editorial playlists, language-tagged at source
+//   2. JioSaavn       — trending across Hindi, English, Punjabi, Tamil, Telugu,
+//                       Bhojpuri, Malayalam, Marathi, Bengali, Kannada
+//   3. YouTube Music  — trending music across IN, US, KR, NG, BR regions
+//   4. Spotify Charts — public CSV charts for IN, US, GB, GLOBAL, AU, BR, PH, ID
 //
 // Key fixes vs previous version:
 //   - Spotify: language was hardcoded "Hindi" for every track → now uses
@@ -24,7 +25,7 @@ import { logger } from "../../utils/logger";
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface SongRecord {
-  source: "spotify" | "jiosaavn" | "youtube";
+  source: "spotify" | "jiosaavn" | "youtube" | "spotify_charts";
   title: string;
   artist: string;
   chart_position: number;
@@ -33,6 +34,7 @@ export interface SongRecord {
   language: string;
   mood_tags: string[];
   niche_tags: string[];
+  geo_tags: string[];
   raw_data: Record<string, unknown>;
 }
 
@@ -174,6 +176,7 @@ export async function scrapeSpotify(): Promise<SongRecord[]> {
         language,
         mood_tags: moodTags,
         niche_tags: nicheTags,
+        geo_tags: [],
         raw_data: {
           spotify_id: spot.spotify_id,
           popularity: spot.popularity,
@@ -343,6 +346,7 @@ function _mapJioSaavnSongs(rawSongs: any[], limit: number): SongRecord[] {
         language: lang,
         mood_tags: moodTags,
         niche_tags: nicheTags,
+        geo_tags: [],
         raw_data: { songId: song.id, language: rawLang },
       } satisfies SongRecord;
     })
@@ -437,6 +441,7 @@ export async function scrapeYouTubeMusic(): Promise<SongRecord[]> {
         language: language_detected,
         mood_tags: moodTags,
         niche_tags: nicheTags,
+        geo_tags: [regionCode],
         raw_data: {
           videoId,
           regionCode,
@@ -462,18 +467,138 @@ export async function scrapeYouTubeMusic(): Promise<SongRecord[]> {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// AGGREGATE — run all 3 sources in parallel
+// SOURCE 4 — Spotify public chart CSV (8 global regions)
+// ════════════════════════════════════════════════════════════════════════════
+
+// Region → baseline language for tracks when script detection is inconclusive
+const SPOTIFY_CHART_REGIONS: Array<{ code: string; language: string }> = [
+  { code: "in",     language: "Hindi"   },
+  { code: "us",     language: "English" },
+  { code: "gb",     language: "English" },
+  { code: "global", language: "English" },
+  { code: "au",     language: "English" },
+  { code: "br",     language: "Portuguese" },
+  { code: "ph",     language: "English" },
+  { code: "id",     language: "Indonesian" },
+];
+
+export async function scrapeSpotifyCharts(): Promise<SongRecord[]> {
+  logger.info("Scraping Spotify public charts — 8 regions (sequential)...");
+
+  const allSongs: SongRecord[] = [];
+  const seen = new Set<string>(); // deduplicate by track URI across regions
+
+  for (const { code, language: regionLang } of SPOTIFY_CHART_REGIONS) {
+    try {
+      const url = `https://charts.spotify.com/charts/view/regional-${code}-daily/latest.csv`;
+      const { data: csv } = await axios.get<string>(url, {
+        timeout: 12_000,
+        headers: {
+          "User-Agent": "Mozilla/5.0 (compatible; TrendAI/1.0)",
+          "Accept": "text/csv,*/*",
+        },
+        responseType: "text",
+      });
+
+      // Parse CSV: skip header line, columns: rank,uri,artist_names,track_name,peak_rank,previous_rank,weeks_on_chart,streams
+      const lines = csv.trim().split("\n").slice(1);
+      const geoTag = code === "global" ? "GLOBAL" : code.toUpperCase();
+
+      for (const line of lines) {
+        // Use a simple split respecting quoted fields
+        const cols = _parseCsvLine(line);
+        if (cols.length < 8) continue;
+
+        const [rankStr, uri, artistNames, trackName, peakRankStr, prevRankStr, , streamsStr] = cols;
+        const rank = parseInt(rankStr, 10);
+        if (!rank || !uri || !trackName) continue;
+        if (seen.has(uri)) continue;
+        seen.add(uri);
+
+        const title = trackName.trim();
+        const artist = artistNames.trim();
+        const language = detectLanguage(title, artist) === "Hindi" && code !== "in"
+          ? regionLang
+          : detectLanguage(title, artist);
+
+        const moodTags = inferMoodTags(title);
+        const nicheTags = inferNicheTags(moodTags, language);
+        const streams = parseInt(streamsStr?.trim() || "0", 10) || 0;
+        const peakRank = parseInt(peakRankStr?.trim() || String(rank), 10) || rank;
+        const prevRank = parseInt(prevRankStr?.trim() || "0", 10) || 0;
+        const chartChange = prevRank > 0 ? prevRank - rank : 0;
+
+        const trackId = uri.replace("spotify:track:", "");
+
+        allSongs.push({
+          source: "spotify_charts",
+          title,
+          artist,
+          chart_position: rank,
+          chart_change: chartChange,
+          streams_today: BigInt(streams),
+          language,
+          mood_tags: moodTags,
+          niche_tags: nicheTags,
+          geo_tags: [geoTag],
+          raw_data: {
+            spotify_id: trackId,
+            uri,
+            region: code,
+            peak_rank: peakRank,
+            source: "public-csv",
+          },
+        } satisfies SongRecord);
+      }
+
+      logger.info({ region: code, count: lines.length }, "Spotify chart CSV scraped");
+    } catch (err: any) {
+      logger.warn({ region: code, err: err.message }, "Spotify chart CSV failed — skipping region");
+    }
+
+    // Polite delay between regions
+    await new Promise(r => setTimeout(r, 1_000));
+  }
+
+  logger.info({ total: allSongs.length }, "Spotify charts scrape complete");
+  return allSongs;
+}
+
+// Minimal CSV line parser handling double-quoted fields with embedded commas
+function _parseCsvLine(line: string): string[] {
+  const result: string[] = [];
+  let current = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') { current += '"'; i++; }
+      else { inQuotes = !inQuotes; }
+    } else if (ch === "," && !inQuotes) {
+      result.push(current);
+      current = "";
+    } else {
+      current += ch;
+    }
+  }
+  result.push(current);
+  return result;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// AGGREGATE — run all 4 sources in parallel (charts sequential internally)
 // ════════════════════════════════════════════════════════════════════════════
 
 export async function scrapeAllSources(): Promise<{
   songs: SongRecord[];
   diagnostics: Record<string, string>;
 }> {
-  const [spotifyResult, jiosaavnResult, youtubeResult] =
+  const [spotifyResult, jiosaavnResult, youtubeResult, chartsResult] =
     await Promise.allSettled([
       scrapeSpotify(),
       scrapeJioSaavn(),
       scrapeYouTubeMusic(),
+      scrapeSpotifyCharts(),
     ]);
 
   const diagnostics: Record<string, string> = {
@@ -489,12 +614,17 @@ export async function scrapeAllSources(): Promise<{
       youtubeResult.status === "fulfilled"
         ? `ok (${youtubeResult.value.length})`
         : `failed: ${(youtubeResult as any).reason?.message}`,
+    spotify_charts:
+      chartsResult.status === "fulfilled"
+        ? `ok (${chartsResult.value.length})`
+        : `failed: ${(chartsResult as any).reason?.message}`,
   };
 
   const allSongs: SongRecord[] = [
     ...(spotifyResult.status === "fulfilled" ? spotifyResult.value : []),
     ...(jiosaavnResult.status === "fulfilled" ? jiosaavnResult.value : []),
     ...(youtubeResult.status === "fulfilled" ? youtubeResult.value : []),
+    ...(chartsResult.status === "fulfilled" ? chartsResult.value : []),
   ];
 
   // Global dedup by normalised title+artist across all sources

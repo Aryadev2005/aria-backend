@@ -98,10 +98,10 @@ export interface YouTubeTrend {
 }
 
 /**
- * Fetch trending videos from YouTube India
+ * Fetch trending videos from YouTube for a given region
  * Returns array ready to insert into live_trends
  */
-export const fetchYouTubeTrending = async (): Promise<YouTubeTrend[] | null> => {
+export const fetchYouTubeTrending = async (regionCode = 'IN'): Promise<YouTubeTrend[] | null> => {
   const apiKey = process.env.YOUTUBE_API_KEY;
 
   if (!apiKey) {
@@ -110,7 +110,7 @@ export const fetchYouTubeTrending = async (): Promise<YouTubeTrend[] | null> => 
   }
 
   try {
-    logger.info('Fetching YouTube trending videos for India across categories...');
+    logger.info({ regionCode }, 'Fetching YouTube trending videos across categories...');
 
     // Fetch all categories in parallel — each gives up to 50 videos
     const categoryResults = await Promise.allSettled(
@@ -118,7 +118,7 @@ export const fetchYouTubeTrending = async (): Promise<YouTubeTrend[] | null> => 
         const params: any = {
           part:        'snippet,statistics,contentDetails',
           chart:       'mostPopular',
-          regionCode:  'IN',
+          regionCode,
           maxResults:  50,
           key:         apiKey,
         };
@@ -191,7 +191,7 @@ export const fetchYouTubeTrending = async (): Promise<YouTubeTrend[] | null> => 
 
     trends.sort((a, b) => b.velocity - a.velocity);
 
-    logger.info({ count: trends.length, categories: YT_TREND_CATEGORIES.length }, 'YouTube trending fetched successfully');
+    logger.info({ count: trends.length, categories: YT_TREND_CATEGORIES.length, regionCode }, 'YouTube trending fetched successfully');
     return trends;
 
   } catch (err: any) {

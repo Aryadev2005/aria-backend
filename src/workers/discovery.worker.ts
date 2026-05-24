@@ -1,16 +1,18 @@
 // src/workers/discovery.worker.ts
 // ══════════════════════════════════════════════════════════════════════════════
-// Discovery Worker — TWO queues, five sources + Instagram
+// Discovery Worker — TWO queues, five sources
 //
 // Queue: discovery-slow (every 24h)
 //   Reddit    → aira-scrapers (snoowrap-based)
 //   TikTok    → aira-scrapers (Creative Center API)
 //   Pinterest → aira-scrapers (Playwright-based)
-//   Instagram → Apify apify/instagram-hashtag-scraper (KEPT FOR NOW)
+//   NewsData  → NewsData.io free API (10 categories, multi-country)
+//   Finnhub   → Finnhub free API (finance/business niche)
 //
 // Queue: discovery-fast (every 12h)
-//   YouTube       → YouTube Data API v3
-//   Google Trends → Apify apify/google-trends-scraper
+//   YouTube       → YouTube Data API v3 (10 global regions)
+//   Google Trends → native free endpoints (20 countries, no Apify)
+//   Wikipedia     → Wikimedia Analytics API (global top articles)
 //
 // Normalisation cutoff: 26h (covers both 12h and 24h cycles safely)
 // ══════════════════════════════════════════════════════════════════════════════
@@ -38,6 +40,12 @@ import {
   SCRAPE_CONFIG as SCRAPER_CFG,
 } from "aira-scrapers/config/index";
 import type { SubredditEntry } from "aira-scrapers/types/index";
+import { scrapeAllGeos, type DailyTrend, type RealtimeTrend } from '../scrapers/googleTrendsFree.service';
+import { TIER_A_GEOS, ALL_GEOS } from '../config/geo.config';
+import { scrapeWikipediaTrending } from '../scrapers/wikipedia.service';
+import { scrapeNewsData } from '../scrapers/newsdata.service';
+import { scrapeFinnhubMarketNews } from '../scrapers/finnhub.service';
+import { deriveNicheTags } from '../utils/nicheTagger';
 
 // Initialize aira-scrapers pg pool (idempotent — safe to call at module load)
 connectScrapersDB();
@@ -78,183 +86,159 @@ const YT_CATEGORY_MAP: Record<string, string> = {
   "28": "tech",
 };
 
-// ── Google Trends keywords ───────────────────────────────────────────────────
-const GOOGLE_TRENDS_KEYWORDS = [
-  "reels ideas india",
-  "viral instagram india",
-  "content creator india 2025",
-  "trending audio instagram india",
-  "youtube shorts ideas india",
-  "bollywood trending",
-  "cricket trending india",
-  "startup india trend",
-  "trending sounds instagram",
-  "viral content ideas",
-  "youtube shorts trending",
-  "instagram reel ideas 2025",
-  "content creation tips",
-  "how to go viral",
-  "trending hashtags 2025",
-];
+const YT_REGIONS = ['IN', 'US', 'GB', 'BR', 'ID', 'NG', 'PH', 'AU', 'CA', 'KR'];
 
-// ── Instagram hashtags ───────────────────────────────────────────────────────
-const INSTAGRAM_HASHTAGS = [
-  "contentcreator",
-  "grwm",
-  "ootd",
-  "skincareroutine",
-  "reelsinstagram",
-  "indiancreator",
-  "reelsindia",
-  "bollywoodreels",
-  "indianfashionblogger",
-  "desifood",
-];
+// ── runGoogleTrendsFree ───────────────────────────────────────────────────────
 
-// ── scrapeYouTube ─────────────────────────────────────────────────────────────
-// Fetch YouTube trending via Data API v3 and upsert into discovery_youtube_raw.
+async function runGoogleTrendsFree(useTierA = true): Promise<number> {
+  const geos = useTierA ? TIER_A_GEOS : ALL_GEOS;
+  const { trends, realtime } = await scrapeAllGeos(geos);
 
-async function scrapeYouTube(): Promise<number> {
-  const { fetchYouTubeTrending } = await import("../services/youtubeTrending.service");
-  const trends = await fetchYouTubeTrending();
-  if (!trends || !trends.length) return 0;
-
-  const expiresAt = new Date(Date.now() + 26 * 60 * 60 * 1000);
+  const expiresAt = new Date(Date.now() + 4 * 60 * 60 * 1000); // 4h TTL for fast trends
   let upserted = 0;
 
+  // Upsert daily trends
   for (const t of trends) {
+    if (!t.query) continue;
     try {
-      await (prisma as any).discovery_youtube_raw.upsert({
-        where:  { video_id: t.raw_data.videoId },
-        create: {
-          video_id:      t.raw_data.videoId,
-          title:         t.title.slice(0, 300),
-          channel:       t.raw_data.channelTitle || "",
-          view_count:    BigInt(t.raw_data.viewCount    || 0),
-          like_count:    BigInt(t.raw_data.likeCount    || 0),
-          comment_count: BigInt(t.raw_data.commentCount || 0),
-          category_id:   t.raw_data.categoryId  || "0",
-          velocity:      t.velocity,
-          niche_tags:    t.niche_tags,
-          thumbnail_url: t.raw_data.thumbnailUrl || null,
-          published_at:  t.raw_data.publishedAt ? new Date(t.raw_data.publishedAt) : null,
-          expires_at:    expiresAt,
-          raw_data:      t.raw_data as any,
-        },
-        update: {
-          view_count:    BigInt(t.raw_data.viewCount    || 0),
-          like_count:    BigInt(t.raw_data.likeCount    || 0),
-          comment_count: BigInt(t.raw_data.commentCount || 0),
-          velocity:      t.velocity,
-          niche_tags:    t.niche_tags,
-          scraped_at:    new Date(),
-        },
-      });
-      upserted++;
-    } catch (err: any) {
-      logger.warn({ err: err.message, videoId: t.raw_data.videoId }, "YouTube raw upsert failed");
-    }
-  }
-
-  return upserted;
-}
-
-// ── scrapeInstagram ───────────────────────────────────────────────────────────
-// Apify apify/instagram-hashtag-scraper — kept until native replacement is built.
-
-async function scrapeInstagram(client: any): Promise<number> {
-  const run = await client.actor("apify/instagram-hashtag-scraper").call({
-    hashtags:     INSTAGRAM_HASHTAGS,
-    resultsLimit: 20,
-    proxy:        { useApifyProxy: true },
-  });
-
-  const { items } = await client.dataset(run.defaultDatasetId).listItems();
-  if (!items?.length) return 0;
-
-  const expiresAt = new Date(Date.now() + 26 * 60 * 60 * 1000);
-  let upserted = 0;
-
-  for (const item of items) {
-    try {
-      const raw   = (item.caption || item.hashtag || "") as string;
-      const title = raw.slice(0, 255).trim();
-      if (!title) continue;
-
       await (prisma as any).live_trends.upsert({
-        where:  { title_source: { title, source: "instagram" } },
+        where:  { title_source: { title: t.query.slice(0, 255), source: 'google_trends' } },
         create: {
-          source:             "instagram",
-          title,
-          search_volume:      item.likesCount  || 0,
-          velocity:           Math.min(100, Math.round((item.likesCount || 0) / 1000)),
-          niche_tags:         ["lifestyle"],
-          platform_tags:      ["instagram"],
-          content_format:     item.type === "Video" ? "short_form" : "post",
-          platform_raw_score: item.likesCount  || 0,
+          source:             'google_trends',
+          title:              t.query.slice(0, 255),
+          search_volume:      t.trafficNum,
+          velocity:           Math.min(100, Math.round(Math.log10(Math.max(1, t.trafficNum)) * 12)),
+          niche_tags:         deriveNicheTags(t.query + ' ' + t.relatedQueries.join(' ')),
+          platform_tags:      ['google'],
+          geo_tags:           [t.geo],
+          badge:              t.trafficNum > 500_000 ? 'HOT' : t.trafficNum > 100_000 ? 'RISING' : 'NEW',
+          content_format:     'unknown',
+          platform_raw_score: t.trafficNum,
+          is_override:        false,
+          override_reason:    null,
           expires_at:         expiresAt,
           raw_data:           {
-            source_hashtag: item.hashtag,
-            likes:          item.likesCount,
-            comments:       item.commentsCount,
-            id:             item.id,
+            trafficRaw:     t.trafficRaw,
+            geo:            t.geo,
+            geoName:        t.geoName,
+            relatedQueries: t.relatedQueries,
+            articles:       t.articles,
           },
         },
         update: {
-          search_volume:      item.likesCount  || 0,
-          velocity:           Math.min(100, Math.round((item.likesCount || 0) / 1000)),
-          platform_raw_score: item.likesCount  || 0,
+          search_volume:      t.trafficNum,
+          velocity:           Math.min(100, Math.round(Math.log10(Math.max(1, t.trafficNum)) * 12)),
+          geo_tags:           [t.geo],
+          platform_raw_score: t.trafficNum,
+          badge:              t.trafficNum > 500_000 ? 'HOT' : t.trafficNum > 100_000 ? 'RISING' : 'NEW',
           expires_at:         expiresAt,
           fetched_at:         new Date(),
+          raw_data:           {
+            trafficRaw:     t.trafficRaw,
+            geo:            t.geo,
+            geoName:        t.geoName,
+            relatedQueries: t.relatedQueries,
+            articles:       t.articles,
+          },
         },
       });
       upserted++;
     } catch (err: any) {
-      logger.warn({ err: err.message }, "Instagram live_trends upsert failed");
+      logger.warn({ err: err.message, query: t.query }, 'google trends upsert failed');
     }
+  }
+
+  // Upsert realtime trends
+  for (const rt of realtime) {
+    if (!rt.title) continue;
+    try {
+      await (prisma as any).live_trends.upsert({
+        where:  { title_source: { title: rt.title.slice(0, 255), source: 'google_realtime' } },
+        create: {
+          source:             'google_realtime',
+          title:              rt.title.slice(0, 255),
+          search_volume:      0,
+          velocity:           60,
+          niche_tags:         deriveNicheTags(rt.title + ' ' + rt.entityNames.join(' ')),
+          platform_tags:      ['google'],
+          geo_tags:           ['US', 'GLOBAL'],
+          badge:              'RISING',
+          content_format:     'unknown',
+          platform_raw_score: 0,
+          is_override:        false,
+          override_reason:    null,
+          expires_at:         expiresAt,
+          raw_data:           { entityNames: rt.entityNames, articles: rt.articles },
+        },
+        update: {
+          velocity:   60,
+          badge:      'RISING',
+          expires_at: expiresAt,
+          fetched_at: new Date(),
+        },
+      });
+      upserted++;
+    } catch { /* non-fatal */ }
   }
 
   return upserted;
 }
 
-// ── scrapeGoogleTrends ────────────────────────────────────────────────────────
-// Apify apify/google-trends-scraper — part of the fast (12h) job.
+// ── scrapeYouTube ─────────────────────────────────────────────────────────────
+// Fetch YouTube trending via Data API v3 across 10 global regions.
 
-async function scrapeGoogleTrends(client: any): Promise<number> {
-  const run = await client.actor("apify/google-trends-scraper").call({
-    searchTerms: GOOGLE_TRENDS_KEYWORDS,
-    geo:         "IN",
-    timeRange:   "now 1-d",
-  });
+async function scrapeYouTube(): Promise<number> {
+  const { fetchYouTubeTrending } = await import("../services/youtubeTrending.service");
+  const expiresAt = new Date(Date.now() + 26 * 60 * 60 * 1000);
+  let upserted = 0;
 
-  const { items } = await client.dataset(run.defaultDatasetId).listItems();
-  if (!items?.length) return 0;
+  for (const regionCode of YT_REGIONS) {
+    const trends = await fetchYouTubeTrending(regionCode);
+    if (!trends || !trends.length) {
+      await new Promise(r => setTimeout(r, 300));
+      continue;
+    }
 
-  const trendDate = new Date().toISOString().slice(0, 10);
+    for (const t of trends) {
+      try {
+        await (prisma as any).discovery_youtube_raw.upsert({
+          where:  { video_id: t.raw_data.videoId },
+          create: {
+            video_id:      t.raw_data.videoId,
+            title:         t.title.slice(0, 300),
+            channel:       t.raw_data.channelTitle || "",
+            view_count:    BigInt(t.raw_data.viewCount    || 0),
+            like_count:    BigInt(t.raw_data.likeCount    || 0),
+            comment_count: BigInt(t.raw_data.commentCount || 0),
+            category_id:   t.raw_data.categoryId  || "0",
+            velocity:      t.velocity,
+            niche_tags:    t.niche_tags,
+            geo_tags:      [regionCode],
+            thumbnail_url: t.raw_data.thumbnailUrl || null,
+            published_at:  t.raw_data.publishedAt ? new Date(t.raw_data.publishedAt) : null,
+            expires_at:    expiresAt,
+            raw_data:      t.raw_data as any,
+          },
+          update: {
+            view_count:    BigInt(t.raw_data.viewCount    || 0),
+            like_count:    BigInt(t.raw_data.likeCount    || 0),
+            comment_count: BigInt(t.raw_data.commentCount || 0),
+            velocity:      t.velocity,
+            niche_tags:    t.niche_tags,
+            geo_tags:      [regionCode],
+            scraped_at:    new Date(),
+          },
+        });
+        upserted++;
+      } catch (err: any) {
+        logger.warn({ err: err.message, videoId: t.raw_data.videoId }, "YouTube raw upsert failed");
+      }
+    }
 
-  const results = (items as any[])
-    .map((item) => {
-      const keyword = ((item.keyword || item.query || "") as string).trim();
-      if (!keyword) return null;
-      const interestScore = Number(item.interestScore ?? item.value ?? item.averageInterest ?? 0);
-      return {
-        keyword,
-        geo:            "IN",
-        interestScore,
-        relatedQueries: item.relatedQueries || [],
-        relatedTopics:  item.relatedTopics  || [],
-        breakout:       interestScore >= 90,
-        trendDate,
-        peakScore:      interestScore,
-        timelineData:   item.timelineData   || [],
-      };
-    })
-    .filter(Boolean);
+    await new Promise(r => setTimeout(r, 300)); // polite delay between regions
+  }
 
-  if (!results.length) return 0;
-
-  const res = await upsertGoogleTrends(results as any);
-  return res.inserted + res.updated;
+  return upserted;
 }
 
 // ── Niche derivation helpers ──────────────────────────────────────────────────
@@ -327,6 +311,7 @@ async function normaliseIntoLiveTrends(): Promise<number> {
     is_override:        boolean;
     override_reason:    string | null;
     raw_data:           any;
+    geo_tags?:          string[];
   }): Promise<void> {
     const key = data.title.slice(0, 255);
     await (prisma as any).live_trends.upsert({
@@ -343,6 +328,7 @@ async function normaliseIntoLiveTrends(): Promise<number> {
         is_override:        data.is_override,
         override_reason:    data.override_reason,
         raw_data:           data.raw_data,
+        geo_tags:           data.geo_tags ?? [],
         expires_at:         expiresAt,
         fetched_at:         new Date(),
       },
@@ -374,6 +360,7 @@ async function normaliseIntoLiveTrends(): Promise<number> {
           platform_raw_score: p.score,
           is_override:        dec.isOverride,
           override_reason:    dec.overrideReason,
+          geo_tags:           ['GLOBAL'],
           raw_data:           { post_id: p.post_id, subreddit: p.subreddit, ...(p.raw_data as any) },
         });
       } catch { /* skip malformed record */ }
@@ -569,6 +556,88 @@ async function cleanupExpired(): Promise<void> {
   logger.info("Discovery cleanup complete");
 }
 
+// ── runNewsData ───────────────────────────────────────────────────────────────
+
+async function runNewsData(): Promise<number> {
+  const items = await scrapeNewsData();
+  if (!items.length) return 0;
+  const expiresAt = new Date(Date.now() + 26 * 60 * 60 * 1000);
+  let upserted = 0;
+  for (const item of items) {
+    try {
+      await (prisma as any).live_trends.upsert({
+        where:  { title_source: { title: item.title.slice(0, 255), source: 'newsdata' } },
+        create: {
+          source:             'newsdata',
+          title:              item.title.slice(0, 255),
+          search_volume:      0,
+          velocity:           50,
+          niche_tags:         item.nicheTags,
+          platform_tags:      ['news', 'web'],
+          geo_tags:           item.country,
+          badge:              'NEW',
+          content_format:     'article',
+          platform_raw_score: 0,
+          is_override:        false,
+          override_reason:    null,
+          expires_at:         expiresAt,
+          raw_data:           { source: item.source, url: item.url, category: item.category, publishedAt: item.publishedAt },
+        },
+        update: {
+          expires_at: expiresAt,
+          fetched_at: new Date(),
+          geo_tags:   item.country,
+        },
+      });
+      upserted++;
+    } catch { /* non-fatal */ }
+  }
+  return upserted;
+}
+
+// ── runFinnhub ────────────────────────────────────────────────────────────────
+
+async function runFinnhub(): Promise<number> {
+  const items = await scrapeFinnhubMarketNews();
+  if (!items.length) return 0;
+  const expiresAt = new Date(Date.now() + 12 * 60 * 60 * 1000);
+  let upserted = 0;
+  for (const item of items) {
+    try {
+      const velocity = item.sentiment != null
+        ? Math.min(100, Math.round(55 + (item.sentiment * 20)))
+        : 55;
+      await (prisma as any).live_trends.upsert({
+        where:  { title_source: { title: item.headline.slice(0, 255), source: 'finnhub' } },
+        create: {
+          source:             'finnhub',
+          title:              item.headline.slice(0, 255),
+          search_volume:      0,
+          velocity,
+          niche_tags:         ['finance', 'business'],
+          platform_tags:      ['news', 'finance'],
+          geo_tags:           ['GLOBAL'],
+          badge:              velocity >= 70 ? 'HOT' : 'RISING',
+          content_format:     'article',
+          platform_raw_score: item.sentiment ?? 0,
+          is_override:        false,
+          override_reason:    null,
+          expires_at:         expiresAt,
+          raw_data:           { source: item.source, url: item.url, category: item.category, sentiment: item.sentiment, summary: item.summary.slice(0, 300) },
+        },
+        update: {
+          velocity,
+          badge:      velocity >= 70 ? 'HOT' : 'RISING',
+          expires_at: expiresAt,
+          fetched_at: new Date(),
+        },
+      });
+      upserted++;
+    } catch { /* non-fatal */ }
+  }
+  return upserted;
+}
+
 // ── processSlowJob ────────────────────────────────────────────────────────────
 // Runs every 24h via the discovery-slow BullMQ queue.
 
@@ -654,38 +723,92 @@ export async function processSlowJob(job: Job): Promise<Record<string, any>> {
     logger.warn({ err: err.message }, "Pinterest scrape failed — continuing");
   }
 
-  await job.updateProgress(65);
+  await job.updateProgress(55);
 
-  // ── Instagram (still via Apify — no replacement yet) ───────────────────────
-  let instagram = 0;
-  const apifyToken = (process.env.APIFY_TOKEN || process.env.APIFY_API_TOKEN || "").trim();
-  if (apifyToken) {
-    try {
-      const { ApifyClient } = await import("apify-client");
-      const client = new ApifyClient({ token: apifyToken });
-      instagram = await scrapeInstagram(client);
-      diagnostics["instagram"] = `ok (${instagram})`;
-    } catch (err: any) {
-      diagnostics["instagram"] = `failed: ${err.message}`;
-      logger.warn({ err: err.message }, "Instagram Apify scrape failed — continuing");
-    }
-  } else {
-    diagnostics["instagram"] = "skipped (APIFY_TOKEN not set)";
-    logger.info("Instagram scrape skipped — no Apify token");
+  // ── NewsData.io (global multi-niche news) ────────────────────────────────
+  let newsdata = 0;
+  try {
+    newsdata = await runNewsData();
+    diagnostics['newsdata'] = `ok (${newsdata} upserted)`;
+    logger.info({ newsdata }, 'NewsData scrape complete');
+  } catch (err: any) {
+    diagnostics['newsdata'] = `failed: ${err.message}`;
+    logger.warn({ err: err.message }, 'NewsData scrape failed — continuing');
   }
 
-  await job.updateProgress(70);
+  await job.updateProgress(65);
+
+  // ── Finnhub (finance/business niche) ─────────────────────────────────────
+  let finnhub = 0;
+  try {
+    finnhub = await runFinnhub();
+    diagnostics['finnhub'] = `ok (${finnhub} upserted)`;
+    logger.info({ finnhub }, 'Finnhub scrape complete');
+  } catch (err: any) {
+    finnhub = 0;
+    diagnostics['finnhub'] = `failed: ${err.message}`;
+    logger.warn({ err: err.message }, 'Finnhub scrape failed — continuing');
+  }
+
+  await job.updateProgress(75);
 
   const normalised = await normaliseIntoLiveTrends();
   diagnostics["normalised"] = `${normalised}`;
 
-  await job.updateProgress(85);
+  await job.updateProgress(90);
   await prewarmHotWindows();
   await cleanupExpired();
   await job.updateProgress(100);
 
-  logger.info({ reddit, tiktok, pinterest, instagram, normalised, diagnostics }, "discovery-slow complete");
-  return { reddit, tiktok, pinterest, instagram, normalised, diagnostics };
+  logger.info({ reddit, tiktok, pinterest, newsdata, finnhub, normalised, diagnostics }, "discovery-slow complete");
+  return { reddit, tiktok, pinterest, newsdata, finnhub, normalised, diagnostics };
+}
+
+// ── runWikipedia ──────────────────────────────────────────────────────────────
+
+async function runWikipedia(): Promise<number> {
+  const articles = await scrapeWikipediaTrending();
+  if (!articles.length) return 0;
+
+  const expiresAt = new Date(Date.now() + 26 * 60 * 60 * 1000);
+  let upserted = 0;
+
+  for (const a of articles) {
+    try {
+      await (prisma as any).live_trends.upsert({
+        where:  { title_source: { title: a.title.slice(0, 255), source: 'wikipedia' } },
+        create: {
+          source:             'wikipedia',
+          title:              a.title.slice(0, 255),
+          search_volume:      a.views,
+          velocity:           Math.min(100, Math.round((50 - a.rank) * 2)),
+          niche_tags:         deriveNicheTags(a.title),
+          platform_tags:      ['wikipedia', 'web'],
+          geo_tags:           ['GLOBAL'],
+          badge:              a.rank <= 10 ? 'HOT' : a.rank <= 25 ? 'RISING' : 'NEW',
+          content_format:     'unknown',
+          platform_raw_score: a.views,
+          is_override:        false,
+          override_reason:    null,
+          expires_at:         expiresAt,
+          raw_data:           { rank: a.rank, views: a.views },
+        },
+        update: {
+          search_volume:      a.views,
+          velocity:           Math.min(100, Math.round((50 - a.rank) * 2)),
+          badge:              a.rank <= 10 ? 'HOT' : a.rank <= 25 ? 'RISING' : 'NEW',
+          platform_raw_score: a.views,
+          expires_at:         expiresAt,
+          fetched_at:         new Date(),
+        },
+      });
+      upserted++;
+    } catch (err: any) {
+      logger.warn({ err: err.message, title: a.title }, 'wikipedia upsert failed');
+    }
+  }
+
+  return upserted;
 }
 
 // ── processFastJob ────────────────────────────────────────────────────────────
@@ -708,25 +831,30 @@ async function processFastJob(job: Job): Promise<Record<string, any>> {
     logger.warn({ err: err.message }, "YouTube scrape failed — continuing");
   }
 
-  await job.updateProgress(35);
+  await job.updateProgress(30);
 
-  // ── Google Trends (Apify) ─────────────────────────────────────────────────────
+  // ── Google Trends (native, free, multi-country) ─────────────────────────
   let googleTrends = 0;
-  const apifyToken = (process.env.APIFY_TOKEN || process.env.APIFY_API_TOKEN || "").trim();
-  if (apifyToken) {
-    try {
-      const { ApifyClient } = await import("apify-client");
-      const client = new ApifyClient({ token: apifyToken });
-      googleTrends = await scrapeGoogleTrends(client);
-      diagnostics["googleTrends"] = `ok (${googleTrends} upserted)`;
-      logger.info({ googleTrends }, "Google Trends scrape complete");
-    } catch (err: any) {
-      diagnostics["googleTrends"] = `failed: ${err.message}`;
-      logger.warn({ err: err.message }, "Google Trends scrape failed — continuing");
-    }
-  } else {
-    diagnostics["googleTrends"] = "skipped (APIFY_TOKEN not set)";
-    logger.info("Google Trends scrape skipped — no Apify token");
+  try {
+    googleTrends = await runGoogleTrendsFree(true); // Tier A geos every fast cycle
+    diagnostics['googleTrends'] = `ok (${googleTrends} upserted, ${TIER_A_GEOS.length} geos)`;
+    logger.info({ googleTrends }, 'Google Trends free scrape complete');
+  } catch (err: any) {
+    diagnostics['googleTrends'] = `failed: ${err.message}`;
+    logger.warn({ err: err.message }, 'Google Trends free scrape failed — continuing');
+  }
+
+  await job.updateProgress(55);
+
+  // ── Wikipedia global trending ─────────────────────────────────────────────
+  let wikipedia = 0;
+  try {
+    wikipedia = await runWikipedia();
+    diagnostics['wikipedia'] = `ok (${wikipedia} upserted)`;
+    logger.info({ wikipedia }, 'Wikipedia scrape complete');
+  } catch (err: any) {
+    diagnostics['wikipedia'] = `failed: ${err.message}`;
+    logger.warn({ err: err.message }, 'Wikipedia scrape failed — continuing');
   }
 
   await job.updateProgress(65);
@@ -739,8 +867,8 @@ async function processFastJob(job: Job): Promise<Record<string, any>> {
   await cleanupExpired();
   await job.updateProgress(100);
 
-  logger.info({ youtube, googleTrends, normalised, diagnostics }, "discovery-fast complete");
-  return { youtube, googleTrends, normalised, diagnostics };
+  logger.info({ youtube, googleTrends, wikipedia, normalised, diagnostics }, "discovery-fast complete");
+  return { youtube, googleTrends, wikipedia, normalised, diagnostics };
 }
 
 // ── processJob (dispatcher) ───────────────────────────────────────────────────
