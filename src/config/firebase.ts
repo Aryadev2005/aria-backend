@@ -45,7 +45,14 @@ export const verifyFirebaseToken = async (idToken: string) => {
       name: decoded.name || decoded.email?.split("@")[0],
       picture: decoded.picture,
     };
-  } catch {
+  } catch (err: any) {
+    // Log the actual error for debugging
+    logger.error({
+      err: err.message,
+      code: err.code,
+      tokenLength: idToken.length,
+      tokenPrefix: idToken.slice(0, 50),
+    }, 'Firebase token verification failed');
     throw new Error("Invalid Firebase token");
   }
 };
