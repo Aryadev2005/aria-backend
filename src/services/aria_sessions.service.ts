@@ -15,7 +15,7 @@ const trim = (s: string, max: number) =>
 // ── Session CRUD ──────────────────────────────────────────────────────────────
 
 export const createSession = async (userId: string, sessionId: string) => {
-  return (prisma as any).aria_sessions.create({
+  return prisma.aria_sessions.create({
     data: { user_id: userId, session_id: sessionId },
   });
 };
@@ -29,7 +29,7 @@ export const upsertSession = async (
   if (opts.title) data.title = trim(opts.title, MAX_TITLE_LEN);
   if (opts.preview !== undefined) data.preview = trim(opts.preview, MAX_PREVIEW_LEN);
 
-  return (prisma as any).aria_sessions.upsert({
+  return prisma.aria_sessions.upsert({
     where: { session_id: sessionId },
     create: {
       user_id: userId,
@@ -48,7 +48,7 @@ export const upsertSession = async (
 };
 
 export const listSessions = async (userId: string, limit = 30) => {
-  return (prisma as any).aria_sessions.findMany({
+  return prisma.aria_sessions.findMany({
     where: { user_id: userId },
     orderBy: { updated_at: "desc" },
     take: limit,
@@ -65,17 +65,17 @@ export const listSessions = async (userId: string, limit = 30) => {
 };
 
 export const getSession = async (userId: string, sessionId: string) => {
-  return (prisma as any).aria_sessions.findFirst({
+  return prisma.aria_sessions.findFirst({
     where: { user_id: userId, session_id: sessionId },
   });
 };
 
 export const deleteSession = async (userId: string, sessionId: string) => {
   // Delete messages first, then session metadata
-  await (prisma as any).aria_chat_sessions.deleteMany({
+  await prisma.aria_chat_sessions.deleteMany({
     where: { user_id: userId, session_id: sessionId },
   });
-  return (prisma as any).aria_sessions.deleteMany({
+  return prisma.aria_sessions.deleteMany({
     where: { user_id: userId, session_id: sessionId },
   });
 };
@@ -85,7 +85,7 @@ export const renameSession = async (
   sessionId: string,
   title: string,
 ) => {
-  return (prisma as any).aria_sessions.updateMany({
+  return prisma.aria_sessions.updateMany({
     where: { user_id: userId, session_id: sessionId },
     data: { title: trim(title, MAX_TITLE_LEN), updated_at: new Date() },
   });
@@ -100,7 +100,7 @@ export const saveMessage = async (
   content: string,
   toolCalls?: any[],
 ) => {
-  await (prisma as any).aria_chat_sessions.create({
+  await prisma.aria_chat_sessions.create({
     data: {
       user_id: userId,
       session_id: sessionId,
@@ -120,7 +120,7 @@ export const saveMessage = async (
 };
 
 export const getMessages = async (userId: string, sessionId: string) => {
-  return (prisma as any).aria_chat_sessions.findMany({
+  return prisma.aria_chat_sessions.findMany({
     where: { user_id: userId, session_id: sessionId },
     orderBy: { created_at: "asc" },
     select: {

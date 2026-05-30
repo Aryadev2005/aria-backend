@@ -36,9 +36,10 @@ export function validateEnv(): void {
   }
 
   const encKey = process.env.TOKEN_ENCRYPTION_KEY || "";
-  if (encKey.length !== 64) {
+  if (!/^[0-9a-fA-F]{64}$/.test(encKey)) {
     throw new Error(
-      "TOKEN_ENCRYPTION_KEY must be a 64-character hex string (32 bytes)",
+      "TOKEN_ENCRYPTION_KEY must be exactly 64 hex characters (no spaces, no newlines). " +
+      `Current value has length ${encKey.length} and contains non-hex chars: ${!/^[0-9a-fA-F]+$/.test(encKey)}`,
     );
   }
 }

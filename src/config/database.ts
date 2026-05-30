@@ -4,8 +4,13 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { logger } from "../utils/logger";
 
 // Setup the driver (node-postgres)
+// Use DIRECT_URL for dev/migrations (not pgbouncer), DATABASE_URL for production
+const connectionString = process.env.NODE_ENV === 'production' 
+  ? process.env.DATABASE_URL 
+  : (process.env.DIRECT_URL || process.env.DATABASE_URL);
+
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
+  connectionString,
   max:                    parseInt(process.env.DB_POOL_MAX     || "10",    10),
   min:                    parseInt(process.env.DB_POOL_MIN     || "2",     10),
   idleTimeoutMillis:      parseInt(process.env.DB_IDLE_TIMEOUT || "30000", 10),

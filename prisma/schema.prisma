@@ -1007,7 +1007,7 @@ model roadmap_actions {
 model thumbnail_variants {
   id                   String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   user_id              String   @db.Uuid
-  studio_session_id    String?  @db.Uuid
+  studio_session_id    String?
   video_id             String?
   variant_a            Json     @default("{}")
   variant_b            Json     @default("{}")

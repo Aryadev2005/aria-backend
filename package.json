@@ -16,8 +16,11 @@
     "dev": "tsx src/server.ts",
     "worker:all": "tsx src/workers/index.ts",
     "build": "tsc",
+    "typecheck": "tsc --noEmit",
     "mcp:health": "tsx src/agent/mcp_health_check.ts",
-    "db:migrate": "npx prisma migrate dev --name=init"
+    "db:generate": "prisma generate",
+    "db:migrate": "npx prisma migrate dev --name=init",
+    "db:migrate:deploy": "prisma migrate deploy"
   },
   "keywords": [],
   "author": "",
@@ -36,7 +39,6 @@
     "@langchain/langgraph-checkpoint-postgres": "^1.0.1",
     "@langchain/openai": "^1.4.5",
     "@modelcontextprotocol/sdk": "^1.0.0",
-    "@openuidev/react-lang": "^0.2.4",
     "@prisma/adapter-pg": "^7.8.0",
     "@prisma/client": "^7.8.0",
     "@types/pg": "^8.20.0",

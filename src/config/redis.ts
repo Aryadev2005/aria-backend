@@ -20,9 +20,13 @@ export const connectRedis = async () => {
       lazyConnect: true,
       maxRetriesPerRequest: null,            // MUST be null for BullMQ
       retryStrategy: (times) => {
+        // Fail fast in development if Redis isn't available
+        if (process.env.NODE_ENV !== 'production' && times > 2) {
+          return -1; // Stop retrying after 2 attempts
+        }
         return Math.min(times * 200, 1000)
       },
-      connectTimeout: 4000,                 // give up connecting after 4s
+      connectTimeout: 2000,                 // Reduced timeout for faster failure in dev
       keepAlive: 30000,
       noDelay: true,
     })

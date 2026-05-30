@@ -30,7 +30,6 @@ import dataDeletionRoutes from "./routes/dataDeletion.routes";
 import integrationRoutes from "./routes/integrations.routes";
 import creditRoutes from "./routes/credits.routes";
 import notesRoutes from "./routes/notes.routes";
-import deepAnalysisRoutes from "./routes/deepAnalysis.routes";
 import rivalRoutes from "./routes/rival.routes";
 import trialRoutes from "./routes/trials.routes";
 import adminRoutes from "./routes/admin.routes";

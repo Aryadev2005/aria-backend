@@ -1,20 +1,56 @@
-/**
- * aria-openui-library.node.ts
- *
- * Server-side (Node.js) version of the ARIA component library.
- * Renderers are set to `null` — only used to generate the system prompt.
- *
- * Usage in ariaBrain.service.ts or agent.controller.ts:
- *
- *   import { ariaLibraryNode } from './aria-openui-library.node';
- *   const OPENUI_SYSTEM_PROMPT = ariaLibraryNode.prompt();
- *
- * Then prepend OPENUI_SYSTEM_PROMPT to ARIA_SOUL (see ARIA_SOUL patch below).
- */
-
 import { z } from "zod";
-import { defineComponent, createLibrary } from "@openuidev/react-lang";
-// ↑ The /node sub-export has no React dep — safe in Fastify/Node context.
+
+// ─── Minimal local stubs (replaces @openuidev/react-lang) ────────────────────
+
+type ComponentDef = {
+  name: string;
+  description: string;
+  props: z.ZodObject<any>;
+  component: () => null;
+};
+
+function defineComponent(config: ComponentDef): ComponentDef {
+  return config;
+}
+
+function describeZodShape(shape: Record<string, z.ZodTypeAny>): string {
+  return Object.entries(shape)
+    .map(([key, schema]) => {
+      const isOptional = schema instanceof z.ZodOptional;
+      return `  ${key}${isOptional ? "?" : ""}: ${describeZodType(schema)}`;
+    })
+    .join("\n");
+}
+
+function describeZodType(schema: z.ZodTypeAny): string {
+  if (schema instanceof z.ZodOptional) return describeZodType((schema as z.ZodOptional<z.ZodTypeAny>).unwrap());
+  if (schema instanceof z.ZodString) return "string";
+  if (schema instanceof z.ZodNumber) return "number";
+  if (schema instanceof z.ZodBoolean) return "boolean";
+  if (schema instanceof z.ZodEnum) return (schema as z.ZodEnum<any>).options.map((v: unknown) => `"${String(v)}"`).join(" | ");
+  if (schema instanceof z.ZodArray) return `${describeZodType((schema as z.ZodArray<z.ZodTypeAny>).element)}[]`;
+  if (schema instanceof z.ZodObject) return "object";
+  return "any";
+}
+
+function createLibrary(config: { root: string; components: ComponentDef[] }) {
+  return {
+    prompt(): string {
+      const componentDocs = config.components.map((c) => {
+        const propsStr = describeZodShape(c.props.shape);
+        return `### ${c.name}\n${c.description}\nProps:\n${propsStr}`;
+      }).join("\n\n");
+
+      return [
+        "You can embed structured UI components in your responses using JSON code blocks.",
+        'Format: ```component\n{"component":"ComponentName","props":{...}}\n```',
+        "Only use a component when it genuinely improves clarity over plain text.",
+        "",
+        componentDocs,
+      ].join("\n\n");
+    },
+  };
+}
 
 // ─── Component specs (props only, renderer = null) ────────────────────────────
 

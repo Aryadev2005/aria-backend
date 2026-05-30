@@ -122,7 +122,7 @@ export const INDIAN_CULTURAL_EVENTS: CulturalEvent[] = [
     platforms: ['instagram', 'youtube', 'twitter'],
     contentAngles: [
       'Watch party setup guide for IPL at home',
-      'IPL players' fitness routines — creator angle',
+      'IPL players\' fitness routines — creator angle',
       'City vs city food battle on match nights',
       'Business lessons from IPL team management',
     ],

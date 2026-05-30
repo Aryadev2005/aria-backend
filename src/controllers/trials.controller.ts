@@ -12,8 +12,8 @@ import {
   TRIAL_ACTIONS,
   canUseTrial,
   TRIAL_TO_REAL,
-  markTrialAsUsed,
-  convertTrial,
+  markTrialUsed,
+  markTrialsConverted,
 } from "../services/firstExperience.service";
 
 // ── GET /api/v1/trials/status ─────────────────────────────────────────────────
@@ -83,7 +83,7 @@ export const markTrialUsed = async (
     }
 
     // Mark trial as used
-    await markTrialAsUsed(user.id, action as any, resultData);
+    await markTrialUsed(user.id, action as any, resultData);
 
     logger.info(
       { userId: user.id, action },
@@ -123,16 +123,13 @@ export const convertTrialsOnUpgrade = async (
     }
 
     // Convert all used trials to "converted"
-    const result = await convertTrial(user.id);
+    await markTrialsConverted(user.id);
 
-    logger.info(
-      { userId: user.id, converted: result },
-      "Trials converted on upgrade",
-    );
+    logger.info({ userId: user.id }, "Trials converted on upgrade");
 
     return success(reply, {
-      converted: result,
-      message: `${result} trials marked as converted`,
+      converted: true,
+      message: "Trials marked as converted",
     });
   } catch (err: any) {
     logger.error(
